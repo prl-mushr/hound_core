@@ -1,0 +1,29 @@
+<launch>
+    <node pkg="hound_core" type="hound_core_node" name="depth" output="screen">
+      <remap from="depth/camera_info" to="/zed2/zed_node/depth/camera_info"/>
+      <remap from="depth/image"       to="/zed2/zed_node/depth/depth_registered"/>
+      <remap from="depth/pose"        to="/mavros/local_position/pose"/>
+      <remap from="depth/bound"  to="/lane_node/points"/>
+      <remap from="depth/path"   to="/lane_node/path"/>
+      <param name="depth/cam_pitch" value = "0.1" />
+      <param name="depth/max_height" value = "1.0"/>
+      <param name="depth/min_height" value = "-1.2"/>
+      <param name="depth/resolution_m" value = "0.05"/>
+      <param name="depth/costmap_width_m" value="20"/>
+      <param name="depth/costmap_length_m" value="30"/>
+      <param name="depth/bound_time_constant" value = "2.0"/>
+      <param name="depth/visualize_path" value="true" />
+      <param name="depth/goal_cost_multiplier" value = "1" />
+      <param name="depth/delta_curvature_cost" value = "0.1" />
+      <param name="depth/delta_length_cost" value = "0.1" />
+      <param name="depth/lookahead_distance" value="10.0"/>
+      <param name="depth/car_width" value="1.6"/>
+      <param name="depth/car_length" value="2.0"/>
+      <param name="depth/length_x" value="10.0"/>
+      <param name="depth/width_y" value="5.0"/>
+      <param name="depth/step_x" value="10"/>
+      <param name="depth/step_y" value="20"/>
+      <param name="depth/use_cam_info_preset" value="true"/>
+
+    </node>
+</launch>
