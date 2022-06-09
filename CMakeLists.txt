@@ -3,7 +3,6 @@ project(hound_core)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 add_compile_options(-std=c++11)
-
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -141,8 +140,8 @@ ${OpenCV_INCLUDE_DIRS}
 add_executable(hound_core_node src/hound_core_node.cpp)
 target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
-add_executable(hound_control_node src/hound_control_node)
-target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+# add_executable(hound_control_node src/hound_control_node)
+# target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
