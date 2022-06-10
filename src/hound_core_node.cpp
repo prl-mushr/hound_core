@@ -19,7 +19,7 @@
 #include <sensor_msgs/image_encodings.h>
 #include <sensor_msgs/LaserScan.h>
 #include "ackermann_msgs/AckermannDriveStamped.h"
-#include <tf/tf.h>
+
 namespace enc = sensor_msgs::image_encodings;
 
 class hound_core
@@ -30,7 +30,7 @@ public:
   float fx_inv, fy_inv, fx, fy;
   float cx, cy;
   int height, width;
-  float max_depth;
+  float max_depth, roi[4], cam_pos[3];
   bool cam_init;
 
   float max_height;
@@ -43,6 +43,7 @@ public:
   int costmap_height_p, costmap_width_p;
   float cam_pitch;
   float cp, sp;
+  cv::Mat translation_matrix, translated_image;
 
   bool float_flag, depth_init, scan_init;
 
@@ -104,6 +105,22 @@ public:
     {
       max_depth = 10.0f;
     }
+
+    for(int i = 0; i< 3; i++)
+    {
+      if(not nh.getParam("hound/cam_pos_"+std::to_string(i), cam_pos[i]))
+      {
+        cam_pos[i] = 0;
+      }
+    }
+    for(int i = 0;i < 4;i++)
+    {
+      if(not nh.getParam("hound/roi_" + std::to_string(i), roi[i]))
+      {
+        roi[i] = 1.0f;
+      }
+      ROS_INFO("roi_%d = %f",i,roi[i]);
+    }
     costmap_height_p = costmap_length_m/resolution_m;
     costmap_width_p  = costmap_width_m/resolution_m;
 
@@ -160,40 +177,35 @@ public:
     float q00,q11,q22,q33,q01,q02,q03,q12,q13,q23;
     cv::Mat Tnb = cv::Mat::zeros(3,3, CV_32FC1);
     cv::Mat Tbn = Tnb.clone();
-    geometry_msgs::Quaternion q1 = msg->pose.orientation;
-    tf::Quaternion q;
-    q.setW(q1.w);
-    q.setX(q1.x);
-    q.setY(q1.y);
-    q.setZ(q1.z);
-    // float qx, qy,qz,qw;
-    // qx = q.w;
-    // qy = q.x;
-    // qz = q.y;
-    // qw = q.z;
+    geometry_msgs::Quaternion q = msg->pose.orientation;
 
-    // q00 = qx*qx;
-    // q11 = qy*qy;
-    // q22 = qz*qz;
-    // q33 = qw*qw;
-    // q01 =  qx*qy;
-    // q02 =  qx*qz;
-    // q03 =  qx*qw;
-    // q12 =  qy*qz;
-    // q13 =  qy*qw;
-    // q23 =  qz*qw;
+    float qx, qy,qz,qw;
+    qx = -q.w;
+    qy = q.x;
+    qz = q.y;
+    qw = -q.z;
+
+    q00 = qx*qx;
+    q11 = qy*qy;
+    q22 = qz*qz;
+    q33 = qw*qw;
+    q01 =  qx*qy;
+    q02 =  qx*qz;
+    q03 =  qx*qw;
+    q12 =  qy*qz;
+    q13 =  qy*qw;
+    q23 =  qz*qw;
     
-    // Tbn.at<float>(0,0) = q00 + q11 - q22 - q33;
-    // Tbn.at<float>(1,1) = q00 - q11 + q22 - q33;
-    // Tbn.at<float>(2,2) = q00 - q11 - q22 + q33;
-    // Tbn.at<float>(0,1) = 2*(q12 - q03);
-    // Tbn.at<float>(0,2) = 2*(q13 + q02);
-    // Tbn.at<float>(1,0) = 2*(q12 + q03);
-    // Tbn.at<float>(1,2) = 2*(q23 - q01);
-    // Tbn.at<float>(2,0) = 2*(q13 - q02);
-    // Tbn.at<float>(2,1) = 2*(q23 + q01);
-    tf::Matrix3x3 m(q);
-    Tbn = m;
+    Tbn.at<float>(0,0) = q00 + q11 - q22 - q33;
+    Tbn.at<float>(1,1) = q00 - q11 + q22 - q33;
+    Tbn.at<float>(2,2) = q00 - q11 - q22 + q33;
+    Tbn.at<float>(0,1) = 2*(q12 - q03);
+    Tbn.at<float>(0,2) = 2*(q13 + q02);
+    Tbn.at<float>(1,0) = 2*(q12 + q03);
+    Tbn.at<float>(1,2) = 2*(q23 - q01);
+    Tbn.at<float>(2,0) = 2*(q13 - q02);
+    Tbn.at<float>(2,1) = 2*(q23 + q01);
+
     Tnb = Tbn.t(); // transform ned->body
 
     TBN = cv::Matx33f(Tbn);
@@ -239,6 +251,102 @@ public:
     return;
   }
 
+  void transform_map()
+  {
+    float delta[2];
+    delta[0] = cur_pose->pose.position.x - last_map_pose->pose.position.x;
+    delta[1] = cur_pose->pose.position.y - last_map_pose->pose.position.y;
+    last_map_pose = cur_pose;
+    
+    //  define translation center as camera's location in map image
+    translated_image;  // temporary images
+    float warp_values[] = { 1.0, 0.0, delta[0]/resolution_m, 0.0, 1.0, -delta[1]/resolution_m };  // translation matrix
+    translation_matrix = cv::Mat(2, 3, CV_32F, warp_values);    // fill in the values
+    
+    cv::warpAffine(map, translated_image, translation_matrix, map.size());  // then we translate
+    map = translated_image.clone();
+  }
+
+  void process_depth(int depth_image_num)
+  {
+    cv_bridge::CvImagePtr cv_ptr;
+    geometry_msgs::PoseStamped::ConstPtr img_pose;
+    cv::Matx33f Tnb = cv::Matx33f(0,0,0, 0,0,0, 0,0,0), Tbn = cv::Matx33f(0,0,0, 0,0,0, 0,0,0);
+    cv::Point3f p_odom, p_body, p_delta;
+    float x,z, temp_x, temp_z;
+    float depth;
+    int row_pix, column_pix;
+    int u_start, u_end, v_start, v_end;
+    u_start = (1 - roi[0])*width;
+    u_end = roi[1]*width;
+    v_start = (1 - roi[2])*height;
+    v_end = roi[3]*height;
+
+    for(int k = 0; k < depth_image_num; k++)
+    {
+      cv_ptr = depth_image_ptrs.back();
+      img_pose = depth_poses.back();
+      // pop the end.
+      depth_image_ptrs.pop_back();
+      depth_poses.pop_back();
+
+      calc_Transform(img_pose, Tnb, Tbn);
+      p_delta.x = cur_pose->pose.position.x - img_pose->pose.position.x;
+      p_delta.y = cur_pose->pose.position.y - img_pose->pose.position.y;
+      p_delta.z = cur_pose->pose.position.z - img_pose->pose.position.z;
+
+      for(int u = u_start; u < u_end; u++)
+      {
+        for(int v = v_start; v < v_end; v++)
+        {
+          if(float_flag)
+          {
+            depth = cv_ptr->image.at<float>(v,u);
+          }
+          else
+          {
+            depth = float(cv_ptr->image.at<u_int16_t>(v,u))*1e-3;
+          }
+          if(depth > max_depth)
+          {
+            continue;
+          }
+          x = depth;
+          z = (cy - float(v))*x*fy_inv;
+          p_body.y = (cx - float(u))*x*fx_inv + cam_pos[1];
+
+          temp_x = x;
+          temp_z = z;
+          // find points in body frame-- this is where you should add the body frame offsets
+          p_body.x = temp_x*cp - temp_z*sp + cam_pos[0];
+          p_body.z = temp_x*sp + temp_z*cp + cam_pos[2];
+
+          p_odom = Tbn * p_body + p_delta;
+          if( (p_odom.z < max_height) and (p_odom.z > min_height) and fabs(p_odom.x) < costmap_width_m*0.5f and fabs(p_odom.y) < costmap_length_m*0.5 )
+          {
+            row_pix = int((p_odom.y + costmap_length_m*0.5) / resolution_m);
+            column_pix = int((-p_odom.x + costmap_width_m*0.5) / resolution_m);
+            map.at<float>(row_pix, column_pix) = std::min((p_odom.z - min_height)*height_range_inv,1.0f);
+          }
+        }
+      }
+    }
+  }
+
+  // void process_scan(int scan_num)
+  // {
+  //   sensor_msgs::LaserScan::ConstPtr scan_ptr;
+  //   geometry_msgs::PoseStamped::ConstPtr; 
+  //   for(int k = 0; k < scan_num; k++)
+  //   {
+  //     scan_ptr = scan_msgs.back();
+  //     scan_pose = depth_poses.back();
+  //     // pop the end.
+  //     depth_image_ptrs.pop_back();
+  //     depth_poses.pop_back();
+  //   }
+  // }
+
   void process()
   {
     if(!cam_init or !pose_init or !depth_init)
@@ -252,81 +360,21 @@ public:
     }
 
     ros::Time begin = ros::Time::now();
-    int row_pix, column_pix;
 
-    float delta[2];
-    
-    delta[0] = cur_pose->pose.position.x - last_map_pose->pose.position.x;
-    delta[1] = cur_pose->pose.position.y - last_map_pose->pose.position.y;
+    transform_map();
 
-    last_map_pose = cur_pose;
-    
-    //  define translation center as camera's location in map image
-    cv::Point2f center(costmap_width_p*0.5, costmap_height_p*0.5);
-    cv::Mat translated_image;  // temporary images
-    float warp_values[] = { 1.0, 0.0, delta[0]/resolution_m, 0.0, 1.0, -delta[1]/resolution_m };  // translation matrix
-    cv::Mat translation_matrix = cv::Mat(2, 3, CV_32F, warp_values);    // fill in the values
-    
-    cv::warpAffine(map, translated_image, translation_matrix, map.size());  // then we translate
-    map = translated_image.clone();
-
-      // u is width, v is height. for opencv "at", row comes first(so height, width or y,x and not x,y)
     int depth_image_num = depth_image_ptrs.size();
-    if(depth_image_num>0)
+    if(depth_image_num > 0)
     {
-      cv_bridge::CvImagePtr cv_ptr;
-      geometry_msgs::PoseStamped::ConstPtr img_pose;
-      cv::Matx33f Tnb = cv::Matx33f(0,0,0, 0,0,0, 0,0,0), Tbn = cv::Matx33f(0,0,0, 0,0,0, 0,0,0);
-      cv::Point3f p_odom, p_body, p_delta;
-      float x,z, temp_x, temp_z;
-      float depth;
-
-      for(int k = 0; k < 1; k++)
-      {
-        cv_ptr = depth_image_ptrs.back();
-        img_pose = depth_poses.back();
-        // pop the end.
-        depth_image_ptrs.pop_back();
-        depth_poses.pop_back();
-
-        calc_Transform(img_pose, Tnb, Tbn);
-        p_delta.x = cur_pose->pose.position.x - img_pose->pose.position.x;
-        p_delta.y = cur_pose->pose.position.y - img_pose->pose.position.y;
-        p_delta.z = cur_pose->pose.position.z - img_pose->pose.position.z;
-
-        for(int u = 0; u < width; u++)
-        {
-          for(int v = int(height*0.5); v < height; v++)
-          {
-            if(float_flag)
-            {
-              depth = cv_ptr->image.at<float>(v,u);
-            }
-            else
-            {
-              depth = float(cv_ptr->image.at<u_int16_t>(v,u))*1e-3;
-            }
-            x = depth;
-            z = (cy - float(v))*x*fy_inv;
-            p_body.y = (cx - float(u))*x*fx_inv;
-
-            temp_x = x;
-            temp_z = z;
-            // find points in body frame-- this is where you should add the body frame offsets
-            p_body.x = temp_x*cp - temp_z*sp;
-            p_body.z = temp_x*sp + temp_z*cp;
-
-            p_odom = Tbn * p_body + p_delta;
-            if( (p_odom.z < max_height) and (p_odom.z > min_height) and fabs(p_odom.x) < costmap_width_m*0.5f and fabs(p_odom.y) < costmap_length_m*0.5 )
-            {
-              row_pix = int((p_odom.y + costmap_length_m*0.5) / resolution_m);
-              column_pix = int((p_odom.x + costmap_width_m*0.5) / resolution_m);
-              map.at<float>(row_pix, column_pix) = std::min((p_odom.z - min_height)*height_range_inv,1.0f);
-            }
-          }
-        }
-      }
+      process_depth(depth_image_num);
     }
+
+    // int scan_num = scan_msgs.size();
+    // if(scan_num > 0)
+    // {
+    //   process_scan(scan_num);
+    // }
+
     float delta_time = (ros::Time::now() - begin).toSec();
 
     cv::Mat display;
@@ -348,10 +396,12 @@ int main(int argc, char **argv)
   ros::NodeHandle nh("~");
   hound_core hc(nh);
   // subsribe topic
+  ros::Rate r(10);
   while(ros::ok())
   {
-    hc.process();
     ros::spinOnce();
+    hc.process();
+    r.sleep();
   }
 
   return 0;
