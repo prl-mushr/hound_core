@@ -3,13 +3,16 @@
       <remap from="hound/camera_info" to="/zed2/zed_node/depth/camera_info"/>
       <remap from="hound/image"       to="/zed2/zed_node/depth/depth_registered"/>
       <remap from="hound/pose"        to="/mavros/local_position/pose"/>
+      <remap from="hound/scan"        to="/scan"/>
       <param name="hound/cam_pitch" value = "0.1" />
       <param name="hound/max_height" value = "2.0"/>
-      <param name="hound/min_height" value = "0.0"/>
-      <param name="hound/max_depth" value = "10.0"/>
-      <param name="hound/roi_2" value = "1.0"/>
+      <param name="hound/min_height" value = "-0.5"/>
+      <param name="hound/max_depth" value = "7.0"/>
+      <param name="hound/roi_2" value = "0.5"/>
       <param name="hound/roi_3" value = "0.8"/>
+      <param name="hound/map_update_rate" value = "5"/>
       <param name="hound/cam_pos_2" value = "1.5"/>
+      <param name="hound/lidar_pos_2" value = "1.5"/>
       <param name="hound/resolution_m" value = "0.05"/>
       <param name="hound/costmap_width_m" value="20"/>
       <param name="hound/costmap_length_m" value="20"/>

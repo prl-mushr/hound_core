@@ -140,6 +140,9 @@ ${OpenCV_INCLUDE_DIRS}
 add_executable(hound_core_node src/hound_core_node.cpp)
 target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
+add_executable(fake_laser_node src/fake_laser_node.cpp)
+target_link_libraries(fake_laser_node ${catkin_LIBRARIES})
+
 # add_executable(hound_control_node src/hound_control_node)
 # target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 ## Declare a C++ executable
