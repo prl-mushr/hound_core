@@ -6,7 +6,7 @@
       <remap from="hound/scan"        to="/scan"/>
       <param name="hound/cam_pitch" value = "0.1" />
       <param name="hound/max_height" value = "2.0"/>
-      <param name="hound/min_height" value = "-0.5"/>
+      <param name="hound/min_height" value = "-0.2"/>
       <param name="hound/max_depth" value = "7.0"/>
       <param name="hound/roi_2" value = "0.5"/>
       <param name="hound/roi_3" value = "0.8"/>
@@ -16,6 +16,8 @@
       <param name="hound/resolution_m" value = "0.05"/>
       <param name="hound/costmap_width_m" value="20"/>
       <param name="hound/costmap_length_m" value="20"/>
-
+      <remap from="hound/path"   to="/lane_node/path"/>
+      <param name="hound/visualize_path" value="true" />
+      <param name="hound/length_x" value = "7"/>
     </node>
 </launch>

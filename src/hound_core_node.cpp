@@ -23,10 +23,116 @@
 
 namespace enc = sensor_msgs::image_encodings;
 
+class Bezier
+{
+public:
+  cv::Point2f P[4]; // 4 points on a bezier curve
+  cv::Point2f vec[2];
+  cv::Point2f K[3];
+  float dist, arc_length, L[3], T[2], C[2];
+  Bezier(cv::Point3f start, cv::Point3f end)
+  {
+    P[0].x = start.x;
+    P[0].y = start.y;
+    
+    P[3].x = end.x;
+    P[3].y = end.y;
+
+    vec[0].x = cosf(start.z);
+    vec[0].y = sinf(start.z);
+    vec[1].x = -cosf(end.z);
+    vec[1].y = -sinf(end.z);
+
+    dist = cv::norm(P[3] - P[0]);
+
+    P[1] = P[0] + 0.33*dist*vec[0];
+    P[2] = P[3] + 0.33*dist*vec[1];
+
+    for(int i=0; i<3; i++)
+    {
+      L[i] = cv::norm(P[i+1] - P[i]);
+    }
+
+    arc_length = 0.5*( L[0] + L[1] + L[2] + dist );
+    T[0] = 0.5f*(L[0]/(L[0]+L[1]));
+    T[1] = 1.0f - 0.5f*(L[2]/(L[2]+L[1]));
+
+    K[0] = 9.0f*P[1] + 3.0f*P[3] - 3.0f*P[0] - 9.0f*P[2];
+    K[1] = 6.0f*P[0] - 12.0f*P[1] + 6.0f*P[2];
+    K[2] = 3.0f*(P[1] - P[0]);
+
+    C[0] = C_from_t(T[0]);
+    C[1] = C_from_t(T[1]);
+  }
+
+  float distance_to_goal(cv::Point3f goal)
+  {
+    cv::Point2f g(goal.x, goal.y);
+    return cv::norm(P[3] - g);
+  }
+
+  float C_from_t(float t)
+  {
+    cv::Point2f del[2];
+    float denominator,Curvature;
+    del[0] = t*t*K[0] + t*K[1] + K[2];
+    del[1] = 2.0f*t*K[0] + K[1];
+    denominator = cv::norm(del[0]); 
+    denominator *= denominator*denominator;
+    Curvature = ((del[0].x*del[1].y) - (del[0].y*del[1].x));
+    Curvature /= denominator;
+
+    return Curvature;
+  }
+
+  cv::Point2f curve(float t)
+  {
+    float t_[4];
+    float term_1 = (1.0f - t);
+    t_[3] = t*t*t;
+    t_[2] = 3.0f*t*t*term_1;
+    t_[1] = 3.0f*t*term_1*term_1;
+    t_[0] = term_1*term_1*term_1;
+    return P[0]*t_[0] + P[1]*t_[1] + P[2]*t_[2] + P[3]*t_[3];
+  }
+
+  cv::Point2f normal(float t)
+  {
+    cv::Point2f del, out;
+    del = t*t*K[0] + t*K[1] + K[2];
+    out.x = -del.y;
+    out.y = del.x;
+    float length = cv::norm(out);
+    if(length != 0)
+    {
+      out /= length;
+    }
+    return out;
+  }
+
+  cv::Point2f tangent(float t)
+  {
+    cv::Point2f out;
+    out = t*t*K[0] + t*K[1] + K[2];
+    float length = cv::norm(out);
+    if(length != 0)
+    {
+      out /= length;
+    }
+    return out;
+  }
+
+  float step_size(float resolution)
+  {
+    return resolution/arc_length;
+  }
+};
+
+
 class hound_core
 {
 public:
-  ros::Subscriber sub_depth_image, sub_cam_info, sub_pose, sub_scan;
+  ros::Subscriber sub_depth_image, sub_cam_info, sub_pose, sub_scan, sub_path;
   ros::Publisher control_publisher;
   ros::Timer process_timer;
   float fx_inv, fy_inv, fx, fy;
@@ -62,7 +168,19 @@ public:
 
   cv::Mat map, gradmap, bound_map, final_map, confidence_map;
   geometry_msgs::PoseStamped::ConstPtr last_map_pose;
+  bool new_map;
 
+  //---- planning stuff -------
+  bool path_received, visualize_path;
+  std::vector<cv::Point3f> path;
+  float lookahead_distance;
+  std::vector<Bezier> traj;
+  float goal_cost_multiplier, car_width, car_length, car_length_full;
+  int step_x, step_y;
+  float width_y, length_x, resol_x, resol_y;
+  float last_curvature, last_length;
+  float delta_curvature_cost, delta_length_cost;
+  float last_steering, last_speed, speed_meas;
 
   hound_core(ros::NodeHandle &nh) // constructor
   {
@@ -72,11 +190,15 @@ public:
     depth_init = false;
     scan_init = false;
 
+    new_map = false;
+    path_received = false;
+
+
     sub_depth_image = nh.subscribe("image", 1, &hound_core::depth_image_cb, this);
     sub_cam_info = nh.subscribe("camera_info", 10, &hound_core::cam_info_cb, this);
     sub_pose = nh.subscribe("pose", 1, &hound_core::pose_cb, this);
     sub_scan = nh.subscribe("scan", 1, &hound_core::scan_cb, this);
-    // process_timer = nh.createTimer(ros::Duration(0.2), &hound_core::process, this);
+    sub_path = nh.subscribe("path", 1, &hound_core::path_cb, this);
 
     if(not nh.getParam("hound/cam_pitch",cam_pitch))
     {
@@ -144,6 +266,56 @@ public:
       }
       ROS_INFO("roi_%d = %f",i,roi[i]);
     }
+
+    if(not nh.getParam("hound/lookahead_distance", lookahead_distance))
+    {
+      lookahead_distance = 5;
+    }
+
+    if(not nh.getParam("hound/visualize_path", visualize_path))
+    {
+      visualize_path = false;
+    }
+    if(not nh.getParam("hound/lookahead_distance", lookahead_distance))
+    {
+      lookahead_distance = 10;
+    }
+    if(not nh.getParam("hound/car_width", car_width))
+    {
+      car_width = 2;
+    }
+    if(not nh.getParam("hound/car_length", car_length))
+    {
+      car_length = 2;
+    }
+    if(not nh.getParam("hound/goal_cost_multiplier", goal_cost_multiplier))
+    {
+      goal_cost_multiplier = 5;
+    }
+    if(not nh.getParam("hound/length_x", length_x))
+    {
+      length_x = 7;
+    }
+    if(not nh.getParam("hound/width_y", width_y))
+    {
+      width_y = 3;
+    }
+    if(not nh.getParam("hound/step_x", step_x))
+    {
+      step_x = 5;
+    }
+    if(not nh.getParam("hound/step_y", step_y))
+    {
+      step_y = 5;
+    }
+    if(not nh.getParam("hound/delta_curvature_cost", delta_curvature_cost))
+    {
+      delta_curvature_cost = 10;
+    }
+    if(not nh.getParam("hound/delta_length_cost", delta_length_cost))
+    {
+      delta_length_cost = 10;
+    }
     costmap_height_p = costmap_length_m/resolution_m;
     costmap_width_p  = costmap_width_m/resolution_m;
 
@@ -155,7 +327,17 @@ public:
     sp = sinf(cam_pitch);
     height_range_inv = 1/(max_height - min_height);
 
-    boost::thread proc_thread(&hound_core::run, this);
+
+    resol_x = length_x/float(step_x);
+    resol_y = 2*width_y/float(step_y);
+    last_length = 0;
+    last_curvature = 0;
+    last_speed = 0;
+    last_steering = 0;
+
+    boost::thread proc_thread(&hound_core::mapping_run, this);
+    boost::thread plan_thread(&hound_core::planner_run, this);
+
   }
 
   void rpy_from_quat(float rpy[3],const geometry_msgs::PoseStamped::ConstPtr& msg) 
@@ -339,6 +521,7 @@ public:
     v_start = (1 - roi[2])*height;
     v_end = roi[3]*height;
     int depth_image_num = depth_image_ptrs.size();
+    ros::Time start = ros::Time::now();
 
     for(int k = 0; k < depth_image_num; k++)
     {
@@ -397,6 +580,15 @@ public:
             confidence_map.at<float>(row_pix, column_pix) = 1.0f - est_err;
           }
         }
+      }
+      // In some cases processing just 1 image may take up all the compute we have. 
+      // Not done for lidar because lidar only has 500 points which can be processed quickly.
+      if((ros::Time::now() - start).toSec() > 0.5f / map_update_rate)
+      {
+        ROS_INFO("skip");
+        depth_poses.clear();
+        depth_image_ptrs.clear();
+        break;
       }
     }
   }
@@ -518,22 +710,15 @@ public:
     {
       process_scan(map_pose);
     }
-
     cv::Sobel(map, gradmap, CV_32F, 1, 1, 3, 1, 0, cv::BORDER_DEFAULT);
 
     float delta_time = (ros::Time::now() - begin).toSec();
 
-    cv::Mat display;
-    cv::flip(gradmap, display, -1);
+    new_map = true; // set this to true so that the controller can do it's job
 
-    ROS_INFO("%f", delta_time*1000);
-    // cv::imshow("gradmap", grad_disp);
-    cv::imshow("map", display);
-    // // cv::imshow("test", cv_ptr->image);
-    cv::waitKey(3);
   }
 
-  void run()
+  void mapping_run()
   {
     ros::Rate r(map_update_rate);
     while(ros::ok())
@@ -543,6 +728,210 @@ public:
     }
   }
 
+  // -------------------- planner stuff -----------------------------
+
+  void path_cb(const geometry_msgs::PoseArray::ConstPtr& msg)
+  {
+    path.clear(); // remove last points
+    cv::Point3f temp;
+    int num = msg->poses.size();  // how many points?
+    for(int i = 0; i < num; i++)
+    {
+      temp.x = msg->poses[i].position.x;
+      temp.y = msg->poses[i].position.y;
+      temp.z = msg->poses[i].position.z;
+
+      path.push_back(temp);
+    }
+    path_received = true;
+  }
+
+  cv::Point3f rotate_point(cv::Point2f point, float angle)
+  {
+    cv::Point3f out;
+    out.x = point.x * cosf(angle) - point.y * sinf(angle);
+    out.y = point.x * sinf(angle) + point.y * cosf(angle);
+    return out;
+  }
+
+  void planner()
+  {
+    if(!path_received or !pose_init or !new_map)
+    {
+      return;
+    }
+    new_map = false; // reset new map to false;
+
+    geometry_msgs::PoseStamped::ConstPtr map_pose = last_map_pose;
+
+    cv::Point3f car_pos, goal_pos;
+    car_pos.x = cur_pose->pose.position.x - map_pose->pose.position.x;
+    car_pos.y = cur_pose->pose.position.y - map_pose->pose.position.y;
+    float rpy[3];
+    rpy_from_quat(rpy,cur_pose);
+    car_pos.z = rpy[2];
+    ROS_INFO("heading %f", car_pos.z*57.3);
+    cv::Point2f temp;
+    cv::Point3f goal;
+    bool goal_found;
+    int path_size = path.size();
+    int row_pix, column_pix;
+    cv::Mat display_map = map.clone();
+
+    for(int i = 0; i < path_size; i++)
+    {
+      temp.x = path[i].x - map_pose->pose.position.x;
+      temp.y = path[i].y - map_pose->pose.position.y;
+
+      if((cv::norm(temp) > lookahead_distance and !goal_found) or i == path_size -1)
+      {
+        goal.x = temp.x;
+        goal.y = temp.y;
+        goal.z = path[i].z;
+        goal_found = true;
+      }
+      if(visualize_path)
+      {
+        row_pix = int((temp.y + costmap_length_m*0.5) / resolution_m);
+        column_pix = int((-temp.x + costmap_width_m*0.5) / resolution_m);
+        cv::circle(display_map, cv::Point(column_pix, row_pix), 0.2/resolution_m, cv::Scalar(1.0), -1);
+      }
+    }
+
+    ros::Time start_time = ros::Time::now();
+    cv::Point3f end(0,0,goal.z); // start point is actually a tad bit behind
+    cv::Point2f track, normal, tangent;
+    // generate trajectory coefficients.
+    traj.clear();
+    int num_index = (step_x * step_y) + 1;
+    float cost[num_index], lowest_cost = 100000;
+    int lowest_index;
+    float arc_length_inv;
+    int index;
+    float delta_curvature, delta_length, hit_cost;
+    float step_size;
+    float track_left = -car_width/2, track_right = car_width/2, track_res = car_width*0.1f;
+    float car_height = cur_pose->pose.position.z;
+
+
+    for(int i = 0; i < step_x; i++)
+    {
+      temp.x = (i+1)*resol_x;
+      for(int j = 0; j < step_y; j++)
+      {
+        index = step_y*i + j;
+        temp.y = (-width_y + j*resol_y)*float(i+1)/float(step_x);
+        end = rotate_point(temp, -goal.z);
+
+        // if(temp.x < car_length_full*2.0f)
+        // {
+        //   end.z = -(0.2f - j*(0.4f/step_y));
+        // }
+        // else
+        // {
+        //   end.z = goal.z;
+        // } 
+        Bezier curve(car_pos,end);
+        
+        cost[index] = 0;
+        step_size = curve.step_size(resolution_m);
+        for(float k = 0; k < 1; k += step_size)
+        {
+          track = curve.curve(k);
+          normal = curve.normal(k);
+          tangent = curve.tangent(k);
+          arc_length_inv = 1.0f/curve.arc_length;
+          for(float l= track_left ; l <= track_right; l+= track_res)
+          {
+            row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
+            column_pix = (-track.x + l * normal.x + car_length_full * tangent.x + 0.5f * costmap_width_m) /resolution_m;
+            display_map.at<float>(int(row_pix), int(column_pix)) = 1.0f;
+            hit_cost = 2 * (map.at<float>(int(row_pix), int(column_pix)) - car_height);  // double it because half the car's height range = 100% probability of hit
+            cost[index] += hit_cost * hit_cost * resolution_m;
+          }
+        }
+        cost[index] += goal_cost_multiplier * curve.distance_to_goal(goal);
+
+        delta_curvature = curve.C[0] - last_curvature;
+        delta_length = cv::norm(curve.P[0] - curve.P[3]) - last_length;
+        cost[index] += delta_curvature_cost * delta_curvature * delta_curvature;
+        cost[index] += delta_length_cost * delta_length * delta_length;
+        
+        if(cost[index] < lowest_cost)
+        {
+          lowest_index = index;
+          lowest_cost = cost[index];
+        }
+        traj.push_back(curve);
+      }
+    }
+
+    last_curvature = traj[lowest_index].C[0];
+    last_length = cv::norm(traj[lowest_index].P[3] - traj[lowest_index].P[0]);
+
+    float speed, steering, curvature, future_dist;
+    future_dist = std::min(2*speed_meas, 0.1f*last_length);
+    step_size = traj[lowest_index].step_size(future_dist);
+    step_size = std::max(step_size, 0.02f);
+    
+    curvature = traj[lowest_index].C_from_t(step_size);
+    
+    float speed_curve = std::max(0.001f, fabs(last_curvature));
+    speed = std::min(sqrtf(last_length), 1/speed_curve);
+    speed = std::min(speed, 5.0f);
+    
+    if(last_length < car_length*1.5)
+    {
+      steering = 0;
+      speed = 0;
+    }
+    else
+    {
+      steering = atanf(car_length * curvature);
+    }
+    steering = std::min(std::max(-0.3f, steering), 0.3f);
+    steering = 0.5*steering + 0.5*last_steering;
+    float delta_steering = std::max(std::min((steering - last_steering), 0.02f), -0.02f);
+    steering = last_steering + delta_steering;
+    speed = 0.5*speed + 0.5*last_speed;
+
+    last_steering = steering;
+    last_speed = speed;
+
+    // if(visualize_path)
+    // {
+    //   step_size = traj[lowest_index].step_size(resolution_m);
+    //   for(float t = 0; t<= 1.0; t += step_size)
+    //   {
+    //     track = traj[lowest_index].curve(t);
+    //     normal = traj[lowest_index].normal(t);
+
+    //     for(float l= - car_width/2; l<= car_width/2; l += car_width * resolution_m)
+    //     { 
+    //       row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
+    //       column_pix = (track.x + l * normal.x + car_length_full * tangent.x + 0.5f * costmap_width_m) /resolution_m;
+    //       display_map.at<float>(int(row_pix), int(column_pix)) = 1.0f;
+    //     }
+    //   }
+    // }
+
+    cv::Mat display;
+    cv::flip(display_map, display, -1);
+
+    cv::imshow("map", display);
+    cv::waitKey(3);
+
+  }  
+
+  void planner_run()
+  {
+    ros::Rate r(map_update_rate*100);
+    while(ros::ok())
+    {
+      planner();
+      r.sleep();
+    }
+  }
 };
 
 
