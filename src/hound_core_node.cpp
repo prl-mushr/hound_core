@@ -760,6 +760,7 @@ public:
     {
       return;
     }
+    ros::Time start = ros::Time::now();
     new_map = false; // reset new map to false;
 
     geometry_msgs::PoseStamped::ConstPtr map_pose = last_map_pose;
@@ -770,7 +771,6 @@ public:
     float rpy[3];
     rpy_from_quat(rpy,cur_pose);
     car_pos.z = rpy[2];
-    ROS_INFO("heading %f", car_pos.z*57.3);
     cv::Point2f temp;
     cv::Point3f goal;
     bool goal_found;
@@ -811,7 +811,7 @@ public:
     float delta_curvature, delta_length, hit_cost;
     float step_size;
     float track_left = -car_width/2, track_right = car_width/2, track_res = car_width*0.1f;
-    float car_height = cur_pose->pose.position.z;
+    float car_height = map.at<float>(int(costmap_height_p*0.5),int(costmap_width_p*0.5));
 
 
     for(int i = 0; i < step_x; i++)
@@ -821,16 +821,15 @@ public:
       {
         index = step_y*i + j;
         temp.y = (-width_y + j*resol_y)*float(i+1)/float(step_x);
-        end = rotate_point(temp, -goal.z);
-
-        // if(temp.x < car_length_full*2.0f)
-        // {
-        //   end.z = -(0.2f - j*(0.4f/step_y));
-        // }
-        // else
-        // {
-        //   end.z = goal.z;
-        // } 
+        end = rotate_point(temp, goal.z);
+        if(i < step_x/2)
+        {
+          end.z = goal.z - (1.0f - j*(2.0f/step_y));
+        }
+        else
+        {
+          end.z = goal.z;
+        } 
         Bezier curve(car_pos,end);
         
         cost[index] = 0;
@@ -844,19 +843,19 @@ public:
           for(float l= track_left ; l <= track_right; l+= track_res)
           {
             row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
-            column_pix = (-track.x + l * normal.x + car_length_full * tangent.x + 0.5f * costmap_width_m) /resolution_m;
-            display_map.at<float>(int(row_pix), int(column_pix)) = 1.0f;
-            hit_cost = 2 * (map.at<float>(int(row_pix), int(column_pix)) - car_height);  // double it because half the car's height range = 100% probability of hit
+            column_pix = (-(track.x + l * normal.x + car_length_full * tangent.x) + 0.5f * costmap_width_m) /resolution_m;
+            hit_cost = (map.at<float>(int(row_pix), int(column_pix)) - car_height);  // double it because half the car's height range = 100% probability of hit
+            hit_cost += gradmap.at<float>(int(row_pix), int(column_pix))/resolution_m;
+            // hit_cost /= std::max(confidence_map.at<float>(int(row_pix), int(column_pix)), 0.01f);
             cost[index] += hit_cost * hit_cost * resolution_m;
           }
         }
         cost[index] += goal_cost_multiplier * curve.distance_to_goal(goal);
-
         delta_curvature = curve.C[0] - last_curvature;
         delta_length = cv::norm(curve.P[0] - curve.P[3]) - last_length;
         cost[index] += delta_curvature_cost * delta_curvature * delta_curvature;
         cost[index] += delta_length_cost * delta_length * delta_length;
-        
+
         if(cost[index] < lowest_cost)
         {
           lowest_index = index;
@@ -898,25 +897,26 @@ public:
     last_steering = steering;
     last_speed = speed;
 
-    // if(visualize_path)
-    // {
-    //   step_size = traj[lowest_index].step_size(resolution_m);
-    //   for(float t = 0; t<= 1.0; t += step_size)
-    //   {
-    //     track = traj[lowest_index].curve(t);
-    //     normal = traj[lowest_index].normal(t);
+    if(visualize_path)
+    {
+      step_size = traj[lowest_index].step_size(resolution_m);
+      for(float t = 0; t<= 1.0; t += step_size)
+      {
+        track = traj[lowest_index].curve(t);
+        normal = traj[lowest_index].normal(t);
 
-    //     for(float l= - car_width/2; l<= car_width/2; l += car_width * resolution_m)
-    //     { 
-    //       row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
-    //       column_pix = (track.x + l * normal.x + car_length_full * tangent.x + 0.5f * costmap_width_m) /resolution_m;
-    //       display_map.at<float>(int(row_pix), int(column_pix)) = 1.0f;
-    //     }
-    //   }
-    // }
-
+        for(float l= - car_width/2; l<= car_width/2; l += car_width * resolution_m)
+        { 
+          row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
+          column_pix = (-(track.x + l * normal.x + car_length_full * tangent.x) + 0.5f * costmap_width_m) /resolution_m;
+          display_map.at<float>(int(row_pix), int(column_pix)) = 1.0f;
+        }
+      }
+    }
+    float delta = (ros::Time::now() - start).toSec();
+    ROS_INFO("delta_MPC: %f", delta*1e3);
     cv::Mat display;
-    cv::flip(display_map, display, -1);
+    cv::flip(confidence_map, display, -1);
 
     cv::imshow("map", display);
     cv::waitKey(3);

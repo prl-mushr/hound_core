@@ -6,18 +6,22 @@
       <remap from="hound/scan"        to="/scan"/>
       <param name="hound/cam_pitch" value = "0.1" />
       <param name="hound/max_height" value = "2.0"/>
-      <param name="hound/min_height" value = "-0.2"/>
+      <param name="hound/min_height" value = "-0.5"/>
       <param name="hound/max_depth" value = "7.0"/>
       <param name="hound/roi_2" value = "0.5"/>
       <param name="hound/roi_3" value = "0.8"/>
       <param name="hound/map_update_rate" value = "5"/>
-      <param name="hound/cam_pos_2" value = "1.5"/>
+      <param name="hound/cam_pos_2" value = "1.3"/>
       <param name="hound/lidar_pos_2" value = "1.5"/>
       <param name="hound/resolution_m" value = "0.05"/>
       <param name="hound/costmap_width_m" value="20"/>
       <param name="hound/costmap_length_m" value="20"/>
       <remap from="hound/path"   to="/lane_node/path"/>
-      <param name="hound/visualize_path" value="true" />
+      <param name="hound/visualize_path" value="false" />
       <param name="hound/length_x" value = "7"/>
+      <param name="hound/width_y" value="3"/>
+      <param name="hound/goal_cost_multiplier" value = "10" />
+      <param name="hound/delta_curvature_cost" value = "0.1" />
+      <param name="hound/delta_length_cost" value = "0.01" />
     </node>
 </launch>
