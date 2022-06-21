@@ -6,6 +6,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/PoseArray.h"
+#include "geometry_msgs/Quaternion.h"
 #include "nav_msgs/Odometry.h"
 #include "sensor_msgs/Imu.h"
 #include "ackermann_msgs/AckermannDriveStamped.h"
@@ -126,18 +127,22 @@ public:
   }
 };
 
-class Juicebox()
+class Juicebox
 {
 public:
+  ros::Subscriber sub_odom, sub_imu;
+  ros::Publisher control_publisher;
   // model variables
   float D_const, B_const, C_const, wheelbase, trackwidth, cg_height, cg_ratio;
   float steering_limit, mass, wheelspeed_lim;
   float cruise_speed;
   // state variables. ENU for world frame, FLU for body frame:
-  float quat[4], rpy[3];
-  cv::Point3f pos, vel, lastVel, velBF, accBF, accNED, rotBF; 
-  float Tnb[3][3], Tbn[3][3];
+  float rpy[3];
+  geometry_msgs::Quaternion Q;
+  cv::Point3f pos, vel, lastVel, velBF, accBF, accNED, rotBF, phi_dot;
   float Beta, speed;
+  cv::Matx33f Tnb, Tbn;
+
 
   // control variables
   cv::Point3f Vhat_cur;
@@ -146,7 +151,152 @@ public:
   float control_Tc, speed_time_constant, wp_dist;
   bool auto_flag, setup_complete;
   int wp_index, max_index;
-  
+
+  Juicebox(ros::NodeHandle &nh)
+  {
+    Tnb = cv::Matx33f(0,0,0, 0,0,0, 0,0,0);
+    Tbn = cv::Matx33f(0,0,0, 0,0,0, 0,0,0);
+
+    sub_odom = nh.subscribe("odom", 1, &Juicebox::odom_cb, this);
+    sub_imu = nh.subscribe("imu", 1, &Juicebox::imu_cb, this);
+    control_publisher = nh.advertise<ackermann_msgs::AckermannDriveStamped>("control",10);
+    ROS_INFO("initialized");
+  }
+
+
+  void rpy_from_quat(float rpy[3]) 
+  { 
+    float q[4];
+    q[0] = Q.x;
+    q[1] = Q.y;
+    q[2] = Q.z;
+    q[3] = Q.w;
+    rpy[2] = atan2f(2.0f * (q[0] * q[1] + q[2] * q[3]),1 - 2 * (q[1] * q[1] + q[2] * q[2]));
+    rpy[0] = asinf(2.0f * (q[0] * q[2] - q[3] * q[1]));
+    rpy[1] = atan2f(2.0f * (q[0] * q[3] + q[1] * q[2]), 1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
+  }
+
+  void calc_Transform(geometry_msgs::Quaternion q, cv::Matx33f &TNB, cv::Matx33f &TBN)
+  {
+    float q00,q11,q22,q33,q01,q02,q03,q12,q13,q23;
+    cv::Mat Tnb = cv::Mat::zeros(3,3, CV_32FC1);
+    cv::Mat Tbn = Tnb.clone();
+
+    float qx, qy,qz,qw;
+    qx = -q.w;
+    qy = q.x;
+    qz = q.y;
+    qw = -q.z;
+
+    q00 = qx*qx;
+    q11 = qy*qy;
+    q22 = qz*qz;
+    q33 = qw*qw;
+    q01 =  qx*qy;
+    q02 =  qx*qz;
+    q03 =  qx*qw;
+    q12 =  qy*qz;
+    q13 =  qy*qw;
+    q23 =  qz*qw;
+    
+    Tbn.at<float>(0,0) = q00 + q11 - q22 - q33;
+    Tbn.at<float>(1,1) = q00 - q11 + q22 - q33;
+    Tbn.at<float>(2,2) = q00 - q11 - q22 + q33;
+    Tbn.at<float>(0,1) = 2*(q12 - q03);
+    Tbn.at<float>(0,2) = 2*(q13 + q02);
+    Tbn.at<float>(1,0) = 2*(q12 + q03);
+    Tbn.at<float>(1,2) = 2*(q23 - q01);
+    Tbn.at<float>(2,0) = 2*(q13 - q02);
+    Tbn.at<float>(2,1) = 2*(q23 + q01);
+
+    Tnb = Tbn.t(); // transform ned->body
+
+    TBN = cv::Matx33f(Tbn);
+    TNB = cv::Matx33f(Tnb);
+  }
+
+  cv::Point3f LPF(float alpha, cv::Point3f mes, cv::Point3f est)
+  {
+    return alpha*mes + (1-alpha)*est;
+  }
+
+  float LPF(float alpha, float mes, float est)
+  {
+    return alpha*mes + (1-alpha)*est;
+  }
+
+  float constrain(float val, float min, float max)
+  {
+    if(val > max)
+    {
+      return max;
+    }
+    if(val < min);
+    {
+      return min;
+    }
+    return val;
+  }
+
+  void imu_cb(const sensor_msgs::Imu::ConstPtr msg)
+  {
+    accBF.x = msg->linear_acceleration.x;
+    accBF.y = msg->linear_acceleration.y;
+    accBF.z = msg->linear_acceleration.z;
+  }
+
+  void odom_cb(const nav_msgs::Odometry::ConstPtr& msg)
+  {
+    pos.x = msg->pose.pose.position.y;
+    pos.y = msg->pose.pose.position.x;
+    pos.z = msg->pose.pose.position.z;
+
+    velBF.x = msg->twist.twist.linear.y;
+    velBF.y = msg->twist.twist.linear.x;
+    velBF.z = msg->twist.twist.linear.z;
+
+    rotBF.x = msg->twist.twist.angular.y;
+    rotBF.y = msg->twist.twist.angular.x;
+    rotBF.z = msg->twist.twist.angular.z;
+
+    Q = msg->pose.pose.orientation;
+    calc_Transform(Q, Tnb, Tbn);
+    rpy_from_quat(rpy);
+
+    lastVel = vel;
+    vel = Tnb * velBF;
+
+    speed = cv::norm(velBF);
+    Beta = LPF(0.2f, atan2f(velBF.y, velBF.x), Beta);
+    if(speed > 1)
+    {
+      cv::Point3f past_vec = Tnb * lastVel / cv::norm(lastVel);
+      cv::Point3f cur_vec = vel/ speed;
+      cv::Point3f rot_vec = past_vec.cross(cur_vec);
+      if(cv::norm(rot_vec)!=0)
+      {  
+        rot_vec /= cv::norm(rot_vec);
+      }
+      else
+      {
+          rot_vec = cv::Point3f(0,0,1);
+      }
+      phi_dot = LPF(0.2, 50*rot_vec * acosf( constrain(past_vec.dot(cur_vec), -1.0, 1.0) ), phi_dot);
+    }
+    else
+    {
+      phi_dot = rotBF;
+    }
+
+    std::cout<<"pos: "<<pos<<std::endl;
+    std::cout<<"vel: "<<vel<<std::endl;
+    std::cout<<"velBF: "<<velBF<<std::endl;
+    std::cout<<"rpy: "<<rpy[2]*57.3<<std::endl;
+    std::cout<<"phi_dot: "<<phi_dot.z*57.3<<std::endl;
+    std::cout<<"Beta "<<Beta<<std::endl;
+  }
+
+
 };
 
 int main(int argc, char **argv)
@@ -155,8 +305,8 @@ int main(int argc, char **argv)
   ros::init(argc, argv, "controller");
   ros::NodeHandle nh("~");
   // subsribe topic
-  ros::MultiThreadedSpinner spinner(16); // Use one thread per core
-  spinner.spin(); // spin() will not return until the node has been shutdown
+  Juicebox jb(nh);
+  ros::spin();
 
   return 0;
 }

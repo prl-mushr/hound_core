@@ -13,11 +13,13 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   std_msgs
+  mavros_msgs
 )
 
 find_package( OpenCV REQUIRED )
-find_package(PCL REQUIRED)
-
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIRS})
+add_definitions(${EIGEN3_DEFINITIONS})
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -143,8 +145,14 @@ target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 add_executable(fake_laser_node src/fake_laser_node.cpp)
 target_link_libraries(fake_laser_node ${catkin_LIBRARIES})
 
-# add_executable(hound_control_node src/hound_control_node)
-# target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+add_executable(manual_tester src/manual_tester.cpp)
+target_link_libraries(manual_tester ${catkin_LIBRARIES})
+
+add_executable(hound_visbody_node src/hound_visbody_node.cpp)
+target_link_libraries(hound_visbody_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+
+add_executable(hound_control_node src/hound_control_node)
+target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide

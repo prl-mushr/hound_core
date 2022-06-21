@@ -1,0 +1,7 @@
+<launch>
+    <node pkg="hound_core" type="hound_visbody_node" name="hound" output="screen">
+      <remap from="hound/depth"       to="/camera/infra1/image_rect_raw"/>
+      <remap from="hound/camera_info" to="/camera/infra1/camera_info"/>
+      <remap from="hound/infra"       to="/camera/aligned_depth_to_infra1/image_raw"/>
+    </node>
+</launch>
