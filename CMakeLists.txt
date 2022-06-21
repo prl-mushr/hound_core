@@ -148,8 +148,6 @@ target_link_libraries(fake_laser_node ${catkin_LIBRARIES})
 add_executable(manual_tester src/manual_tester.cpp)
 target_link_libraries(manual_tester ${catkin_LIBRARIES})
 
-add_executable(hound_visbody_node src/hound_visbody_node.cpp)
-target_link_libraries(hound_visbody_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
 add_executable(hound_control_node src/hound_control_node)
 target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
