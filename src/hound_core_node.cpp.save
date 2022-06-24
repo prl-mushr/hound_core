@@ -715,9 +715,13 @@ public:
     float delta_time = (ros::Time::now() - begin).toSec();
 
     new_map = true; // set this to true so that the controller can do it's job
-    ROS_INFO("delta: %f ms", delta_time*1e3);
-    
+    ROS_INFO("delta_t: %f ms", delta_t*1000);
+    ROS_INFO("delta_MPC: %f", delta*1e3);
+    cv::Mat display;
+    cv::flip(confidence_map, display, -1);
 
+    cv::imshow("map", display);
+    cv::waitKey(3);
   }
 
   void mapping_run()

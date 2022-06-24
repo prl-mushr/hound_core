@@ -6,7 +6,7 @@
       <remap from="rgb/image"       to="/camera/infra1/image_rect_raw"/>
       <remap from="rgb/camera_info" to="/camera/infra1/camera_info"/>
       <remap from="depth/image"     to="/camera/depth/image_rect_raw"/>
-      <remap from="odom"            to="/mavros/vision_pose/vis_odom"/>
+      <remap from="odom"            to=""/>
       
       <param name="queue_size" type="int" value="2"/>
       
