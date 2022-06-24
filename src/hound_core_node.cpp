@@ -877,7 +877,7 @@ public:
     
     curvature = traj[lowest_index].C_from_t(step_size);
     
-    float speed_curve = std::max(0.001f, fabs(last_curvature));
+    float speed_curve = std::max(0.001f, float(fabs(last_curvature)));
     speed = std::min(sqrtf(last_length), 1/speed_curve);
     speed = std::min(speed, 5.0f);
     

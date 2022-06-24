@@ -1,0 +1,6 @@
+<launch>
+    <node pkg="hound_core" type="hound_control_node" name="hound" output="screen">
+      <remap from="hound/imu"       to="/car1/imu"/>
+      <remap from="hound/odom"        to="/car1/car_odom"/>
+    </node>
+</launch>
