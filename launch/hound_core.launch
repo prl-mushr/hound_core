@@ -8,7 +8,7 @@
       <param name="hound/max_height" value = "1.0"/>
       <param name="hound/min_height" value = "-0.5"/>
       <param name="hound/max_depth" value = "7.0"/>
-      <param name="hound/roi_2" value = "0.7"/>
+      <param name="hound/roi_2" value = "1.0"/>
       <param name="hound/roi_3" value = "1.0"/>
       <param name="hound/map_update_rate" value = "10"/>
       <param name="hound/cam_pos_2" value = "0.17"/>

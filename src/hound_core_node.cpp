@@ -230,7 +230,7 @@ public:
     }
     if(not nh.getParam("hound/float_encoding_img", float_flag))
     {
-      float_flag = true;
+      float_flag = false;
     }
     if(not nh.getParam("hound/max_depth", max_depth))
     {
@@ -548,10 +548,11 @@ public:
           {
             depth = float(cv_ptr->image.at<u_int16_t>(v,u))*1e-3;
           }
-          if(depth > max_depth)
+          if(depth > max_depth or depth <= 0.1f)
           {
             continue;
           }
+          
           x = depth;
           z = (cy - float(v))*x*fy_inv;
           p_body.y = (cx - float(u))*x*fx_inv + cam_pos[1];
@@ -716,7 +717,12 @@ public:
 
     new_map = true; // set this to true so that the controller can do it's job
     ROS_INFO("delta: %f ms", delta_time*1e3);
-    
+    cv::Mat display;
+    cv::flip(map, display, -1);
+
+    cv::imshow("map", display);
+    cv::waitKey(3);
+
 
   }
 
