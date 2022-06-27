@@ -1,0 +1,1 @@
+rosbag record -o hound_test.bag /camera/depth/camera_info /camera/depth/image_rect_raw /camera/infra1/camera_info /camera/infra1/image_rect_raw  /mavros/local_position/accel -e "/mavros/(.*)" /scan /tf_static
