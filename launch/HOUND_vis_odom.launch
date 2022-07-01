@@ -17,7 +17,7 @@
       <param name="Vis/RoiRatios" type="string" value="0.03 0.03 0.04 0.04"/>
       <param name="Vis/MaxDepth" type="string" value="10"/>
       <param name="Vis/CorNNDR" type="string" value="0.8"/>
-      <param name="Vis/MaxFeatures" type="string" value="150"/>
+      <param name="Vis/MaxFeatures" type="string" value="300"/>
       <param name="Vis/FeatureType" type="string" value="3"/>
       <param name="wait_for_transform_duration" type="string" value="0.5"/> 
       <param name="Odom/KeyFrameThr" type="string" value= "0"/>
@@ -25,7 +25,7 @@
       <param name="Vis/BundleAdjustment" type="int" value="0"/>
       <param name="Odom/KalmanMeasurementNoise" type="string" value="0.3"/>
       <param name="Vis/ForwardEstOnly" type="string" value="true"/>
-
+      <param name="Odom/ResetCountdown" type="int" value="1"/>
       <param name="frame_id" type="string" value="camera_link"/>
       <param name="odom_frame_id" type="string" value="odom"/>
       <param name="wait_for_transform_duration" type="string" value="0.5"/> 

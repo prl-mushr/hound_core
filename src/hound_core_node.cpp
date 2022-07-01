@@ -584,7 +584,7 @@ public:
       }
       // In some cases processing just 1 image may take up all the compute we have. 
       // Not done for lidar because lidar only has 500 points which can be processed quickly.
-      if((ros::Time::now() - start).toSec() > 0.5f / map_update_rate)
+      if((ros::Time::now() - start).toSec() > 0.7f / map_update_rate)
       {
         ROS_INFO("skip");
         depth_poses.clear();
@@ -720,8 +720,8 @@ public:
     cv::Mat display;
     cv::flip(map, display, -1);
 
-    cv::imshow("map", display);
-    cv::waitKey(3);
+//    cv::imshow("map", display);
+//    cv::waitKey(3);
 
 
   }

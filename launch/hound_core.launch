@@ -10,7 +10,7 @@
       <param name="hound/max_depth" value = "7.0"/>
       <param name="hound/roi_2" value = "1.0"/>
       <param name="hound/roi_3" value = "1.0"/>
-      <param name="hound/map_update_rate" value = "10"/>
+      <param name="hound/map_update_rate" value = "15"/>
       <param name="hound/cam_pos_2" value = "0.17"/>
       <param name="hound/lidar_pos_2" value = "0.2"/>
       <param name="hound/resolution_m" value = "0.05"/>
