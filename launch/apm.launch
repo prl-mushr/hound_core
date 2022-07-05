@@ -2,7 +2,7 @@
 	<!-- vim: set ft=xml noet : -->
 	<!-- example launch script for ArduPilot based FCU's -->
 
-	<arg name="fcu_url" default="/dev/ttyUSB0:921600" />
+	<arg name="fcu_url" default="/dev/ttyUSB1:921600" />
 	<arg name="gcs_url" default="" />
 	<arg name="tgt_system" default="1" />
 	<arg name="tgt_component" default="1" />
