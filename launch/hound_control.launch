@@ -1,6 +1,7 @@
 <launch>
     <node pkg="hound_core" type="hound_control_node" name="hound" output="screen">
-      <remap from="hound/imu"       to="/car1/imu"/>
-      <remap from="hound/odom"        to="/car1/car_odom"/>
+      <remap from="hound/imu"       to = "/mavros/imu/data_raw"/>
+      <remap from="hound/odom"      to = "/mavros/local_position/odom"/>
+      <remap from="hound/rcout"     to = "/mavros/rc/out"/>
     </node>
 </launch>
