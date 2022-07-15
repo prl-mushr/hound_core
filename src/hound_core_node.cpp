@@ -165,6 +165,7 @@ public:
   std::vector<geometry_msgs::PoseStamped::ConstPtr> scan_poses, last_scan_poses;
   std::vector<sensor_msgs::LaserScan::ConstPtr> scan_msgs;
   float lidar_pos[3];
+  float max_scan_range;
 
   cv::Mat map, gradmap, bound_map, final_map, confidence_map;
   geometry_msgs::PoseStamped::ConstPtr last_map_pose;
@@ -236,7 +237,10 @@ public:
     {
       max_depth = 10.0f;
     }
-
+    if(not nh.getParam("hound/max_scan_range", max_scan_range))
+    {
+      max_scan_range = 10.0f;
+    }
     if(not nh.getParam("hound/map_update_rate", map_update_rate))
     {
       map_update_rate = 10;
@@ -496,7 +500,7 @@ public:
     last_map_pose = map_pose;
     
     //  define translation center as camera's location in map image
-    float warp_values[] = { 1.0, 0.0, delta[0]/resolution_m, 0.0, 1.0, -delta[1]/resolution_m };  // translation matrix
+    float warp_values[] = { 1.0, 0.0, int(delta[0]/resolution_m), 0.0, 1.0, int(-delta[1]/resolution_m) };  // translation values. Must be rounded to nearest integer to avoid blurring of elevation map
     translation_matrix = cv::Mat(2, 3, CV_32F, warp_values);    // fill in the values
     
     cv::warpAffine(map, translated_image, translation_matrix, map.size());  // translate
@@ -504,6 +508,7 @@ public:
 
     cv::warpAffine(confidence_map, translated_image, translation_matrix, map.size());  // translate
     confidence_map = translated_image.clone();
+    confidence_map *= 0.95;
   }
 
   void process_depth(geometry_msgs::PoseStamped::ConstPtr& map_pose)
@@ -564,7 +569,7 @@ public:
           p_body.z = temp_x*sp + temp_z*cp + cam_pos[2];
 
           p_odom = Tbn * p_body - p_delta;
-          if( (p_body.z < max_height) and (p_body.z > min_height) and fabs(p_odom.x) < costmap_width_m*0.5f and fabs(p_odom.y) < costmap_length_m*0.5 )
+          if( (p_odom.z < max_height) and (p_body.z > min_height) and fabs(p_odom.x) < costmap_width_m*0.5f and fabs(p_odom.y) < costmap_length_m*0.5 )
           {
             row_pix = int((p_odom.y + costmap_length_m*0.5) / resolution_m);
             column_pix = int((-p_odom.x + costmap_width_m*0.5) / resolution_m);
@@ -574,7 +579,7 @@ public:
             mes_err = depth_err_coeff*depth;
             tot_err_inv = 1/(est_err + mes_err);
 
-            pixel_height_mes = (p_odom.z - min_height);
+            pixel_height_mes = p_odom.z + map_pose->pose.position.z; // add global ref height with the hopes that ardupilot didn't forget to subtract AMSL and fuck me over
 
             map.at<float>(row_pix, column_pix) = (pixel_height_est * mes_err + pixel_height_mes * est_err ) * tot_err_inv;
             est_err *= mes_err*tot_err_inv;
@@ -662,7 +667,13 @@ public:
 
       for(int i = 0; i < scan_points; i++)
       {
-        interpolate(last_scan_pose, scan_pose, float(i)/float(scan_points), intermediate);
+        if(scan_ptr->ranges[i] > 0.5f*std::min(costmap_length_m, costmap_width_m)
+           or scan_ptr->ranges[i] > max_scan_range
+           or scan_ptr->ranges[i] < 0.2f)
+        {
+          continue;
+        }
+        interpolate(last_scan_pose, scan_pose, float(scan_points - i)/float(scan_points), intermediate);
         calc_Transform_ll(intermediate.pose.orientation, Tnb, Tbn); // calling the lower level tf function because I can't modify const pointers
         p_body = polar_to_cartesian_lidar(angle_min + angle_increment*i, scan_ptr->ranges[i]);
         
@@ -674,7 +685,7 @@ public:
         
         row_pix = int((p_odom.y + costmap_length_m*0.5) / resolution_m);
         column_pix = int((-p_odom.x + costmap_width_m*0.5) / resolution_m);
-        map.at<float>(row_pix, column_pix) = p_odom.z - min_height;
+        map.at<float>(row_pix, column_pix) = p_odom.z + map_pose->pose.position.z; // add odom ref height
         confidence_map.at<float>(row_pix, column_pix) = 1;
       }
 
@@ -699,10 +710,10 @@ public:
 
     int depth_image_num = depth_image_ptrs.size();
     ROS_INFO("num_images:%d", depth_image_num);
-    if(depth_image_num > 0)
-    {
-      process_depth(map_pose);
-    }
+    // if(depth_image_num > 0)
+    // {
+    //   process_depth(map_pose);
+    // }
 
     int scan_num = scan_msgs.size();
     ROS_INFO("num_scans:%d", scan_num);
@@ -711,18 +722,22 @@ public:
     {
       process_scan(map_pose);
     }
-    cv::Sobel(map, gradmap, CV_32F, 1, 1, 3, 1, 0, cv::BORDER_DEFAULT);
+
+    cv::Mat temp_grad;
+    cv::Sobel(map, temp_grad, CV_32F, 1, 1, 3, 1, 0, cv::BORDER_DEFAULT);
+
+    cv::GaussianBlur(temp_grad, gradmap, cv::Size(5,5), 0, 0, cv::BORDER_DEFAULT);
 
     float delta_time = (ros::Time::now() - begin).toSec();
 
     new_map = true; // set this to true so that the controller can do it's job
     ROS_INFO("delta: %f ms", delta_time*1e3);
-    cv::Mat display;
-    cv::flip(map, display, -1);
-
-//    cv::imshow("map", display);
-//    cv::waitKey(3);
-
+    // cv::Mat display;
+    // cv::flip(map, display, -1);
+    // cv::namedWindow("map", cv::WINDOW_NORMAL);
+    // cv::resizeWindow("map", 800, 800);
+    // cv::imshow("map", display);
+    // cv::waitKey(3);
 
   }
 
@@ -853,9 +868,9 @@ public:
             row_pix = (track.y + l * normal.y + car_length_full * tangent.y + 0.5f * costmap_length_m)/resolution_m;
             column_pix = (-(track.x + l * normal.x + car_length_full * tangent.x) + 0.5f * costmap_width_m) /resolution_m;
             hit_cost = (map.at<float>(int(row_pix), int(column_pix)) - car_height);  // double it because half the car's height range = 100% probability of hit
-            hit_cost += gradmap.at<float>(int(row_pix), int(column_pix))/resolution_m;
+            // hit_cost += gradmap.at<float>(int(row_pix), int(column_pix))/resolution_m;
             // hit_cost /= std::max(confidence_map.at<float>(int(row_pix), int(column_pix)), 0.01f);
-            cost[index] += hit_cost * hit_cost * resolution_m;
+            // cost[index] += hit_cost * hit_cost * resolution_m;
           }
         }
         cost[index] += goal_cost_multiplier * curve.distance_to_goal(goal);
@@ -923,11 +938,11 @@ public:
     }
     float delta = (ros::Time::now() - start).toSec();
     ROS_INFO("delta_MPC: %f", delta*1e3);
-    cv::Mat display;
-    cv::flip(confidence_map, display, -1);
+    // cv::Mat display;
+    // cv::flip(confidence_map, display, -1);
 
-    cv::imshow("map", display);
-    cv::waitKey(3);
+    // cv::imshow("map", display);
+    // cv::waitKey(3);
 
   }  
 
