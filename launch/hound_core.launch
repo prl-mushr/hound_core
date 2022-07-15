@@ -4,9 +4,10 @@
       <remap from="hound/image"       to="/camera/depth/image_rect_raw"/>
       <remap from="hound/pose"        to="/mavros/local_position/pose"/>
       <remap from="hound/scan"        to="/scan"/>
+      <remap from="hound/path"   to="/path"/>
       <param name="hound/cam_pitch" value = "0.0" />
       <param name="hound/max_height" value = "1.0"/>
-      <param name="hound/min_height" value = "-0.5"/>
+      <param name="hound/min_height" value = "0.1"/>
       <param name="hound/max_depth" value = "7.0"/>
       <param name="hound/roi_2" value = "1.0"/>
       <param name="hound/roi_3" value = "1.0"/>
@@ -16,7 +17,6 @@
       <param name="hound/resolution_m" value = "0.01"/>
       <param name="hound/costmap_width_m" value="5"/>
       <param name="hound/costmap_length_m" value="5"/>
-      <remap from="hound/path"   to="/lane_node/path"/>
       <param name="hound/visualize_path" value="false" />
       <param name="hound/length_x" value = "5"/>
       <param name="hound/lookahead_distance" value = "4"/>

@@ -13,7 +13,7 @@ path_published = False
 def publish_path():
     theta = np.arange(0,6.28,0.1)
     r = 3*(1 + 0.125*(np.sin(2*theta)**2 ) )
-    X = (np.cos(theta)*r)
+    X = (np.cos(theta)* - 3)
     Y = (np.sin(theta)*r)
     tangent = theta + (np.pi/2)
     print("hit")
@@ -24,7 +24,7 @@ def publish_path():
         pose = Pose()
         pose.position.x = X[i]
         pose.position.y = Y[i]
-        pose.position.z = 0
+        pose.position.z = tangent[i]
         path.poses.append(pose)
     path_pub.publish(path)
     path_published = True
