@@ -19,6 +19,7 @@
       <remap from="hound/path"   to="/lane_node/path"/>
       <param name="hound/visualize_path" value="false" />
       <param name="hound/length_x" value = "5"/>
+      <param name="hound/lookahead_distance" value = "4"/>
       <param name="hound/width_y" value="3"/>
       <param name="hound/goal_cost_multiplier" value = "10" />
       <param name="hound/delta_curvature_cost" value = "0.1" />

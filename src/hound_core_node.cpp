@@ -19,6 +19,7 @@
 #include <sensor_msgs/image_encodings.h>
 #include <sensor_msgs/LaserScan.h>
 #include "ackermann_msgs/AckermannDriveStamped.h"
+#include <mavros_msgs/ManualControl.h>
 #include <boost/thread/thread.hpp>
 
 namespace enc = sensor_msgs::image_encodings;
@@ -133,7 +134,7 @@ class hound_core
 {
 public:
   ros::Subscriber sub_depth_image, sub_cam_info, sub_pose, sub_scan, sub_path;
-  ros::Publisher control_publisher;
+  ros::Publisher control_pub;
   ros::Timer process_timer;
   float fx_inv, fy_inv, fx, fy;
   float cx, cy;
@@ -200,6 +201,7 @@ public:
     sub_pose = nh.subscribe("pose", 1, &hound_core::pose_cb, this);
     sub_scan = nh.subscribe("scan", 1, &hound_core::scan_cb, this);
     sub_path = nh.subscribe("path", 1, &hound_core::path_cb, this);
+    control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
 
     if(not nh.getParam("hound/cam_pitch",cam_pitch))
     {
@@ -777,6 +779,25 @@ public:
     return out;
   }
 
+  void pub_ctrl(float steering, float speed)
+  {
+      mavros_msgs::ManualControl manual_control_msg;
+
+      float th = speed / 14.28;
+      th = std::min(std::max(th,0.0f),3.0f);
+      float st = steering/0.488;
+      st = std::min(std::max(st,-1.0f),1.0f);
+
+      manual_control_msg.header.stamp = ros::Time::now();
+      manual_control_msg.x = 1000;
+      manual_control_msg.y = st*1000; // steering;
+      manual_control_msg.z = th*1000; // throttle;
+      manual_control_msg.r = 1000;
+      manual_control_msg.buttons = 0;
+
+      control_pub.publish(manual_control_msg);
+  }
+
   void planner()
   {
     if(!path_received or !pose_init or !new_map)
@@ -943,6 +964,7 @@ public:
 
     // cv::imshow("map", display);
     // cv::waitKey(3);
+    pub_ctrl(steering, speed);
 
   }  
 
