@@ -900,7 +900,7 @@ public:
         cost[index] += delta_curvature_cost * delta_curvature * delta_curvature;
         cost[index] += delta_length_cost * delta_length * delta_length;
 
-        if(cost[index] < lowest_cost)
+	if(cost[index] < lowest_cost)
         {
           lowest_index = index;
           lowest_cost = cost[index];
