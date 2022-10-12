@@ -4,19 +4,19 @@
     <comm_mode>0</comm_mode>
     <motor_type>0</motor_type>
     <sensor_mode>0</sensor_mode>
-    <l_current_max>60</l_current_max>
-    <l_current_min>-60</l_current_min>
-    <l_in_current_max>60</l_in_current_max>
-    <l_in_current_min>-60</l_in_current_min>
-    <l_abs_current_max>130</l_abs_current_max>
+    <l_current_max>50</l_current_max>
+    <l_current_min>-50</l_current_min>
+    <l_in_current_max>50</l_in_current_max>
+    <l_in_current_min>-50</l_in_current_min>
+    <l_abs_current_max>200</l_abs_current_max>
     <l_min_erpm>-60000</l_min_erpm>
     <l_max_erpm>60000</l_max_erpm>
     <l_max_erpm_fbrake>60000</l_max_erpm_fbrake>
     <l_max_erpm_fbrake_cc>60000</l_max_erpm_fbrake_cc>
-    <l_min_vin>6</l_min_vin>
+    <l_min_vin>13</l_min_vin>
     <l_max_vin>57</l_max_vin>
-    <l_battery_cut_start>7</l_battery_cut_start>
-    <l_battery_cut_end>6.2</l_battery_cut_end>
+    <l_battery_cut_start>13</l_battery_cut_start>
+    <l_battery_cut_end>12.6</l_battery_cut_end>
     <l_slow_abs_current>1</l_slow_abs_current>
     <l_rpm_lim_neg_torque>1</l_rpm_lim_neg_torque>
     <l_temp_fet_start>80</l_temp_fet_start>
@@ -72,14 +72,14 @@
     <foc_hall_table_7>255</foc_hall_table_7>
     <foc_sl_erpm>2500</foc_sl_erpm>
     <s_pid_kp>0.00025</s_pid_kp>
-    <s_pid_ki>0.015</s_pid_ki>
+    <s_pid_ki>0.01</s_pid_ki>
     <s_pid_kd>0</s_pid_kd>
     <s_pid_min_rpm>900</s_pid_min_rpm>
     <p_pid_kp>0.03</p_pid_kp>
     <p_pid_ki>0</p_pid_ki>
     <p_pid_kd>0.0004</p_pid_kd>
     <p_pid_ang_div>1</p_pid_ang_div>
-    <cc_startup_boost_duty>0.01</cc_startup_boost_duty>
+    <cc_startup_boost_duty>0</cc_startup_boost_duty>
     <cc_min_current>1</cc_min_current>
     <cc_gain>0.0046</cc_gain>
     <cc_ramp_step_max>50</cc_ramp_step_max>
