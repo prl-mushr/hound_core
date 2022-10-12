@@ -1,0 +1,20 @@
+# note that the frequency is the expected operating frequency.
+# if the frequency is below 80% of the expected value the HAL will take some "action"
+
+# the "topic" is the representative topic and will be used to check whether the sensor is performing as expected.
+camera_launch_file: "/root/catkin_ws/src/hound_core/launch/realsense_d435_HOUND.launch"
+camera_frequency: 30
+camera_topic: "/camera/depth/image_rect_raw"
+camera_action: "reboot"
+mavros_launch_file: "/root/catkin_ws/src/hound_core/launch/apm.launch"
+mavros_frequency: 50
+mavros_topic: "/mavros/imu/data_raw"
+mavros_action: "rosrun mavros mavsys rate --all 50"
+lidar_launch_file: "/root/catkin_ws/src/hound_core/launch/X4.launch"
+lidar_frequency: 10
+lidar_action: "reboot"
+vesc_launch_file: "/root/catkin_ws/src/hound_core/launch/vesc_driver_node.launch"
+vesc_frequency: 50
+vesc_action: "reboot"
+bagdir: "/home/bags" # may have to create this directory
+
