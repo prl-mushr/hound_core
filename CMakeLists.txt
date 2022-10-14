@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   mavros_msgs
+  vesc_msgs
 )
 
 find_package( OpenCV REQUIRED )
@@ -145,8 +146,8 @@ target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 add_executable(fake_laser_node src/fake_laser_node.cpp)
 target_link_libraries(fake_laser_node ${catkin_LIBRARIES})
 
-add_executable(manual_tester src/manual_tester.cpp)
-target_link_libraries(manual_tester ${catkin_LIBRARIES})
+add_executable(hound_ll_control src/hound_ll_control.cpp)
+target_link_libraries(hound_ll_control ${catkin_LIBRARIES})
 
 
 add_executable(hound_control_node src/hound_control_node)

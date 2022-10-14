@@ -17,6 +17,13 @@ void pub_ctrl(float st, float th)
     control_pub.publish(manual_control_msg);
 }
 
+/*
+idea: check for mode switch pwm -> if it is in the range corresponding mode 2, it is guided with speed control and stability control
+for speed control: gain: relate to % error in speed -> function of battery voltage, motor kv, gearing ratio.
+1% error in speed = 1% increase in throttle for the P part. Same for I part but with a time constant of 1 second -> cap both to be within 5% of total (max 10% increase/decrease in throttle)
+
+*/
+
 int main(int argc, char **argv)
 {
   //initialize node
