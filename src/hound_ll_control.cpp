@@ -45,7 +45,7 @@ public:
   ll_controller(ros::NodeHandle &nh) // constructor
   {
     sub_vesc = nh.subscribe("/sensors/core", 1, &ll_controller::vesc_cb, this);
-    sub_channel = nh.subscribe("/mavros/rc/out", 1, &ll_controller::channel_cb, this);
+    sub_channel = nh.subscribe("/mavros/rc/in", 1, &ll_controller::channel_cb, this);
     sub_mode = nh.subscribe("/mavros/state", 1, &ll_controller::mode_cb, this);
     sub_imu = nh.subscribe("/mavros/imu/data_raw", 1, &ll_controller::imu_cb, this);
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
@@ -115,7 +115,7 @@ public:
     rotBF.y = imu->angular_velocity.y;
     rotBF.z = imu->angular_velocity.z;
 
-    std::cout<<"rotations: "<<rotBF;
+    // std::cout<<"rotations: "<<rotBF<<"\n";
 
     float throttle_duty = 0;
     if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
@@ -154,6 +154,8 @@ public:
       throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
 
       throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
+
+      // std::cout<<"speed_error"<<speed_error * max_rated_speed<<"\n";
 
       pub_ctrl(steering_setpoint / steering_max, throttle_duty);
     }
