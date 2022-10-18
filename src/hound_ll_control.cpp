@@ -169,10 +169,10 @@ public:
     {
       channel_init = true;
     }
-    semi_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    semi_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
     semi_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
-    manual_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    manual_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
     manual_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
     int mode_switch = rc->channels[4];
