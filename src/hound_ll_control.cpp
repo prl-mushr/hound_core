@@ -10,7 +10,9 @@
 #include "mavros_msgs/State.h"
 #include "ackermann_msgs/AckermannDriveStamped.h"
 #include "vesc_msgs/VescStateStamped.h"
-
+#include <diagnostic_msgs/DiagnosticArray.h>
+#include <diagnostic_msgs/DiagnosticStatus.h>
+#include <diagnostic_msgs/KeyValue.h>
 
 /*
 idea: check for mode switch pwm -> if it is in the range corresponding mode 2, it is guided with speed control and stability control
@@ -23,17 +25,17 @@ class ll_controller
 {
 public:
   ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control;
-  ros::Publisher control_pub;
+  ros::Publisher control_pub, diagnostic_pub;
 
   float wheelspeed, steering_angle;
   int switch_pos;
   bool guided;
-  cv::Point3f rotBF;
+  cv::Point3f rotBF, accBF;
   float semi_steering, semi_wheelspeed;
   float auto_steering, auto_wheelspeed;
   float manual_steering, manual_wheelspeed;
 
-  float erpm_gain, steering_max, wheelspeed_max, wheelbase, cg_height;
+  float erpm_gain, steering_max, wheelspeed_max, wheelbase, cg_height, track_width;
   bool channel_init, vesc_init, mode_init, imu_init, auto_init;
 
   float motor_kv, nominal_voltage, max_rated_speed;
@@ -41,6 +43,7 @@ public:
   float speed_integral, speed_proportional, delta_t;
   float speed_control_kp, speed_control_ki;
 
+  bool safe_mode;
 
   ll_controller(ros::NodeHandle &nh) // constructor
   {
@@ -50,6 +53,7 @@ public:
     sub_imu = nh.subscribe("/mavros/imu/data_raw", 1, &ll_controller::imu_cb, this);
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
+    diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
 
 
     guided = false;  
@@ -98,12 +102,19 @@ public:
     {
       speed_control_ki = 1.0f;
     }
+    if(not nh.getParam("hound/safe_mode", safe_mode))
+    {
+      safe_mode = true;
+    }
+    if(not nh.getParam("hound/track_width", track_width))
+    {
+      track_width = 0.28;
+    }
 
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
     max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
 
   }
-
 
   void imu_cb(const sensor_msgs::Imu::ConstPtr imu)
   {
@@ -115,9 +126,10 @@ public:
     rotBF.y = imu->angular_velocity.y;
     rotBF.z = imu->angular_velocity.z;
 
-    // std::cout<<"rotations: "<<rotBF<<"\n";
+    accBF.x = imu->linear_acceleration.x;
+    accBF.y = imu->linear_acceleration.y;
+    accBF.z = imu->linear_acceleration.z;
 
-    float throttle_duty = 0;
     if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
     {
       return;
@@ -127,7 +139,7 @@ public:
       return;
     }
 
-    // semi-auto mode
+    // semi-auto or auto mode
     if((switch_pos >= 1 and guided))
     {
       float wheelspeed_setpoint, steering_setpoint;
@@ -142,6 +154,48 @@ public:
         wheelspeed_setpoint = auto_wheelspeed;
         steering_setpoint = auto_steering;
       }
+
+      // float wheelspeed_setpoint = speed_limiter(lidar scans); 
+      bool intervention = false; // test code-block. Ref: https://answers.ros.org/question/262236/publishing-diagnostics-from-c/
+      steering_setpoint = steering_limiter(steering_setpoint, intervention);
+      float throttle_duty = speed_controller(wheelspeed_setpoint);
+      pub_ctrl(steering_setpoint / steering_max, throttle_duty);
+      
+
+      if(intervention)
+      {
+        diagnostic_msgs::DiagnosticArray dia_array;
+        diagnostic_msgs::DiagnosticStatus robot_status;
+        robot_status.name = "Robot";
+        robot_status.level = diagnostic_msgs::DiagnosticStatus::OK;
+        robot_status.message = "Everything seem to be ok.";
+        diagnostic_msgs::KeyValue emergency;
+        emergency.key = "Emgergencystop hit";
+        emergency.value = "false";
+        diagnostic_msgs::KeyValue exited_normally;
+        emergency.key = "Exited normally";
+        emergency.value = "true";
+
+        robot_status.values.push_back(emergency);
+        robot_status.values.push_back(exited_normally);
+
+        diagnostic_msgs::DiagnosticStatus  eth_status;
+        eth_status.name = "EtherCAT Master";
+        eth_status.level = diagnostic_msgs::DiagnosticStatus::OK;
+        eth_status.message = "Running";
+
+        dia_array.status.push_back(robot_status);
+        dia_array.status.push_back(eth_status);
+
+        diagnostic_pub.publish(dia_array);
+      }
+    }
+
+  }
+
+  float speed_controller(float wheelspeed_setpoint)
+  {
+      float throttle_duty = 0;
       float speed_error = (wheelspeed_setpoint - wheelspeed) / max_rated_speed;  // % error in speed in relation to the maximum achievable speed.
 
       float Kp_speed_error = speed_control_kp * speed_error;
@@ -154,12 +208,48 @@ public:
       throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
 
       throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
+      return throttle_duty;
+  }
 
-      // std::cout<<"speed_error"<<speed_error * max_rated_speed<<"\n";
+  float steering_limiter(float steering_setpoint, bool& intervention)
+  {
+    intervention = false;
 
-      pub_ctrl(steering_setpoint / steering_max, throttle_duty);
+    float steering_limit = 0.8f * atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, wheelspeed * wheelspeed * cg_height);
+    // this prevents the car from rolling over.
+    if(steering_setpoint > steering_limit)
+    {
+      intervention = true;
+      steering_setpoint = steering_limit;
+    }
+    else if(steering_setpoint < -steering_limit)
+    {
+      intervention = true;
+      steering_setpoint = steering_limit;
     }
 
+    // this brings the car back from the roll-over.
+    float Aylim = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    float Ay = accBF.y;
+    float Ay_error = 0;
+    if(fabs(accBF.y) > Aylim)
+    {
+      intervention = true;
+      if(Ay >= 0)
+      {
+        Ay_error = Aylim - Ay;
+      }
+      else
+      {
+        Ay_error = (-Aylim) - Ay;
+      }
+      float wheelspeed_2 = std::max(wheelspeed * wheelspeed, 1.0f);
+      float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / wheelspeed_2;
+      steering_setpoint += delta_steering;
+
+    }
+
+    return steering_setpoint;
   }
 
   void channel_cb(const mavros_msgs::RCIn::ConstPtr rc)
@@ -251,26 +341,3 @@ int main(int argc, char **argv)
   }
   return 0;
 }
-
-// int main(int argc, char **argv)
-// {
-//   //initialize node
-//   ros::init(argc, argv, "tester");
-//   ros::NodeHandle nh("~");
-//   control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
-
-//   // subsribe topic
-//   ros::Rate r(50);
-//   ros::Time start = ros::Time::now();
-//   while(ros::ok())
-//   {
-//     float time = (ros::Time::now() - start).toSec();
-//     float steering = sin(time);
-//     float throttle = sin(time)*sin(time);
-//     pub_ctrl(steering, throttle);
-//     ros::spinOnce();
-//     r.sleep();
-//   }
-
-//   return 0;
-// }
