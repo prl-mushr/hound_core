@@ -237,11 +237,11 @@ public:
       intervention = true;
       if(Ay >= 0)
       {
-        Ay_error = Aylim - Ay;
+        Ay_error = Ay - Aylim;
       }
       else
       {
-        Ay_error = (-Aylim) - Ay;
+        Ay_error = Ay + Aylim;
       }
       float wheelspeed_2 = std::max(wheelspeed * wheelspeed, 1.0f);
       float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / wheelspeed_2;
