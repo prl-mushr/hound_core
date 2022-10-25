@@ -80,7 +80,7 @@ public:
     }
     if(not nh.getParam("hound/cg_height", cg_height))
     {
-      cg_height = 0.1f;
+      cg_height = 0.08f;
     }
     if(not nh.getParam("hound/max_wheelspeed", wheelspeed_max))
     {
@@ -214,20 +214,18 @@ public:
   float steering_limiter(float steering_setpoint, bool& intervention)
   {
     intervention = false;
-
-    float steering_limit = 0.8f * atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, wheelspeed * wheelspeed * cg_height);
+    float whspd2 = std::max(1.0f, wheelspeed); // this is to protect against a finite/0 situation in the calculation below
+    whspd2 *= whspd2;
+    float steering_limit = fabs(atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, whspd2 * cg_height));
+    std::cout<<steering_limit<<std::endl;
     // this prevents the car from rolling over.
-    if(steering_setpoint > steering_limit)
+    /*
+    if(fabs(steering_setpoint) > steering_limit)
     {
-      intervention = true;
-      steering_setpoint = steering_limit;
+        intervention = true;
+        steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
     }
-    else if(steering_setpoint < -steering_limit)
-    {
-      intervention = true;
-      steering_setpoint = steering_limit;
-    }
-
+    */
     // this brings the car back from the roll-over.
     float Aylim = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
     float Ay = accBF.y;
@@ -243,10 +241,8 @@ public:
       {
         Ay_error = Ay + Aylim;
       }
-      float wheelspeed_2 = std::max(wheelspeed * wheelspeed, 1.0f);
-      float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / wheelspeed_2;
+      float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
       steering_setpoint += delta_steering;
-
     }
 
     return steering_setpoint;

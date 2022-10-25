@@ -1,0 +1,11 @@
+edit bashrc: wlan instead of eth
+
+install mavros:
+sudo apt-get install ros-noetic-mavros ros-noetic-mavros-extras ros-noetic-nmea-msgs ros-noetic-control-toolbox ros-noetic-realsense2-camera
+wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
+chmod a+x install_geographiclib_datasets.sh
+./install_geographiclib_datasets.sh
+
+sudo apt-get remove ros-noetic-mavros ros-noetic-mavros-extras
+
+catkin build to check installation
