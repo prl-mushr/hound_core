@@ -8,6 +8,7 @@
 #include "mavros_msgs/RCIn.h"
 #include "sensor_msgs/Imu.h"
 #include "mavros_msgs/State.h"
+#include "mavros_msgs/PlayTuneV2.h"
 #include "ackermann_msgs/AckermannDriveStamped.h"
 #include "vesc_msgs/VescStateStamped.h"
 #include <diagnostic_msgs/DiagnosticArray.h>
@@ -25,7 +26,7 @@ class ll_controller
 {
 public:
   ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control;
-  ros::Publisher control_pub, diagnostic_pub;
+  ros::Publisher control_pub, diagnostic_pub, notification_pub;
 
   float wheelspeed, steering_angle;
   int switch_pos;
@@ -54,6 +55,7 @@ public:
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
+    notification_pub = nh.advertise<mavros_msgs::PlayTuneV2>("/mavros/play_tune", 10);
 
 
     guided = false;  
@@ -82,6 +84,7 @@ public:
     {
       cg_height = 0.08f;
     }
+    
     if(not nh.getParam("hound/max_wheelspeed", wheelspeed_max))
     {
       wheelspeed_max = 17.0f;
@@ -114,6 +117,18 @@ public:
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
     max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
 
+    // indicate that the boot script has started:
+    ros::Rate r(0.1);
+    r.sleep();
+    publish_notification();
+  }
+
+  void publish_notification()
+  {
+    mavros_msgs::PlayTuneV2 playtune;
+    playtune.format = mavros_msgs::PlayTuneV2::QBASIC1_1;
+    playtune.tune = "MLO2L2A";
+    notification_pub.publish(playtune);
   }
 
   void imu_cb(const sensor_msgs::Imu::ConstPtr imu)
@@ -138,7 +153,6 @@ public:
     {
       return;
     }
-
     // semi-auto or auto mode
     if((switch_pos >= 1 and guided))
     {
@@ -217,7 +231,7 @@ public:
     float whspd2 = std::max(1.0f, wheelspeed); // this is to protect against a finite/0 situation in the calculation below
     whspd2 *= whspd2;
     float steering_limit = fabs(atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, whspd2 * cg_height));
-    std::cout<<steering_limit<<std::endl;
+
     // this prevents the car from rolling over.
     /*
     if(fabs(steering_setpoint) > steering_limit)

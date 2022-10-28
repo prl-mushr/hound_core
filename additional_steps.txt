@@ -1,11 +1,23 @@
-edit bashrc: wlan instead of eth
+edit bashrc:
+
+wlan0 instead of eth0
+export PATH=/usr/local/cuda-10.2/bin${PATH:+:${PATH}}
+
+change gcc: 
+
+apt -y install gcc-8 g++-8
+update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 8
+update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-8 8
 
 install mavros:
+
 sudo apt-get install ros-noetic-mavros ros-noetic-mavros-extras ros-noetic-nmea-msgs ros-noetic-control-toolbox ros-noetic-realsense2-camera
 wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
 chmod a+x install_geographiclib_datasets.sh
 ./install_geographiclib_datasets.sh
-
 sudo apt-get remove ros-noetic-mavros ros-noetic-mavros-extras
 
-catkin build to check installation
+cd ~/catkin_ws/ && catkin build
+
+git clone https://github.com/rogersce/cnpy.git
+cd cnpy && mkdir build && cd build && cmake .. && make -j2 && sudo make install
