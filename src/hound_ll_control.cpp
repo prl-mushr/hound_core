@@ -129,6 +129,12 @@ public:
     playtune.format = mavros_msgs::PlayTuneV2::QBASIC1_1;
     playtune.tune = "MLO2L2A";
     notification_pub.publish(playtune);
+    /*
+    Intervention tone: MS O3 L16 dddddd P8 dddddd
+    Record tone: ML O3 L8 CD
+    Record stop tone: ML O3 L8 DC
+    Boot sound:  ML O2 L2 A
+    */
   }
 
   void imu_cb(const sensor_msgs::Imu::ConstPtr imu)
@@ -233,13 +239,13 @@ public:
     float steering_limit = fabs(atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, whspd2 * cg_height));
 
     // this prevents the car from rolling over.
-    /*
+    
     if(fabs(steering_setpoint) > steering_limit)
     {
         intervention = true;
         steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
     }
-    */
+    
     // this brings the car back from the roll-over.
     float Aylim = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
     float Ay = accBF.y;
