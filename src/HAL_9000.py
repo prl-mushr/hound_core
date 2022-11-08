@@ -5,6 +5,9 @@ import time
 from diagnostic_msgs.msg import DiagnosticArray
 from rostopic import ROSTopicHz
 import yaml
+from mavros_msgs.msg import PlayTuneV2, RCIn
+import subprocess, shlex, psutil
+from vesc_msgs.msg import VescStateStamped
 
 rospy.init_node("diagnostics_listener", anonymous=True)
 
@@ -12,105 +15,78 @@ class hal():
     def __init__(self, config_file):
         with open(config_file) as f:
             config = yaml.safe_load(f)
-            print("sensor configs found")
+            print("configs found")
         if(config == None):
             print("no config found, make sure the config file path is correct")
             exit()
-        self.camera_launch_file = config["camera_launch_file"]
-        self.camera_frequency = config["camera_frequency"] * 0.8
-        self.camera_topic = config["camera_topic"]
-        self.camera_action = config["camera_action"]
-        self.camera_hz = ROSTopicHz(3)  # get frequency over a 3 second period
-        
-        self.mavros_launch_file = config["mavros_launch_file"]
-        self.mavros_frequency = config["mavros_frequency"] * 0.8
+
         self.mavros_topic = config["mavros_topic"]
         self.mavros_action = config["mavros_action"]
         self.mavros_hz = ROSTopicHz(3)
-        
-        self.lidar_launch_file = config["lidar_launch_file"]
-        self.lidar_frequency = config["lidar_frequency"] * 0.8
-        self.lidar_action = config["lidar_action"]
-        self.lidar_topic = config["lidar_topic"]
-        self.lidar_hz = ROSTopicHz(3)
-        
-        self.vesc_launch_file = config["vesc_launch_file"]
-        self.vesc_frequency = config["vesc_frequency"] * 0.8
-        self.vesc_action = config["vesc_action"]
-        self.vesc_topic = config["vesc_topic"]
-        self.vesc_hz = ROSTopicHz(3)
 
-        #self.diagnostics_sub = rospy.Subscriber("/diagnostics", DiagnosticArray, self.diagnostic_cb, queue_size = 10)
-        sub = rospy.Subscriber(self.camera_topic, rospy.AnyMsg, self.camera_hz.callback_hz)
-        sub = rospy.Subscriber(self.mavros_topic, rospy.AnyMsg, self.mavros_hz.callback_hz)
-        sub = rospy.Subscriber(self.lidar_topic, rospy.AnyMsg, self.lidar_hz.callback_hz)
-        sub = rospy.Subscriber(self.vesc_topic, rospy.AnyMsg, self.vesc_hz.callback_hz)
-
+        sub_mavros = rospy.Subscriber(self.mavros_topic, rospy.AnyMsg, self.mavros_hz.callback_hz)
+        sub_channel = rospy.Subscriber("mavros/rc/in", RCIn, self.channel_cb, queue_size=2)
+        sub_voltage = rospy.Subscriber("sensors/core", VescStateStamped, self.voltage_cb, queue_size = 1)
+        self.notification_pub = rospy.Publisher("/mavros/play_tune", PlayTuneV2, queue_size =10)
+        
+        self.mavros_init = False
+        self.recording_state = False
+        self.rosbag_proc = None
+        time.sleep(5)
         self.main_loop()
 
-    def diagnostic_cb(self, msg):
-        print("============================")
-        info = msg.status[0]
-        print("status:", info.level)
-        print("name: ", info.name)
-        print("value:", info.values[3].value)
+    def publish_notification(self, message):
+        playtune = PlayTuneV2()
+        playtune.format = 1;
+        if(message == "low level ready"):
+            playtune.tune = "MLO2L2A"
+        elif(message == "low battery"):
+            playtune.tune = "MSO3L8dddP8ddd"
+        elif(message == "record start"):
+            playtune.tune = "ML O3 L8 CD"
+        elif(message == "record stop"):
+            playtune.tune = "ML O3 L8 DC"
+        self.notification_pub.publish(playtune)
+    
+    def start_recording(self):
+        self.command = "rosbag record -O /root/catkin_ws/src/bags/hound /mavros/imu/data_raw"
+        self.command = shlex.split(self.command)
+        self.rosbag_proc = subprocess.Popen(self.command)
+        self.publish_notification("record start")
+    
+    def stop_recording(self):
+        for proc in psutil.process_iter():
+            if "record" in proc.name() and set(self.command[2:]).issubset(proc.cmdline()):
+                proc.send_signal(subprocess.signal.SIGINT)
 
-    def main_loop(self):
-        uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
-        roslaunch.configure_logging(uuid)
-        mavros_launch = roslaunch.parent.ROSLaunchParent(uuid, [self.mavros_launch_file])
-        mavros_launch.start()
-        time.sleep(1)
-
-        camera_launch = roslaunch.parent.ROSLaunchParent(uuid, [self.camera_launch_file])
-        camera_launch.start()
-        time.sleep(1)
-
-        lidar_launch = roslaunch.parent.ROSLaunchParent(uuid, [self.lidar_launch_file])
-        lidar_launch.start()
-        time.sleep(1)
-
-        vesc_launch = roslaunch.parent.ROSLaunchParent(uuid, [self.vesc_launch_file])
-        vesc_launch.start()
+        self.rosbag_proc.send_signal(subprocess.signal.SIGINT)
+        self.publish_notification("record stop")
+    
+    def voltage_cb(self, msg):
+        if(msg.state.voltage_input < 14.8):
+            self.publish_notification("low battery")
+            time.sleep(1)
+    
+    def channel_cb(self, rc):
+        stick = rc.channels[1]
+        if(self.recording_state == False and stick > 1800):
+            print("start recording")
+            self.start_recording()
+            self.recording_state = True
+        elif(self.recording_state == True and stick < 1300):
+            print("stop recording")
+            self.stop_recording()
+            self.recording_state = False
         
-        time.sleep(10)  # give all the nodes enough time to boot up. Make sure none of these sensors depend on each other to avoid race conditions
-
+    def main_loop(self):
+        r = rospy.Rate(5)
         while not rospy.is_shutdown():
-            if(self.camera_hz.get_hz() < self.camera_frequency):
-                try:
-                    camera_launch.shutdown()
-                except:
-                    pass
-                time.sleep(1)
-                camera_launch.start()
-                time.sleep(5)
-
-            if(self.mavros_hz.get_hz() < self.mavros_frequency):
-                try:
-                    mavros_launch.shutdown()
-                except:
-                    pass
-                time.sleep(1)
-                mavros_launch.start()
-                time.sleep(5)
-
-            if(self.lidar_hz.get_hz() < self.lidar_frequency):
-                try:
-                    lidar_launch.shutdown()
-                except:
-                    pass
-                time.sleep(1)
-                lidar_launch.start()
-                time.sleep(5)
-
-            if(self.vesc_hz.get_hz() < self.vesc_frequency):
-                try:
-                    vesc_launch.shutdown()
-                except:
-                    pass
-                time.sleep(1)
-                vesc_launch.start()
-                time.sleep(5)
+            r.sleep()
+            mavros_freq = self.mavros_hz.get_hz()
+            mavros_freq = mavros_freq[0]
+            if(mavros_freq >= 40 and self.mavros_init==False):
+                self.mavros_init = True
+                self.publish_notification("low level ready")
 
 if __name__ == '__main__':
     hal_obj = hal("/root/catkin_ws/src/hound_core/config/HAL.yaml")

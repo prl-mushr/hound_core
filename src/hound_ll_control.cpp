@@ -26,7 +26,7 @@ class ll_controller
 {
 public:
   ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control;
-  ros::Publisher control_pub, diagnostic_pub, notification_pub;
+  ros::Publisher control_pub, diagnostic_pub;
 
   float wheelspeed, steering_angle;
   int switch_pos;
@@ -55,8 +55,6 @@ public:
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
-    notification_pub = nh.advertise<mavros_msgs::PlayTuneV2>("/mavros/play_tune", 10);
-
 
     guided = false;  
     switch_pos = 0;  // 0 = manual, 1 = semi auto, 2 = auto
@@ -82,7 +80,7 @@ public:
     }
     if(not nh.getParam("hound/cg_height", cg_height))
     {
-      cg_height = 0.08f;
+      cg_height = 0.1f;
     }
     
     if(not nh.getParam("hound/max_wheelspeed", wheelspeed_max))
@@ -116,26 +114,9 @@ public:
 
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
     max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
-
-    // indicate that the boot script has started:
-    ros::Rate r(0.1);
-    r.sleep();
-    publish_notification();
   }
 
-  void publish_notification()
-  {
-    mavros_msgs::PlayTuneV2 playtune;
-    playtune.format = mavros_msgs::PlayTuneV2::QBASIC1_1;
-    playtune.tune = "MLO2L2A";
-    notification_pub.publish(playtune);
-    /*
-    Intervention tone: MS O3 L16 dddddd P8 dddddd
-    Record tone: ML O3 L8 CD
-    Record stop tone: ML O3 L8 DC
-    Boot sound:  ML O2 L2 A
-    */
-  }
+
 
   void imu_cb(const sensor_msgs::Imu::ConstPtr imu)
   {
@@ -151,12 +132,15 @@ public:
     accBF.y = imu->linear_acceleration.y;
     accBF.z = imu->linear_acceleration.z;
 
+    ros::Rate r(50);
     if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
     {
+      r.sleep();
       return;
     }
     if( (switch_pos == 2 and guided ) and !auto_init)
     {
+      r.sleep();
       return;
     }
     // semi-auto or auto mode
@@ -186,29 +170,27 @@ public:
       {
         diagnostic_msgs::DiagnosticArray dia_array;
         diagnostic_msgs::DiagnosticStatus robot_status;
-        robot_status.name = "Robot";
+        robot_status.name = "LL_control";
         robot_status.level = diagnostic_msgs::DiagnosticStatus::OK;
-        robot_status.message = "Everything seem to be ok.";
-        diagnostic_msgs::KeyValue emergency;
-        emergency.key = "Emgergencystop hit";
-        emergency.value = "false";
-        diagnostic_msgs::KeyValue exited_normally;
-        emergency.key = "Exited normally";
-        emergency.value = "true";
+        robot_status.message = "intervention";
+        diagnostic_msgs::KeyValue steering;
+        steering.key = "steering";
+        steering.value = "true";
+        diagnostic_msgs::KeyValue lidar;
+        lidar.key = "lidar";
+        lidar.value = "false";
+        
+        diagnostic_msgs::KeyValue battery;
+        battery.key = "voltage";
+        battery.value = "false";
 
-        robot_status.values.push_back(emergency);
-        robot_status.values.push_back(exited_normally);
-
-        diagnostic_msgs::DiagnosticStatus  eth_status;
-        eth_status.name = "EtherCAT Master";
-        eth_status.level = diagnostic_msgs::DiagnosticStatus::OK;
-        eth_status.message = "Running";
-
-        dia_array.status.push_back(robot_status);
-        dia_array.status.push_back(eth_status);
+        robot_status.values.push_back(steering);
+        robot_status.values.push_back(lidar);
+        robot_status.values.push_back(battery);
 
         diagnostic_pub.publish(dia_array);
       }
+      r.sleep();
     }
 
   }
@@ -223,7 +205,10 @@ public:
 
       speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
       speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
-
+      if(wheelspeed < 1)
+      {
+          speed_integral = 0;
+      }
       // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
       throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
 
