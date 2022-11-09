@@ -232,7 +232,9 @@ public:
     }
     
     // this brings the car back from the roll-over.
-    float Aylim = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    float Aymax = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    float Aybuffer = 9.8 - fabs(accBF.x);
+    float Aylim = std::min(Aybuffer, Aymax);
     float Ay = accBF.y;
     float Ay_error = 0;
     if(fabs(accBF.y) > Aylim)
@@ -240,11 +242,11 @@ public:
       intervention = true;
       if(Ay >= 0)
       {
-        Ay_error = Ay - Aylim;
+        Ay_error = Aylim - Ay;
       }
       else
       {
-        Ay_error = Ay + Aylim;
+        Ay_error = Aylim - Ay;
       }
       float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
       steering_setpoint += delta_steering;
@@ -260,10 +262,10 @@ public:
     {
       channel_init = true;
     }
-    semi_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    semi_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
     semi_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
-    manual_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    manual_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
     manual_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
     int mode_switch = rc->channels[4];
