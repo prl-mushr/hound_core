@@ -8,7 +8,7 @@ import yaml
 from mavros_msgs.msg import PlayTuneV2, RCIn
 import subprocess, shlex, psutil
 from vesc_msgs.msg import VescStateStamped
-
+import os
 rospy.init_node("diagnostics_listener", anonymous=True)
 
 class hal():
@@ -29,10 +29,11 @@ class hal():
         sub_voltage = rospy.Subscriber("sensors/core", VescStateStamped, self.voltage_cb, queue_size = 1)
         self.notification_pub = rospy.Publisher("/mavros/play_tune", PlayTuneV2, queue_size =10)
         
+        self.bagdir = '/root/catkin_ws/src/bags/'
         self.mavros_init = False
         self.recording_state = False
         self.rosbag_proc = None
-        time.sleep(5)
+        time.sleep(15)
         self.main_loop()
 
     def publish_notification(self, message):
@@ -49,7 +50,7 @@ class hal():
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
-        self.command = "rosbag record -O /root/catkin_ws/src/bags/hound /mavros/imu/data_raw"
+        self.command = 'rosbag record -O ' + self.bagdir + 'hound -e "/mavros/(.*)" /sensors/core -x /mavros/gps_rtk/(.*)'
         self.command = shlex.split(self.command)
         self.rosbag_proc = subprocess.Popen(self.command)
         self.publish_notification("record start")
@@ -61,6 +62,12 @@ class hal():
 
         self.rosbag_proc.send_signal(subprocess.signal.SIGINT)
         self.publish_notification("record stop")
+        files = os.listdir(self.bagdir)
+        files.sort(key = lambda x: os.path.getmtime(self.bagdir+'/'+x))
+        for i in range(len(files)):
+            source = self.bagdir + '/' + files[i]
+            dest = self.bagdir + '/' + 'hound_' + str(i) + '.bag'
+            os.rename(source, dest)
     
     def voltage_cb(self, msg):
         if(msg.state.voltage_input < 14.8):
@@ -69,6 +76,7 @@ class hal():
     
     def channel_cb(self, rc):
         stick = rc.channels[1]
+        '''
         if(self.recording_state == False and stick > 1800):
             print("start recording")
             self.start_recording()
@@ -77,6 +85,7 @@ class hal():
             print("stop recording")
             self.stop_recording()
             self.recording_state = False
+        '''
         
     def main_loop(self):
         r = rospy.Rate(5)

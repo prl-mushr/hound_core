@@ -166,7 +166,7 @@ public:
       pub_ctrl(steering_setpoint / steering_max, throttle_duty);
       
 
-      if(intervention)
+      if(intervention and 0) // temporarily disable this
       {
         diagnostic_msgs::DiagnosticArray dia_array;
         diagnostic_msgs::DiagnosticStatus robot_status;
@@ -221,7 +221,10 @@ public:
     intervention = false;
     float whspd2 = std::max(1.0f, wheelspeed); // this is to protect against a finite/0 situation in the calculation below
     whspd2 *= whspd2;
-    float steering_limit = fabs(atan2f(wheelbase * fabs(accBF.z) * track_width * 0.5, whspd2 * cg_height));
+    
+    float Aylim_static = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    float Aylim = Aylim_static - std::min(Aylim_static, fabs(accBF.x));
+    float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2));
 
     // this prevents the car from rolling over.
     
@@ -232,9 +235,6 @@ public:
     }
     
     // this brings the car back from the roll-over.
-    float Aymax = track_width * 0.5 * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
-    float Aybuffer = 9.8 - fabs(accBF.x);
-    float Aylim = std::min(Aybuffer, Aymax);
     float Ay = accBF.y;
     float Ay_error = 0;
     if(fabs(accBF.y) > Aylim)
@@ -242,11 +242,11 @@ public:
       intervention = true;
       if(Ay >= 0)
       {
-        Ay_error = Aylim - Ay;
+        Ay_error = Ay - Aylim;
       }
       else
       {
-        Ay_error = Aylim - Ay;
+        Ay_error = Ay + Aylim;
       }
       float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
       steering_setpoint += delta_steering;
@@ -262,10 +262,10 @@ public:
     {
       channel_init = true;
     }
-    semi_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    semi_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
     semi_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
-    manual_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    manual_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
     manual_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
     int mode_switch = rc->channels[4];

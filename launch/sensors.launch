@@ -6,8 +6,9 @@
     <include file="$(find hound_core)/launch/vesc_driver_node.launch"/>
     <node pkg="hound_core" type="mavros_rate.sh" name="mavros_rate_script" />
     <node pkg="hound_core" type="hound_ll_control" name="low_level_controller" output="log">
-        <param name="hound/cg_height" value="0.25"/>
+        <param name="hound/cg_height" value="0.1"/>
     </node>
+    <node pkg="hound_core" type="HAL_9000.py" name="HAL"/>
     
     <!--include file="$(find hound_core)/launch/HOUND_vis_odom.launch.launch"/>-->
 
