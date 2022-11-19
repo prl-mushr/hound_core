@@ -91,11 +91,14 @@ class hal():
         r = rospy.Rate(5)
         while not rospy.is_shutdown():
             r.sleep()
-            mavros_freq = self.mavros_hz.get_hz()
-            mavros_freq = mavros_freq[0]
-            if(mavros_freq >= 40 and self.mavros_init==False):
-                self.mavros_init = True
-                self.publish_notification("low level ready")
+            try:
+                mavros_freq = self.mavros_hz.get_hz()
+                mavros_freq = mavros_freq[0]
+                if(mavros_freq >= 40 and self.mavros_init==False):
+                    self.mavros_init = True
+                    self.publish_notification("low level ready")
+            except:
+                pass
 
 if __name__ == '__main__':
     hal_obj = hal("/root/catkin_ws/src/hound_core/config/HAL.yaml")
