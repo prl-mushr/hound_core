@@ -5,7 +5,7 @@ import time
 from diagnostic_msgs.msg import DiagnosticArray
 from rostopic import ROSTopicHz
 import yaml
-from mavros_msgs.msg import PlayTuneV2, RCIn
+from mavros_msgs.msg import PlayTuneV2, RCIn, GPSRAW
 import subprocess, shlex, psutil
 from vesc_msgs.msg import VescStateStamped
 import os
@@ -27,12 +27,15 @@ class hal():
         sub_mavros = rospy.Subscriber(self.mavros_topic, rospy.AnyMsg, self.mavros_hz.callback_hz)
         sub_channel = rospy.Subscriber("mavros/rc/in", RCIn, self.channel_cb, queue_size=2)
         sub_voltage = rospy.Subscriber("sensors/core", VescStateStamped, self.voltage_cb, queue_size = 1)
+        sub_gps = rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, self.GPS_cb, queue_size = 1)
         self.notification_pub = rospy.Publisher("/mavros/play_tune", PlayTuneV2, queue_size =10)
+        
         
         self.bagdir = '/root/catkin_ws/src/bags/'
         self.mavros_init = False
         self.recording_state = False
         self.rosbag_proc = None
+        self.GPS_status = False
         time.sleep(15)
         self.main_loop()
 
@@ -47,6 +50,10 @@ class hal():
             playtune.tune = "ML O3 L8 CD"
         elif(message == "record stop"):
             playtune.tune = "ML O3 L8 DC"
+        elif(message == "GPS good"):
+            playtune.tune = "MSO3L8dP8d"
+        elif(message == "GPS bad"):
+            playtune.tune = "MSO3L8ddP8dd"
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
@@ -70,22 +77,36 @@ class hal():
             os.rename(source, dest)
     
     def voltage_cb(self, msg):
-        if(msg.state.voltage_input < 14.8):
+        if(msg.state.voltage_input < 14.0):
             self.publish_notification("low battery")
             time.sleep(1)
     
+    def GPS_cb(self, msg):
+        if(msg.satellites_visible >= 16 and msg.h_acc <= 1000 and self.GPS_status == False):
+            self.publish_notification("GPS good")
+            self.GPS_status = True
+            time.sleep(1)
+        elif( (msg.satellites_visible < 16 or msg.h_acc > 1000) and self.GPS_status == True):
+            self.publish_notification("GPS bad")
+            self.GPS_status = False
+            time.sleep(1)
+        
+    
     def channel_cb(self, rc):
-        stick = rc.channels[1]
-        '''
-        if(self.recording_state == False and stick > 1800):
-            print("start recording")
-            self.start_recording()
-            self.recording_state = True
-        elif(self.recording_state == True and stick < 1300):
-            print("stop recording")
-            self.stop_recording()
-            self.recording_state = False
-        '''
+        try:
+            if(len(rc.channels) == 0 ):
+                return
+            stick = rc.channels[1]
+            if(self.recording_state == False and stick > 1800):
+                print("start recording")
+                self.start_recording()
+                self.recording_state = True
+            elif(self.recording_state == True and stick < 1300):
+                print("stop recording")
+                self.stop_recording()
+                self.recording_state = False
+        except:
+            pass
         
     def main_loop(self):
         r = rospy.Rate(5)
@@ -97,6 +118,7 @@ class hal():
                 if(mavros_freq >= 40 and self.mavros_init==False):
                     self.mavros_init = True
                     self.publish_notification("low level ready")
+                # print(mavros_freq)
             except:
                 pass
 
