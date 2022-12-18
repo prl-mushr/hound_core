@@ -17,10 +17,12 @@ chmod a+x install_geographiclib_datasets.sh
 ./install_geographiclib_datasets.sh
 sudo apt-get remove ros-noetic-mavros ros-noetic-mavros-extras
 
-cd ~/catkin_ws/ && catkin build
+ylidar needs to be updated to match the newer ydlidar_ros pakcage --> make new branch and update?. New branch allows reversing lidar easily -> useful for backwards compatibility
+remove realsense_camera dependency (from base_repos.yaml)
 
+cnpy for gtech autorally(optional):
 git clone https://github.com/rogersce/cnpy.git
 cd cnpy && mkdir build && cd build && cmake .. && make -j2 && sudo make install
 
-the realsense steps in the mushr_install_hw_drivers.bash need to be done again for some reason. Were they not being done correctly the first time around?
+
 
