@@ -57,7 +57,7 @@ class hal():
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
-        self.command = 'rosbag record -O ' + self.bagdir + 'hound -e "/mavros/(.*)" /sensors/core -x /mavros/gps_rtk/(.*)'
+        self.command = 'rosbag record -O ' + self.bagdir + 'hound -a' # -e "/mavros/(.*)" /sensors/core -x /mavros/gps_rtk/(.*)'
         self.command = shlex.split(self.command)
         self.rosbag_proc = subprocess.Popen(self.command)
         self.publish_notification("record start")

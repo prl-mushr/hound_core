@@ -1,7 +1,7 @@
 <launch>
 
     <include file="$(find hound_core)/launch/apm.launch"/>
-    <include file="$(find ydlidar)/launch/lidar.launch"/>
+    <include file="$(find ydlidar_ros)/launch/X4.launch"/>
     <include file="$(find hound_core)/launch/realsense_d435_HOUND.launch"/>
     <include file="$(find hound_core)/launch/vesc_driver_node.launch"/>
     <node pkg="hound_core" type="mavros_rate.sh" name="mavros_rate_script" />
