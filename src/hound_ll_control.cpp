@@ -190,30 +190,30 @@ public:
 
         diagnostic_pub.publish(dia_array);
       }
-      r.sleep();
+      // r.sleep();
     }
 
   }
 
   float speed_controller(float wheelspeed_setpoint)
   {
-      float throttle_duty = 0;
-      float speed_error = (wheelspeed_setpoint - wheelspeed) / max_rated_speed;  // % error in speed in relation to the maximum achievable speed.
+    float throttle_duty = 0;
+    float speed_error = (wheelspeed_setpoint - wheelspeed) / max_rated_speed;  // % error in speed in relation to the maximum achievable speed.
 
-      float Kp_speed_error = speed_control_kp * speed_error;
-      float Ki_speed_error_dt =  speed_control_ki * speed_error *  delta_t;
+    float Kp_speed_error = speed_control_kp * speed_error;
+    float Ki_speed_error_dt =  speed_control_ki * speed_error *  delta_t;
 
-      speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
-      speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
-      if(wheelspeed < 1)
-      {
-          speed_integral = 0;
-      }
-      // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
-      throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
+    speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
+    speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
+    if(wheelspeed < 1)
+    {
+      speed_integral = 0;
+    }
+    // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
+    throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
 
-      throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
-      return throttle_duty;
+    throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
+    return throttle_duty;
   }
 
   float steering_limiter(float steering_setpoint, bool& intervention)
@@ -230,8 +230,8 @@ public:
     
     if(fabs(steering_setpoint) > steering_limit)
     {
-        intervention = true;
-        steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
+      intervention = true;
+      steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
     }
     
     // this brings the car back from the roll-over.

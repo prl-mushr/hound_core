@@ -131,10 +131,10 @@
     </include>
     <rosparam> /camera/stereo_module/emitter_enabled: 2</rosparam>
     <!-- <rosparam> /camera/motion_module/global_time_enabled: true</rosparam> -->
-    <rosparam param="/realsense/infra1/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam>
-    <rosparam param="/realsense/infra2/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam>
-    <rosparam param="/realsense/depth/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam>
-    <rosparam param="/realsense/color/image_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam>
+    <!-- <rosparam param="/camera/infra1/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam> -->
+    <!-- <rosparam param="/camera/infra2/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam> -->
+    <!-- <rosparam param="/camera/depth/image_rect_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam> -->
+    <!-- <rosparam param="/camera/color/image_raw/disable_pub_plugins" > -'image_transport/compressed' -'image_transport/compressedDepth' -'image_transport/theora' </rosparam> -->
     <!-- rosbag record -a -O $1.bag -x "(.*)/theora | (.*)/theora/(.*) | (.*)/compressedDepth"  use this-->
   </group>
 </launch>
