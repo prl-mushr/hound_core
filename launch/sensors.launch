@@ -1,16 +1,18 @@
 <launch>
     <node pkg="hound_core" type="mavros_rate.sh" name="mavros_rate_script" />
     <include file="$(find hound_core)/launch/apm.launch"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="3 hound_core realsense_d435_HOUND.launch" name="camera_timed" output="screen"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="5 hound_core X4.launch" name="lidar_timed" output="screen"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="7 hound_core vesc_driver_node.launch" name="vesc_timed" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="5 hound_core realsense_d435_HOUND.launch" name="camera_timed" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="7 hound_core X4.launch" name="lidar_timed" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="9 hound_core vesc_driver_node.launch" name="vesc_timed" output="screen"/>
 
     <node pkg="hound_core" type="hound_ll_control" name="low_level_controller" output="screen">
-        <param name="hound/cg_height" value="0.1"/>
+        <param name="hound/cg_height" value="0.08"/>
     </node>
     <node pkg="hound_core" type="HAL_9000.py" name="HAL" output="screen"/>
 
     <node pkg="hound_core" type="vesc_to_odom.py" name="wheel_odom" output="log"/>
+
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="13 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="screen"/>
     <!--include file="$(find ntrip_ros)/launch/ntripclient.launch"/-->
     <!--include file="$(find hound_core)/launch/HOUND_vis_odom.launch.launch"/>-->
 </launch>

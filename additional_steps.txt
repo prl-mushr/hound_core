@@ -108,6 +108,7 @@ sudo apt install docker-compose-plugin
 ## go to ../../etc/docker/daemon.json and add "default-runtime": "nvidia" (add comma before it) -- how to do this automatically?
 
 ## add mushr_start.service to services (where?)
+sudo cp ~/catkin_ws/src/mushr/mushr_utils/install/mushr_start.service /etc/systemd/system
 ## this does not "enable the service", that requires another command 
 sudo systemctl enable mushr_start.service
 
