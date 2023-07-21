@@ -1,39 +1,31 @@
 #include <ros/ros.h>
 #include <mavros_msgs/ManualControl.h>
 #include <opencv2/opencv.hpp>
-// Include opencv2 -- why? because I need something to take care of the matrix and vector stuff.
-// I'm really just using opencv as a replacement for numpy in C++. could have used eigen but why switch
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include "mavros_msgs/RCIn.h"
 #include "sensor_msgs/Imu.h"
 #include "mavros_msgs/State.h"
-#include "mavros_msgs/PlayTuneV2.h"
 #include "ackermann_msgs/AckermannDriveStamped.h"
 #include "vesc_msgs/VescStateStamped.h"
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
 
-/*
-idea: check for mode switch pwm -> if it is in the range corresponding mode 2, it is guided with speed control and stability control
-for speed control: gain: relate to % error in speed -> function of battery voltage, motor kv, gearing ratio.
-1% error in speed = 1% increase in throttle for the P part. Same for I part but with a time constant of 1 second -> cap both to be within 5% of total (max 10% increase/decrease in throttle)
-
-*/
 
 class ll_controller
 {
 public:
   ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control;
-  ros::Publisher control_pub, diagnostic_pub;
+  ros::Publisher control_pub, diagnostic_pub, limits_pub;
 
   float wheelspeed, steering_angle;
   int switch_pos;
   bool guided;
-  cv::Point3f rotBF, accBF;
+  cv::Point3f rotBF, accBF, rpy;
   float semi_steering, semi_wheelspeed;
   float auto_steering, auto_wheelspeed;
+  float auto_wheelspeed_limit;
   float manual_steering, manual_wheelspeed;
 
   float erpm_gain, steering_max, wheelspeed_max, wheelbase, cg_height, track_width;
@@ -46,6 +38,10 @@ public:
 
   bool safe_mode;
 
+  float accel_gain, roll_gain, steer_slack, LPF_tau;
+  
+  ros::Rate *sleep_rate;
+
   ll_controller(ros::NodeHandle &nh) // constructor
   {
     sub_vesc = nh.subscribe("/sensors/core", 1, &ll_controller::vesc_cb, this);
@@ -55,6 +51,7 @@ public:
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
+    limits_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("/control_limits", 1);
 
     guided = false;  
     switch_pos = 0;  // 0 = manual, 1 = semi auto, 2 = auto
@@ -66,57 +63,88 @@ public:
     delta_t = 0.02f;  // 50 Hz loop rate
     speed_integral = 0;
 
-    if(not nh.getParam("hound/erpm_gain", erpm_gain))
+    if(not nh.getParam("/erpm_gain", erpm_gain))
     {
       erpm_gain = 3500.0f; 
     }
-    if(not nh.getParam("hound/steering_max", steering_max))
+    if(not nh.getParam("/steering_max", steering_max))
     {
       steering_max = 0.488f;
     }
-    if(not nh.getParam("hound/wheelbase", wheelbase))
+    if(not nh.getParam("/wheelbase", wheelbase))
     {
       wheelbase = 0.29f;
     }
-    if(not nh.getParam("hound/cg_height", cg_height))
+    if(not nh.getParam("/cg_height", cg_height))
     {
-      cg_height = 0.1f;
+      cg_height = 0.136f;
     }
     
-    if(not nh.getParam("hound/max_wheelspeed", wheelspeed_max))
+    if(not nh.getParam("/wheelspeed_max", wheelspeed_max))
     {
       wheelspeed_max = 17.0f;
     }
-    if(not nh.getParam("hound/nominal_voltage_default", nominal_voltage))
+    if(not nh.getParam("/nominal_voltage", nominal_voltage))
     {
       nominal_voltage = 14.8;
     }
-    if(not nh.getParam("hound/motor_kv", motor_kv))
+    if(not nh.getParam("/motor_kv", motor_kv))
     {
       motor_kv = 3930;
     }
-    if(not nh.getParam("hound/speed_control_kp", speed_control_kp))
+    if(not nh.getParam("/speed_control_kp", speed_control_kp))
     {
       speed_control_kp = 1.0f;
     }
-    if(not nh.getParam("hound/speed_control_ki", speed_control_ki))
+    if(not nh.getParam("/speed_control_ki", speed_control_ki))
     {
       speed_control_ki = 1.0f;
     }
-    if(not nh.getParam("hound/safe_mode", safe_mode))
+    if(not nh.getParam("/safe_mode", safe_mode))
     {
       safe_mode = true;
     }
-    if(not nh.getParam("hound/track_width", track_width))
+    if(not nh.getParam("/track_width", track_width))
     {
-      track_width = 0.28;
+      track_width = 0.25;
     }
-
+    if(not nh.getParam("/accel_gain", accel_gain))
+    {
+      accel_gain = 1.0;
+    }
+    if(not nh.getParam("/roll_gain", roll_gain))
+    {
+      roll_gain = 0.33;
+    }
+    if(not nh.getParam("/steer_slack", steer_slack))
+    {
+      steer_slack = 0.4;
+    }
+    if(not nh.getParam("/LPF_tau", LPF_tau))
+    {
+      LPF_tau = 0.2;
+    }
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
     max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
+    sleep_rate = new ros::Rate(100);
   }
 
+  void LPF(cv::Point3f measurement, cv::Point3f &estimate)
+  {
+    estimate = LPF_tau*measurement + (1 - LPF_tau)*estimate;
+  }
 
+  void rpy_from_quat(geometry_msgs::Quaternion Q) 
+  { 
+    float q[4];
+    q[0] = Q.x;
+    q[1] = Q.y;
+    q[2] = Q.z;
+    q[3] = Q.w;
+    rpy.x = asinf(2.0f * (q[0] * q[2] - q[3] * q[1]));
+    rpy.y = atan2f(2.0f * (q[0] * q[3] + q[1] * q[2]), 1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
+    rpy.z = atan2f(2.0f * (q[0] * q[1] + q[2] * q[3]),1 - 2 * (q[1] * q[1] + q[2] * q[2]));
+  }
 
   void imu_cb(const sensor_msgs::Imu::ConstPtr imu)
   {
@@ -124,23 +152,28 @@ public:
     {
       imu_init = true;
     }
-    rotBF.x = imu->angular_velocity.x;
-    rotBF.y = imu->angular_velocity.y;
-    rotBF.z = imu->angular_velocity.z;
+    cv::Point3f rotBFmeas, accBFmeas;
+    rotBFmeas.x = imu->angular_velocity.x;
+    rotBFmeas.y = imu->angular_velocity.y;
+    rotBFmeas.z = imu->angular_velocity.z;
 
-    accBF.x = imu->linear_acceleration.x;
-    accBF.y = imu->linear_acceleration.y;
-    accBF.z = imu->linear_acceleration.z;
+    accBFmeas.x = imu->linear_acceleration.x;
+    accBFmeas.y = imu->linear_acceleration.y;
+    accBFmeas.z = imu->linear_acceleration.z;
 
-    ros::Rate r(50);
+    LPF(accBFmeas, accBF);
+    LPF(rotBFmeas, rotBF);
+
+    rpy_from_quat(imu->orientation);
+
     if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
     {
-      r.sleep();
+      sleep_rate->sleep();
       return;
     }
     if( (switch_pos == 2 and guided ) and !auto_init)
     {
-      r.sleep();
+      sleep_rate->sleep();
       return;
     }
     // semi-auto or auto mode
@@ -155,7 +188,7 @@ public:
       }
       else
       {
-        wheelspeed_setpoint = auto_wheelspeed;
+        wheelspeed_setpoint = std::min(auto_wheelspeed, auto_wheelspeed_limit);
         steering_setpoint = auto_steering;
       }
 
@@ -165,34 +198,25 @@ public:
       float throttle_duty = speed_controller(wheelspeed_setpoint);
       pub_ctrl(steering_setpoint / steering_max, throttle_duty);
       
+      diagnostic_msgs::DiagnosticArray dia_array;
+      diagnostic_msgs::DiagnosticStatus robot_status;
+      robot_status.name = "LL_control";
+      robot_status.level = diagnostic_msgs::DiagnosticStatus::OK;
+      robot_status.message = "intervention";
+      diagnostic_msgs::KeyValue steering;
+      steering.key = "steering";
+      steering.value = std::to_string(intervention);
 
-      if(intervention and 0) // temporarily disable this
-      {
-        diagnostic_msgs::DiagnosticArray dia_array;
-        diagnostic_msgs::DiagnosticStatus robot_status;
-        robot_status.name = "LL_control";
-        robot_status.level = diagnostic_msgs::DiagnosticStatus::OK;
-        robot_status.message = "intervention";
-        diagnostic_msgs::KeyValue steering;
-        steering.key = "steering";
-        steering.value = "true";
-        diagnostic_msgs::KeyValue lidar;
-        lidar.key = "lidar";
-        lidar.value = "false";
-        
-        diagnostic_msgs::KeyValue battery;
-        battery.key = "voltage";
-        battery.value = "false";
+      diagnostic_msgs::KeyValue speed_error;
+      speed_error.key = "speed_error";
+      speed_error.value = std::to_string(wheelspeed_setpoint - wheelspeed);
 
-        robot_status.values.push_back(steering);
-        robot_status.values.push_back(lidar);
-        robot_status.values.push_back(battery);
-
-        diagnostic_pub.publish(dia_array);
-      }
-      // r.sleep();
+      robot_status.values.push_back(steering);
+      robot_status.values.push_back(speed_error);
+      dia_array.status.push_back(robot_status);
+      diagnostic_pub.publish(dia_array);
     }
-
+    // sleep_rate->sleep();
   }
 
   float speed_controller(float wheelspeed_setpoint)
@@ -210,7 +234,7 @@ public:
       speed_integral = 0;
     }
     // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
-    throttle_duty = (semi_wheelspeed / max_rated_speed) + speed_error + speed_integral;
+    throttle_duty = (wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral;
 
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
     return throttle_duty;
@@ -222,13 +246,11 @@ public:
     float whspd2 = std::max(1.0f, wheelspeed); // this is to protect against a finite/0 situation in the calculation below
     whspd2 *= whspd2;
     
-    float Aylim_static = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
-    float Aylim = Aylim_static - std::min(Aylim_static, fabs(accBF.x));
-    float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2));
-
+    float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2)) + steer_slack*steering_max;
     // this prevents the car from rolling over.
     
-    if(fabs(steering_setpoint) > steering_limit)
+    if(fabs(steering_setpoint) > steering_limit && steering_setpoint*rotBF.z >= -0.1)
     {
       intervention = true;
       steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
@@ -237,6 +259,7 @@ public:
     // this brings the car back from the roll-over.
     float Ay = accBF.y;
     float Ay_error = 0;
+    float Ay_rate = -rotBF.x * accBF.z;
     if(fabs(accBF.y) > Aylim)
     {
       intervention = true;
@@ -248,7 +271,7 @@ public:
       {
         Ay_error = Ay + Aylim;
       }
-      float delta_steering = Ay_error * cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
+      float delta_steering = (accel_gain * Ay_error + roll_gain * Ay_rate)* cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
       steering_setpoint += delta_steering;
     }
 
@@ -267,6 +290,12 @@ public:
 
     manual_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
     manual_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
+
+    // set auto mode speed limit using throttle too and publish as ackermann drive message that others can subscribe to
+    auto_wheelspeed_limit = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
+    ackermann_msgs::AckermannDriveStamped limits_msg;
+    limits_msg.drive.speed = auto_wheelspeed_limit;
+    limits_pub.publish(limits_msg);
 
     if(not channel_init)
     {

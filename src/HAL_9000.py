@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # Import ROS libraries and messages
+import os
+os.system('usbreset "ChibiOS/RT Virtual COM Port"') ## this gets executed with 0 delay
 import rospy
 import time
-from diagnostic_msgs.msg import DiagnosticArray
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rostopic import ROSTopicHz
 import yaml
 from mavros_msgs.msg import PlayTuneV2, RCIn, GPSRAW
 import subprocess, shlex, psutil
 from vesc_msgs.msg import VescStateStamped
-import os
-rospy.init_node("diagnostics_listener", anonymous=True)
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from sensor_msgs.msg import PointCloud2, LaserScan
+import laser_geometry.laser_geometry as lg
+import tf
+import numpy as np
 
 class hal():
     def __init__(self, config_file):
@@ -24,19 +29,41 @@ class hal():
         self.mavros_action = config["mavros_action"]
         self.mavros_hz = ROSTopicHz(3)
 
+        self.camera_topic = config["camera_topic"]
+        self.camera_hz = ROSTopicHz(3)
+
         sub_mavros = rospy.Subscriber(self.mavros_topic, rospy.AnyMsg, self.mavros_hz.callback_hz)
+        sub_camera = rospy.Subscriber(self.camera_topic, rospy.AnyMsg, self.camera_hz.callback_hz)
+
         sub_channel = rospy.Subscriber("mavros/rc/in", RCIn, self.channel_cb, queue_size=2)
         sub_voltage = rospy.Subscriber("sensors/core", VescStateStamped, self.voltage_cb, queue_size = 1)
         sub_gps = rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, self.GPS_cb, queue_size = 1)
+        pose_sub = rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.pose_cb, queue_size=1)
+        scan_sub = rospy.Subscriber("/scan", LaserScan, self.scan_cb)
+        
+        self.lp = lg.LaserProjection()
+        self.pc_pub = rospy.Publisher("converted_pc", PointCloud2, queue_size=1)
+        self.last_pose_time = None
+
         self.notification_pub = rospy.Publisher("/mavros/play_tune", PlayTuneV2, queue_size =10)
         
+        self.bagdir = config["bagdir"]
+        record_command_file = config["record_command_file"]
+        with open(record_command_file, 'r') as f:
+            self.record_command = f.read()
         
-        self.bagdir = '/root/catkin_ws/src/bags/'
         self.mavros_init = False
+        self.camera_init = False
+        
         self.recording_state = False
         self.rosbag_proc = None
         self.GPS_status = False
+        self.mavros_action = config["mavros_action"]
+
+        self.diagnostics_pub = rospy.Publisher("/SOC_diagnostics", DiagnosticArray, queue_size=2)
+        
         time.sleep(15)
+        os.system(self.mavros_action) ## first attempt at getting mavros to run @50 Hz
         self.main_loop()
 
     def publish_notification(self, message):
@@ -54,10 +81,12 @@ class hal():
             playtune.tune = "MSO3L8dP8d"
         elif(message == "GPS bad"):
             playtune.tune = "MSO3L8ddP8dd"
+        elif(message == "camera ready"):
+            playtune.tune = "MLO2L2C"
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
-        self.command = 'rosbag record -O ' + self.bagdir + 'hound -a -x "(.*)/(.*)/(.*)/theora" -x "(.*)/(.*)/(.*)/theora/(.*)" -x "(.*)/(.*)/(.*)/theora" ' # -e "/mavros/(.*)" /sensors/core -x /mavros/gps_rtk/(.*)'
+        self.command = 'rosbag record --split --duration=30s -O ' + self.bagdir + 'hound ' + self.record_command
         print("executing: ", self.command)
         self.command = shlex.split(self.command)
         self.rosbag_proc = subprocess.Popen(self.command)
@@ -91,26 +120,85 @@ class hal():
             self.publish_notification("GPS bad")
             self.GPS_status = False
             time.sleep(1)
-        
     
     def channel_cb(self, rc):
         try:
             if(len(rc.channels) == 0 ):
                 return
             stick = rc.channels[1]
-            if(self.recording_state == False and stick > 1800):
+            if(self.recording_state == False and stick > 1900):
                 print("start recording")
                 self.start_recording()
                 self.recording_state = True
-            elif(self.recording_state == True and stick < 1300):
+            elif(self.recording_state == True and stick < 1100):
                 print("stop recording")
                 self.stop_recording()
                 self.recording_state = False
         except:
             pass
-        
+
+    def scan_cb(self, msg):
+        pc2_msg = self.lp.projectLaser(msg)
+        if(self.last_pose_time != None):
+            pc2_msg.header.stamp = self.last_pose_time
+            self.pc_pub.publish(pc2_msg)
+
+    def pose_cb(self, msg):
+        br = tf.TransformBroadcaster()
+        pos = msg.pose.position
+        rot = msg.pose.orientation
+        br.sendTransform((pos.x, pos.y, pos.z),
+                         (rot.x, rot.y, rot.z, rot.w),
+                         msg.header.stamp,
+                         "base_link",
+                         "map")
+
+        br.sendTransform((0.15, 0.0, 0.02),
+                         (0, 0, 0, 1),
+                         msg.header.stamp,
+                         "camera_depth_frame",
+                         "base_link")
+
+        br.sendTransform((0, 0, 0),
+                         (0, 0, 0, 1),
+                         msg.header.stamp,
+                         "odom",
+                         "map")
+
+        br.sendTransform((0, 0, 0),
+                         (-0.5, 0.5, -0.5, 0.5),
+                         msg.header.stamp,
+                         "camera_depth_optical_frame",
+                         "camera_depth_frame")
+
+        br.sendTransform((0.04, 0, -0.1),
+                         (0, 0, 0, 1),
+                         msg.header.stamp,
+                         "laser_frame",
+                         "base_link")
+        self.last_pose_time = msg.header.stamp
+
+    def publish_diagnostics(self):
+        diagnostics_array = DiagnosticArray()
+        diagnostics_status = DiagnosticStatus()
+        diagnostics_status.name = 'SOC'
+
+        temp = os.popen("cat /sys/devices/virtual/thermal/thermal_zone*/temp").readlines()
+        avg = []
+        for t in temp:
+            avg.append(float(t.strip('\n'))/1000.0)
+        avg = np.round(np.mean(np.array(avg)),2)
+        diagnostics_status.level = 0
+
+        diagnostics_status.values.append(KeyValue(key="avg_temp", value=str(avg)))
+        diagnostics_status.values.append(KeyValue(key="mavros_init", value=str(self.mavros_init)))
+        diagnostics_status.values.append(KeyValue(key="camera_init", value=str(self.camera_init)))
+
+        diagnostics_array.status.append(diagnostics_status)
+        self.diagnostics_pub.publish(diagnostics_array)
+
     def main_loop(self):
-        r = rospy.Rate(5)
+        r = rospy.Rate(0.5)
         while not rospy.is_shutdown():
             r.sleep()
             try:
@@ -119,11 +207,20 @@ class hal():
                 if(mavros_freq >= 40 and self.mavros_init==False):
                     self.mavros_init = True
                     self.publish_notification("low level ready")
-                # print(mavros_freq)
+                else:
+                    os.system(self.mavros_action)
+                camera_freq = self.camera_hz.get_hz()
+                camera_freq = camera_freq[0]
+                if(camera_freq > 20 and self.camera_init==False):
+                    self.camera_init = True
+                    self.publish_notification("camera ready")
+                    print("camera READY")
             except:
                 pass
+            self.publish_diagnostics()
 
 if __name__ == '__main__':
+    rospy.init_node("HAL_9000", anonymous=True)
     hal_obj = hal("/root/catkin_ws/src/hound_core/config/HAL.yaml")
 
 

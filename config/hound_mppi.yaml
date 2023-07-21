@@ -1,0 +1,75 @@
+Cost_config:
+  goal_w: 1.0 ## weight on the terminal goal cost
+  speed_w: 0.1 ## weight with which target speed will be tracked
+  roll_w: 1.0 ## weight on roll index but also controls for lateral acceleration limits.. something to think about is how longitudenal accel affects accel limits..
+  lethal_w: 10.0 # weight on lethal stuff. Note that this is applied to a piecewise function which is :  1/cos(surface angle) for SA < thresh and 1000 for SA > thresh
+  speed_target: 10.0 ## target speed in m/s
+  critical_SA: 1.414 # 0.5 is the critical slope angle 1/cos(angle) is used for state cost evaluation
+  critical_RI: 0.8 ## limiting ratio of lateral to vertical acceleration
+  car_bb_width: 0.3
+  car_bb_length: 0.4
+  critical_vert_acc: 4.0
+  critical_vert_spd: 0.2
+  
+Dynamics_config:
+  wheelbase: 0.33
+  throttle_to_wheelspeed: 17.0
+  steering_max: 0.488
+  dt: 0.05
+  D: 1.0 ## approx values: tarmac: 1.0, grass: 1.2, loose gravel: 0.6, packed dirt: 0.8
+  B: 6.8 ## for tarmac, grass: 5.0-6.8, loose gravel/dirt: 1.5-2.0
+  C: 1.5 ## for tarmac, grass: 1.5-2.0, loose gravel/dirt: 1.0-1.5
+  lf: 0.15 ## length from car com to front axle
+  lr: 0.15 ## length from car com to rear axle
+  Iz: 0.1 ## mass normalized moment of inertia. could have been calculated using 0.33*(car_length^2 + car_width^2)
+  LPF_tau: 0.2 ## low pass filter tau for simulating spring damper setup
+  res_coeff: 0.01 ## resistance coefficient (proportional to speed)
+  drag_coeff: 0.005 # drag coefficient (proportional to speed squared)
+  car_length: 0.33 # front to back distance of car
+  car_width: 0.25 # track width of car. Measured as distance between extremes of the wheel (can be slightly off)
+  cg_height: 0.125 ## height of cg, used for calculating load transfer.
+  type: "slip3d" ## this will be overwritten during evaluation
+
+Sampling_config:
+  control_dim: 2
+  noise_0: 1.0
+  noise_1: 0.5
+  scaled_dt: 0.1 ## this is dt * bandwidth of the physical actuators (in what units?)
+  temperature: 0.2 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
+  max_thr: 0.8 ## max throttle as a fraction between -1,1
+  min_thr: 0.0 ## min throttle as a fraction between -1,1
+
+MPPI_config:
+  ROLLOUTS: 2048
+  TIMESTEPS: 20 ## multiply by dynamics dt to find time horizon. Good values range between 0.8 seconds to 1.6 seconds for a small vehicle with low inertia
+  BINS: 1
+  u_per_command: 1  # how many control inputs do we want to use per MPPI optimization loop.
+
+Map_config:
+  map_size: 16
+  map_res: 0.0625 ## this results in 256 x 256 pixels
+  map_res_hitl: 0.25
+  elevation_range: 4.0
+  layers:
+    color: 3
+    elevation: 1
+    semantics: 3
+    costmap: 1
+
+wp_radius: 2.0 ## waypoint radius for terminal condition
+lookahead: 3.0  # lookahead on scenario by scenario basis
+track_width: 1.0
+generate_costmap_from_path: True
+speed_limit: 10.0
+debug: False
+
+scenario: "test"
+map_name: "smallgrid"
+vehicle:
+  make: "savage_low_f"
+  model: "flux"
+  max_speed: 23.0
+  max_steer: 0.488
+
+use_speed_ctrl: False
+skip_points: 1

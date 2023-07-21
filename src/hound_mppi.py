@@ -1,78 +1,66 @@
-import torch
+#!/usr/bin/env python3
 import numpy as np
-import time
+import torch
+from BeamNGRL.control.UW_mppi.MPPI import MPPI
+from BeamNGRL.control.UW_mppi.Dynamics.SimpleCarDynamicsCUDA import SimpleCarDynamics
+from BeamNGRL.control.UW_mppi.Costs.SimpleCarCost import SimpleCarCost
+from BeamNGRL.control.UW_mppi.Sampling.Delta_Sampling import Delta_Sampling
+from BeamNGRL.utils.visualisation import costmap_vis
+import yaml
+import cv2
 
-from UW_mppi.MPPI import MPPI
-from UW_mppi.Dynamics.SimpleCarDynamics import SimpleCarDynamics
-from UW_mppi.Costs.SimpleCarCost import SimpleCarCost
+torch.manual_seed(0)
 
-class mppi_controller():
-    def __init__(self, speed_max, steering_max, wheelbase, map_size, map_res):
-        self.action = np.zeros(2)
+class mppi:
+    def __init__(self, Config):
+        self.Dynamics_config = Config["Dynamics_config"]
+        self.Cost_config = Config["Cost_config"]
+        self.Sampling_config = Config["Sampling_config"]
+        self.MPPI_config = Config["MPPI_config"]
+        self.Map_config = Config["Map_config"]
+        self.map_res = self.Map_config["map_res"]
+        self.map_size = self.Map_config["map_size"]
+
+        self.DEBUG = Config["debug"]
+
         self.dtype = torch.float
-        self.d = torch.device("cuda")
-        self.dt = 0.02
-        self.speed_max = speed_max
-        self.map_size = map_size
-        self.map_res = map_res
-        self.wheelbase = wheelbase
-        self.steering_max = steering_max
-        with torch.no_grad():
-            ## BEGIN MPPI
-            ## potentially these things should be loaded in from some config file? Will torchscript work with that?
-            dynamics = SimpleCarDynamics(
-                wheelbase=1.0,
-                speed_max=self.speed_max,
-                steering_max=self.steering_max,
-                dt=self.dt,
-                BEVmap_size=map_size,
-                BEVmap_res=map_res,
-                ROLLOUTS=512,
-                TIMESTEPS=32,
-                BINS=1,
-            )
-            costs = SimpleCarCost(
-                goal_w=1,
-                speed_w=0,
-                roll_w=0, ## weight on roll index, but also controls for lateral acceleration limits.. something to think about is how longitudenal accel affects accel limits..
-                lethal_w=1, # weight on lethal stuff. Note that this is applied to a piecewise function which is = 1/cos(surface angle) for SA < thresh and 1000 for SA > thresh
-                speed_target=10, ## target speed in m/s
-                critical_SA=1/np.cos(0.5), # 0.5 is the critical slope angle, 1/cos(angle) is used for state cost evaluation
-                critical_RI=1.0, ## limiting ratio of lateral to vertical acceleration
-                BEVmap_size=map_size,
-                BEVmap_res=map_res,
-            )
+        self.device = torch.device("cuda")
 
-            ns = torch.zeros((2, 2), device = self.d, dtype = self.dtype)
-            ns[0, 0] = 1.0  # steering
-            ns[1, 1] = 1.0  # throttle/brake
+        dynamics = SimpleCarDynamics(self.Dynamics_config, self.Map_config, self.MPPI_config)
+        costs = torch.jit.script(SimpleCarCost(self.Cost_config, self.Map_config))
+        sampling = Delta_Sampling(self.Sampling_config, self.MPPI_config)
+        self.mppi = MPPI(dynamics, costs, sampling, self.MPPI_config)
+        self.mppi.reset()
+        self.print_states = None
 
-            self.controller = MPPI(
-                dynamics,
-                costs,
-                CTRL_NOISE=ns,
-                lambda_= 0.1,
+    def set_hard_limit(self, hard_limit):
+        self.Sampling_config["max_thr"] = hard_limit / self.Dynamics_config["throttle_to_wheelspeed"]
+        self.mppi.Sampling.max_thr = torch.tensor(self.Sampling_config["max_thr"], device=self.device, dtype=self.dtype)
+
+    def update(self, state, goal, map_elev, map_norm, map_cost, map_cent, speed_limit):
+        ## get robot_centric BEV (not rotated into robot frame)
+        BEV_heght = torch.from_numpy(map_elev).to(device=self.device, dtype=self.dtype)
+        BEV_normal = torch.from_numpy(map_norm).to(device=self.device, dtype=self.dtype)
+        BEV_path = torch.from_numpy(map_cost).to(device=self.device, dtype=self.dtype)
+
+        self.mppi.Dynamics.set_BEV_numpy(map_elev, map_norm)
+        self.mppi.Costs.set_BEV(BEV_heght, BEV_normal, BEV_path)
+        self.mppi.Costs.set_goal(torch.from_numpy(np.copy(goal) - np.copy(map_cent)).to(device=self.device, dtype=self.dtype)) 
+        self.mppi.Costs.speed_target = torch.tensor(speed_limit, device=self.device, dtype=self.dtype)
+
+        state_to_ctrl = np.copy(state)
+        state_to_ctrl[:3] -= map_cent
+        action = np.array(self.mppi.forward(torch.from_numpy(state_to_ctrl).to(device=self.device, dtype=self.dtype)).cpu().numpy(),dtype=np.float64)[0]
+        _, indices = torch.topk(self.mppi.Sampling.cost_total, k=10, largest=False)
+        self.print_states = self.mppi.Dynamics.states[:,indices,:,:3].cpu().numpy()
+        if self.DEBUG:
+            costmap_vis(
+                self.print_states,
+                state[:2] - map_cent[:2],
+                goal[:2] - map_cent[:2],
+                cv2.applyColorMap(((map_cost)*255).astype(np.uint8), cv2.COLORMAP_JET),
+                1 / self.map_res,
             )
 
-    def update(self, goal, state, map_cost, map_elev, map_norm, map_cent):
-        BEV_heght = torch.from_numpy(map_elev).to(device=self.d, dtype=self.dtype)
-        BEV_normal = torch.from_numpy(map_norm).to(device=self.d, dtype=self.dtype)
-        BEV_cost = torch.from_numpy(map_cost).to(device=self.d, dtype=self.dtype)
-
-        self.controller.Dynamics.set_BEV(BEV_heght, BEV_normal)
-        self.controller.Costs.set_BEV(BEV_heght, BEV_normal)
-        self.controller.Costs.set_goal(
-            torch.from_numpy(goal - map_cent).to(device=self.d, dtype=self.dtype)
-        )
-
-        state[:3] -= map_cent # this is for the MPPI: technically this should be state[:3] -= BEV_center
-
-        state[15:17] = self.action ## adhoc wheelspeed.
-        state = torch.from_numpy(state).to(device=self.d, dtype=self.dtype)
-        now = time.time()
-        
-        delta_action = self.controller(state)
-        
-        self.action += np.array(delta_action.cpu().numpy()[0], dtype=np.float64) * self.dt
-        self.action = np.clip(self.action, -1, 1)
-        return self.action
+        action[1] = np.clip(action[1], self.Sampling_config["min_thr"], self.Sampling_config["max_thr"])
+        return action
