@@ -1,6 +1,6 @@
 #!/bin/bash
-sleep 10
-rosrun mavros mavsys rate --all 10
-sleep
-rosrun mavros mavsys rate --raw-sensors 50 --rc-channels 50 --raw-controller 50 --position 50
-#rosrun mavros mavsys rate --all 50
+usbreset "ChibiOS/RT Virtual COM Port"  # this resets the VESC port
+# sleep 10  # let the mavros node boot properly first
+# rosrun mavros mavsys rate --all 50  # first attempt
+# sleep 5
+# rosrun mavros mavsys rate --all 50  # second attempt. Usually happens by first attempt but we double tap just to be sure.

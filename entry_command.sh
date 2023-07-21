@@ -1,5 +1,5 @@
 #!/bin/bash
-source .bashrc
+source ~/.bashrc
 source /opt/ros/noetic/setup.bash
 source ~/catkin_ws/devel/setup.bash
 

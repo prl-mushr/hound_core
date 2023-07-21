@@ -24,5 +24,101 @@ cnpy for gtech autorally(optional):
 git clone https://github.com/rogersce/cnpy.git
 cd cnpy && mkdir build && cd build && cmake .. && make -j2 && sudo make install
 
+sudo apt-get install usbutils
+sudo apt-get install ros-noetic-rtabmap-ros
 
 
+added rtabmap
+
+edit bashrc:
+
+wlan0 instead of eth0
+export PATH=/usr/local/cuda-10.2/bin${PATH:+:${PATH}}  # is this really needed?
+
+change gcc: (only for autorally, not recommended otherwise)
+apt -y install gcc-8 g++-8
+update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 8
+update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-8 8
+
+install mavros:
+
+sudo apt-get install ros-noetic-mavros ros-noetic-mavros-extras ros-noetic-nmea-msgs ros-noetic-control-toolbox -y
+wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
+chmod a+x install_geographiclib_datasets.sh
+./install_geographiclib_datasets.sh
+sudo apt-get remove ros-noetic-mavros ros-noetic-mavros-extras
+
+cd ~/catkin_ws/ && catkin build
+
+git clone https://github.com/rogersce/cnpy.git
+cd cnpy && mkdir build && cd build && cmake .. && make -j2 && sudo make install
+
+the realsense steps in the mushr_install_hw_drivers.bash need to be done again for some reason. Were they not being done correctly the first time around?
+
+for AGX orin/orin devices:
+https://forums.developer.nvidia.com/t/failed-to-run-docker-container-in-privileged-mode-on-jetson-agx-orin/220110
+
+for nvidia orins you have to do the nvidia daemon stuff: /etc/docker/daemon.json
+```
+{
+    "runtimes": {
+        "nvidia": {
+            "path": "nvidia-container-runtime",
+            "runtimeArgs": []
+        }
+    },
+    "default-runtime": "nvidia"
+}
+
+build does not contain scipy, please install scipy and commit
+mushr noetic needs to be updated to mushr noetic hound
+
+make sure to set catkin build RELEASE flag
+for inpainting set Torch dir to the torch directory of the pytorch installation
+
+```
+
+install steps:
+wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/sublimehq-archive.gpg > /dev/null
+
+echo "deb https://download.sublimetext.com/ apt/stable/" | sudo tee /etc/apt/sources.list.d/sublime-text.list
+
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)       && curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg       && curl -s -L https://nvidia.github.io/libnvidia-container/experimental/$distribution/libnvidia-container.list |          sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' |          sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg lsb-release
+sudo apt-get install pip
+sudo apt-get install sublime-text htop
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg echo   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo mkdir -m 0755 -p /etc/apt/keyrings
+
+sudo apt-get install nvidia-jetpack
+sudo usermod -aG docker $USER
+sudo pip install jetson-stats
+sudo reboot now
+
+sudo apt-get install nvidia-container-toolkit
+sudo apt --fix-broken install
+
+sudo apt install docker-compose-plugin
+./catkin_ws/src/mushr/mushr_utils/install/mushr_install.bash -y -n
+
+## go to ../../etc/docker/daemon.json and add "default-runtime": "nvidia" (add comma before it) -- how to do this automatically?
+
+## add mushr_start.service to services (where?)
+sudo cp ~/catkin_ws/src/mushr/mushr_utils/install/mushr_start.service /etc/systemd/system
+## this does not "enable the service", that requires another command 
+sudo systemctl enable mushr_start.service
+
+mushr_noetic
+
+
+```
+docker build steps:
+clone dusty nv jetson containers from prl/sidtalia
+sudo ./scripts/docker_build_jetpack.sh
+sudo ./scripts/docker_build_ml.sh pytorch
+mushr install bash
+mushr_noetic.

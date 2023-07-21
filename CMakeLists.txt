@@ -143,9 +143,6 @@ ${OpenCV_INCLUDE_DIRS}
 add_executable(hound_core_node src/hound_core_node.cpp)
 target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
-add_executable(fake_laser_node src/fake_laser_node.cpp)
-target_link_libraries(fake_laser_node ${catkin_LIBRARIES})
-
 add_executable(hound_ll_control src/hound_ll_control.cpp)
 target_link_libraries(hound_ll_control ${catkin_LIBRARIES})
 
