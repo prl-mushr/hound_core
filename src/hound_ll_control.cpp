@@ -31,7 +31,7 @@ public:
   float erpm_gain, steering_max, wheelspeed_max, wheelbase, cg_height, track_width;
   bool channel_init, vesc_init, mode_init, imu_init, auto_init;
 
-  float motor_kv, nominal_voltage, max_rated_speed;
+  float motor_kv, nominal_voltage, max_rated_speed, voltage_input, K_drag;
 
   float speed_integral, speed_proportional, delta_t;
   float speed_control_kp, speed_control_ki;
@@ -62,6 +62,7 @@ public:
     auto_init = false;
     delta_t = 0.02f;  // 50 Hz loop rate
     speed_integral = 0;
+    K_drag = 0;
 
     if(not nh.getParam("/erpm_gain", erpm_gain))
     {
@@ -232,9 +233,11 @@ public:
     if(wheelspeed < 1)
     {
       speed_integral = 0;
+      speed_proportional = 0;
     }
     // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
-    throttle_duty = (wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral;
+    float voltage_gain = nominal_voltage/voltage_input;
+    throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
 
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
     return throttle_duty;
@@ -247,6 +250,7 @@ public:
     whspd2 *= whspd2;
     
     float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
+    // Aylim -= std::min(Aylim, fabs(std::min(accBF.x, 0.0f)));
     float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2)) + steer_slack*steering_max;
     // this prevents the car from rolling over.
     
@@ -259,19 +263,22 @@ public:
     // this brings the car back from the roll-over.
     float Ay = accBF.y;
     float Ay_error = 0;
-    float Ay_rate = -rotBF.x * accBF.z;
-    if(fabs(accBF.y) > Aylim)
+    float delta_steering;
+    if(fabs(Ay) > Aylim)
     {
       intervention = true;
       if(Ay >= 0)
       {
-        Ay_error = Ay - Aylim;
+        Ay_error = Aylim - Ay;
+        delta_steering = (accel_gain * Ay_error - roll_gain * rotBF.x * fabs(accBF.z) )* cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
+        delta_steering = std::min(delta_steering, 0.0f);
       }
       else
       {
-        Ay_error = Ay + Aylim;
+        Ay_error = -Aylim - Ay;
+        delta_steering = (accel_gain * Ay_error - roll_gain * rotBF.x * fabs(accBF.z) )* cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
+        delta_steering = std::max(delta_steering, 0.0f);
       }
-      float delta_steering = (accel_gain * Ay_error + roll_gain * Ay_rate)* cosf(steering_setpoint) * cosf(steering_setpoint) * wheelbase / whspd2;
       steering_setpoint += delta_steering;
     }
 
@@ -285,10 +292,10 @@ public:
     {
         return;
     }  
-    semi_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    semi_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
     semi_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
-    manual_steering = -steering_max * ((rc->channels[0] - 1500) / 500.0f );
+    manual_steering = steering_max * ((rc->channels[0] - 1500) / 500.0f );
     manual_wheelspeed = wheelspeed_max * ( (rc->channels[2] - 1000) / 1000.0f );
 
     // set auto mode speed limit using throttle too and publish as ackermann drive message that others can subscribe to
@@ -337,6 +344,10 @@ public:
       vesc_init = true;
     }
     wheelspeed = vesc->state.speed / erpm_gain;
+    voltage_input = vesc->state.voltage_input;
+    float force_applied = fabs(voltage_input * vesc->state.duty_cycle * vesc->state.current_input);
+    float Kd_meas = force_applied / std::max(1.0f, wheelspeed*wheelspeed);
+    K_drag = std::min(1.0f, std::max(0.0f, 0.2f*Kd_meas + 0.8f*K_drag));
   }
 
   void auto_control_cb(const ackermann_msgs::AckermannDriveStamped::ConstPtr commands)
@@ -356,7 +367,7 @@ public:
 
       manual_control_msg.header.stamp = ros::Time::now();
       manual_control_msg.x = 1000;
-      manual_control_msg.y = st*1000; // steering;
+      manual_control_msg.y = -st*1000; // steering;
       manual_control_msg.z = th*1000; // throttle;
       manual_control_msg.r = 1000;
       manual_control_msg.buttons = 0;

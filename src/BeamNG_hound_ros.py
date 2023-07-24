@@ -145,6 +145,9 @@ class BeamNGROS:
         vesc_state_msg.header.stamp = timestamp
         vesc_state_msg.state.speed = avg_wheelspeed * self.erpm_gain
         vesc_state_msg.state.voltage_input = 14.8
+        vesc_state_msg.state.duty_cycle = self.ctrl[1]
+        vesc_state_msg.state.current_input = 0
+        
         self.vesc_state_pub.publish(vesc_state_msg)
 
 
@@ -256,7 +259,7 @@ class BeamNGROS:
     
     def mavros_control_callback(self, msg):
         ## we only update the controls here, the actual control is done in the step function because beamng needs to be updated in the same thread
-        self.ctrl[0] = msg.y/1000.0
+        self.ctrl[0] = -msg.y/1000.0
         self.ctrl[1] = msg.z/1000.0
 
     def publish_path(self):

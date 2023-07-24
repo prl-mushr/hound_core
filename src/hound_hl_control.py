@@ -43,6 +43,7 @@ class Hound_HL_Control:
         self.layers = None
         self.index = None
         self.map_cost = np.zeros( (self.map_size_px, self.map_size_px), dtype=np.float32)
+        self.grid_map = None
         ## goal variables:
         self.goal = None
         self.goal_init = False
@@ -55,7 +56,6 @@ class Hound_HL_Control:
         self.lookahead = Config["lookahead"]
         self.odom_update = False
         self.looping = False
-        self.last_closest_index = 0
 
         ## initialize the controller:
         self.controller = mppi(Config)
@@ -75,10 +75,10 @@ class Hound_HL_Control:
         self.reset_pub = rospy.Publisher("/simulation_reset", AckermannDriveStamped, queue_size=2)
         self.interpolated_path_pub = rospy.Publisher("/interpolate_path", navPath, latch=True, queue_size=2)
         self.diagnostics_pub = rospy.Publisher("/high_level_diagnostics", DiagnosticArray, queue_size=2)
-        reset_msg = AckermannDriveStamped()
         time.sleep(1)
+        reset_msg = AckermannDriveStamped()
         self.reset_pub.publish(reset_msg)
-        time.sleep(5)
+        time.sleep(1)
         ## initialize controller:
         self.main_loop()
 
@@ -92,9 +92,10 @@ class Hound_HL_Control:
             if self.state_init and self.map_init and self.goal_init and self.odom_update:
                 ## generate the control message:
                 now = time.time()
+                self.process_grid_map()
                 speed_limit = np.sqrt((self.Dynamics_config["D"]*9.8)/self.path_poses[self.current_wp_index, 3])
                 speed_limit = min(speed_limit, self.speed_limit)
-                lookahead = np.clip(speed_limit*0.8, self.lookahead, 6.0) ## speed dependent lookahead
+                lookahead = np.clip(speed_limit, self.lookahead, 6.0) ## speed dependent lookahead
                 self.goal, terminate, self.current_wp_index = self.update_goal(self.goal, np.copy(self.state[:3]), self.path_poses, self.current_wp_index, lookahead, wp_radius=self.wp_radius, looping=self.looping)
                 self.controller.set_hard_limit(self.hard_limit)
                 if(terminate):
@@ -104,10 +105,10 @@ class Hound_HL_Control:
                     ctrl = self.controller.update(self.state, self.goal, self.map_elev, self.map_norm, self.map_cost, self.map_cent, speed_limit)
                 self.state[15:17] = ctrl
                 self.send_ctrl(ctrl)
-                dt = time.time() - now
-                print(dt*1e3)
                 self.publish_markers(self.controller.print_states)
                 self.odom_update = False
+                dt = time.time() - now
+                print(dt*1e3)
             self.publish_diagnostics()
 
     def publish_diagnostics(self):
@@ -121,6 +122,7 @@ class Hound_HL_Control:
         diagnostics_status.values.append(KeyValue(key="state_init", value=str(self.state_init)))
         diagnostics_status.values.append(KeyValue(key="map_init", value=str(self.map_init)))
         diagnostics_status.values.append(KeyValue(key="goal_init", value=str(self.goal_init)))
+        diagnostics_status.values.append(KeyValue(key="all_bad", value=str(self.controller.all_bad)))
 
         diagnostics_array.status.append(diagnostics_status)
         self.diagnostics_pub.publish(diagnostics_array)
@@ -175,6 +177,7 @@ class Hound_HL_Control:
                 return pos, True, current_wp_index  ## terminate
         else:
             d = np.linalg.norm(target_WP[current_wp_index, :2] - pos[:2])
+            closest_index = np.argmin(np.linalg.norm(target_WP[:,:2] - pos[:2], axis=1))
             terminate = False
             if d < lookahead:
                 if current_wp_index < len(target_WP) - 1:
@@ -186,6 +189,7 @@ class Hound_HL_Control:
                     else:
                         current_wp_index += step_size
                         current_wp_index %= len(target_WP)
+
 
             return target_WP[current_wp_index, :3], terminate, current_wp_index  ## new goal
 
@@ -238,33 +242,33 @@ class Hound_HL_Control:
         self.imu = imu
 
     def grid_map_callback(self, grid_map):
+        self.grid_map = grid_map
         if self.index is None or self.layers is None:
-            assert grid_map.info.length_x == self.map_size, "grid map size mismatch, gridmap size was {}, expected size was {}".format(grid_map.info.length_x, self.map_size)
-            self.layers = grid_map.layers
+            assert self.grid_map.info.length_x == self.map_size, "grid map size mismatch, gridmap size was {}, expected size was {}".format(self.grid_map.info.length_x, self.map_size)
+            self.layers = self.grid_map.layers
             self.index = self.layers.index("rec_grid_map")
             # self.color_index = self.layers.index("color")
+        cent = self.grid_map.info.pose.position
+        self.map_cent = np.array([cent.x, cent.y, cent.z])
+        ## generate the cost map:
+        if self.path_poses is not None and self.generate_costmap_from_path:
+            self.map_cost = self.generate_cost( self.map_size_px, self.map_res, self.map_cent, self.path_poses, self.track_width)
+        if not self.map_init:
+            # initialize the map and set the "one time" variables:
+            self.map_init = True
 
-        matrix = grid_map.data[self.index]
+    def process_grid_map(self):
+        matrix = self.grid_map.data[self.index]
         self.map_elev = np.float32( cv2.flip( np.reshape( matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size), order="F", ).T, -1, ) )
         ## template code for how to get color image:
-        # matrix = grid_map.data[self.color_index]
+        # matrix = self.grid_map.data[self.color_index]
         # self.map_color = np.transpose(cv2.flip(np.reshape(matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size,3), order='F'), -1), axes=[1,0,2])
-
-        cent = grid_map.info.pose.position
-        self.map_cent = np.array([cent.x, cent.y, cent.z])
         self.map_norm = self.generate_normal(self.map_elev)
         ## upscaling this AFTER calculating the surface normal. 
         self.map_elev = cv2.resize(self.map_elev, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR)
         self.map_norm = cv2.resize(self.map_norm, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR)
-
-        ## generate the cost map:
-        if self.path_poses is not None and self.generate_costmap_from_path:
-            self.map_cost = self.generate_cost( self.map_size_px, self.map_res, self.map_cent, self.path_poses, self.track_width)
         self.map_cent[2] = self.map_elev[self.map_size_px // 2, self.map_size_px // 2]
         self.map_elev -= self.map_cent[2]
-        if not self.map_init:
-            # initialize the map and set the "one time" variables:
-            self.map_init = True
 
     def generate_normal(self, elev, k=3):
         # use sobel filter to generate the normal map:

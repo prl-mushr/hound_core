@@ -1,8 +1,9 @@
 Cost_config:
   goal_w: 1.0 ## weight on the terminal goal cost
   speed_w: 0.1 ## weight with which target speed will be tracked
-  roll_w: 1.0 ## weight on roll index but also controls for lateral acceleration limits.. something to think about is how longitudenal accel affects accel limits..
+  roll_w: 0.0 ## weight on roll index but also controls for lateral acceleration limits.. something to think about is how longitudenal accel affects accel limits..
   lethal_w: 10.0 # weight on lethal stuff. Note that this is applied to a piecewise function which is :  1/cos(surface angle) for SA < thresh and 1000 for SA > thresh
+  stop_w: 10000.0 ## weight on actually lethal things like people, trees, rocks and so on. Set to 1000.0 and query the min(Sampling.total_cost) > 1000.0 to know if all trajs are bad
   speed_target: 10.0 ## target speed in m/s
   critical_SA: 1.414 # 0.5 is the critical slope angle 1/cos(angle) is used for state cost evaluation
   critical_RI: 0.8 ## limiting ratio of lateral to vertical acceleration
@@ -10,7 +11,7 @@ Cost_config:
   car_bb_length: 0.4
   critical_vert_acc: 4.0
   critical_vert_spd: 0.2
-  
+
 Dynamics_config:
   wheelbase: 0.33
   throttle_to_wheelspeed: 17.0
@@ -35,12 +36,12 @@ Sampling_config:
   noise_0: 1.0
   noise_1: 0.5
   scaled_dt: 0.1 ## this is dt * bandwidth of the physical actuators (in what units?)
-  temperature: 0.2 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
+  temperature: 0.1 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
   max_thr: 0.8 ## max throttle as a fraction between -1,1
   min_thr: 0.0 ## min throttle as a fraction between -1,1
 
 MPPI_config:
-  ROLLOUTS: 2048
+  ROLLOUTS: 1024
   TIMESTEPS: 20 ## multiply by dynamics dt to find time horizon. Good values range between 0.8 seconds to 1.6 seconds for a small vehicle with low inertia
   BINS: 1
   u_per_command: 1  # how many control inputs do we want to use per MPPI optimization loop.
@@ -63,13 +64,13 @@ generate_costmap_from_path: True
 speed_limit: 10.0
 debug: False
 
-scenario: "test"
-map_name: "smallgrid"
+scenario: "race-4"
+map_name: "small_island"
 vehicle:
-  make: "savage_low_f"
+  make: "savage"
   model: "flux"
   max_speed: 23.0
   max_steer: 0.488
 
 use_speed_ctrl: False
-skip_points: 1
+skip_points: 100

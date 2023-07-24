@@ -125,7 +125,7 @@ class hal():
         try:
             if(len(rc.channels) == 0 ):
                 return
-            stick = rc.channels[1]
+            stick = rc.channels[3]
             if(self.recording_state == False and stick > 1900):
                 print("start recording")
                 self.start_recording()
@@ -184,13 +184,25 @@ class hal():
         diagnostics_status.name = 'SOC'
 
         temp = os.popen("cat /sys/devices/virtual/thermal/thermal_zone*/temp").readlines()
-        avg = []
+        avg_temp = []
         for t in temp:
-            avg.append(float(t.strip('\n'))/1000.0)
-        avg = np.round(np.mean(np.array(avg)),2)
+            avg_temp.append(float(t.strip('\n'))*1e-3)
+        avg_temp = np.round(np.mean(np.array(avg_temp)),2)
+
+        avg_cpu = []
+        temp = os.popen('cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq').readlines()
+        for t in temp:
+            avg_cpu.append(float(t.strip('\n'))*1e-6)
+        avg_cpu = np.round(np.mean(np.array(avg_cpu)),2)
+
+        avg_gpu = 1e-9*float(os.popen('cat /sys/devices/17000000.ga10b/devfreq/17000000.ga10b/max_freq').read().strip('\n'))
+        avg_gpu = np.round(avg_gpu, 2)
+
         diagnostics_status.level = 0
 
-        diagnostics_status.values.append(KeyValue(key="avg_temp", value=str(avg)))
+        diagnostics_status.values.append(KeyValue(key="avg_temp", value=str(avg_temp)))
+        diagnostics_status.values.append(KeyValue(key="avg_cpu", value=str(avg_cpu)))
+        diagnostics_status.values.append(KeyValue(key="avg_gpu", value=str(avg_gpu)))
         diagnostics_status.values.append(KeyValue(key="mavros_init", value=str(self.mavros_init)))
         diagnostics_status.values.append(KeyValue(key="camera_init", value=str(self.camera_init)))
 
@@ -207,7 +219,8 @@ class hal():
                 if(mavros_freq >= 40 and self.mavros_init==False):
                     self.mavros_init = True
                     self.publish_notification("low level ready")
-                else:
+                if mavros_freq < 40:
+                    self.mavros_init = False
                     os.system(self.mavros_action)
                 camera_freq = self.camera_hz.get_hz()
                 camera_freq = camera_freq[0]

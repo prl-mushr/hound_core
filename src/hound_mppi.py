@@ -25,6 +25,7 @@ class mppi:
 
         self.dtype = torch.float
         self.device = torch.device("cuda")
+        self.all_bad = False
 
         dynamics = SimpleCarDynamics(self.Dynamics_config, self.Map_config, self.MPPI_config)
         costs = torch.jit.script(SimpleCarCost(self.Cost_config, self.Map_config))
@@ -52,6 +53,13 @@ class mppi:
         state_to_ctrl[:3] -= map_cent
         action = np.array(self.mppi.forward(torch.from_numpy(state_to_ctrl).to(device=self.device, dtype=self.dtype)).cpu().numpy(),dtype=np.float64)[0]
         _, indices = torch.topk(self.mppi.Sampling.cost_total, k=10, largest=False)
+        min_cost = torch.min(self.mppi.Sampling.cost_total)
+        if(min_cost.item() > 1000.0):
+            self.all_bad = True
+            action[1] = 0.0 ## recovery behavior
+        else:
+            self.all_bad = False
+
         self.print_states = self.mppi.Dynamics.states[:,indices,:,:3].cpu().numpy()
         if self.DEBUG:
             costmap_vis(
