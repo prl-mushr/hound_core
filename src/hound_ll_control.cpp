@@ -33,7 +33,7 @@ public:
 
   float motor_kv, nominal_voltage, max_rated_speed, voltage_input, K_drag;
 
-  float speed_integral, speed_proportional, delta_t;
+  float speed_integral, speed_proportional, delta_t, last_throttle;
   float speed_control_kp, speed_control_ki;
 
   bool safe_mode;
@@ -230,16 +230,21 @@ public:
 
     speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
     speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
-    if(wheelspeed < 1)
-    {
-      speed_integral = 0;
-      speed_proportional = 0;
-    }
+    // if(wheelspeed < 1)
+    // {
+    //   speed_integral = 0;
+    //   speed_proportional = 0;
+    // }
     // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
     float voltage_gain = nominal_voltage/voltage_input;
     throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
-
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
+
+    if(wheelspeed < 1) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
+    {
+      throttle_duty = std::min(std::max(last_throttle - 0.01f, throttle_duty), last_throttle + 0.01f);
+    }
+    last_throttle = throttle_duty;
     return throttle_duty;
   }
 
@@ -250,7 +255,7 @@ public:
     whspd2 *= whspd2;
     
     float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
-    // Aylim -= std::min(Aylim, fabs(std::min(accBF.x, 0.0f)));
+    Aylim = sqrtf(std::max(Aylim*Aylim - accBF.x*accBF.x, 0.0f));
     float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2)) + steer_slack*steering_max;
     // this prevents the car from rolling over.
     
@@ -345,8 +350,8 @@ public:
     }
     wheelspeed = vesc->state.speed / erpm_gain;
     voltage_input = vesc->state.voltage_input;
-    float force_applied = fabs(voltage_input * vesc->state.duty_cycle * vesc->state.current_input);
-    float Kd_meas = force_applied / std::max(1.0f, wheelspeed*wheelspeed);
+    float power_applied = fabs(vesc->state.duty_cycle * vesc->state.current_input);
+    float Kd_meas = power_applied / std::max(1.0f, wheelspeed*wheelspeed);
     K_drag = std::min(1.0f, std::max(0.0f, 0.2f*Kd_meas + 0.8f*K_drag));
   }
 

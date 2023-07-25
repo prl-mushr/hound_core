@@ -7,7 +7,7 @@ import time
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rostopic import ROSTopicHz
 import yaml
-from mavros_msgs.msg import PlayTuneV2, RCIn, GPSRAW
+from mavros_msgs.msg import PlayTuneV2, RCIn, GPSRAW, State
 import subprocess, shlex, psutil
 from vesc_msgs.msg import VescStateStamped
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
@@ -15,6 +15,7 @@ from sensor_msgs.msg import PointCloud2, LaserScan
 import laser_geometry.laser_geometry as lg
 import tf
 import numpy as np
+import time
 
 class hal():
     def __init__(self, config_file):
@@ -40,6 +41,8 @@ class hal():
         sub_gps = rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, self.GPS_cb, queue_size = 1)
         pose_sub = rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.pose_cb, queue_size=1)
         scan_sub = rospy.Subscriber("/scan", LaserScan, self.scan_cb)
+        mavros_status_sub = rospy.Subscriber("/mavros/state", State, self.mavros_status_cb, queue_size=10)
+        self.last_map_clear = time.time()
         
         self.lp = lg.LaserProjection()
         self.pc_pub = rospy.Publisher("converted_pc", PointCloud2, queue_size=1)
@@ -86,7 +89,7 @@ class hal():
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
-        self.command = 'rosbag record --split --duration=30s -O ' + self.bagdir + 'hound ' + self.record_command
+        self.command = 'rosbag record --split --duration=30s -O ' + self.bagdir + 'temp ' + self.record_command
         print("executing: ", self.command)
         self.command = shlex.split(self.command)
         self.rosbag_proc = subprocess.Popen(self.command)
@@ -171,12 +174,18 @@ class hal():
                          "camera_depth_optical_frame",
                          "camera_depth_frame")
 
-        br.sendTransform((0.04, 0, -0.1),
+        br.sendTransform((0.04, 0, -0.02),
                          (0, 0, 0, 1),
                          msg.header.stamp,
                          "laser_frame",
                          "base_link")
         self.last_pose_time = msg.header.stamp
+
+    def mavros_status_cb(self, msg):
+        armed = msg.armed
+        if not armed and time.time() - self.last_map_clear > 1.0:
+            os.system('rosservice call /elevation_mapping/clear_map') ## worst (but easiest?) way to do a rosservice call when you don't care about returns
+            self.last_map_clear = time.time()
 
     def publish_diagnostics(self):
         diagnostics_array = DiagnosticArray()

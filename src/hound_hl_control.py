@@ -78,6 +78,7 @@ class Hound_HL_Control:
         time.sleep(1)
         reset_msg = AckermannDriveStamped()
         self.reset_pub.publish(reset_msg)
+        os.system('rosservice call /elevation_mapping/clear_map') ## clear the elevation map.
         time.sleep(1)
         ## initialize controller:
         self.main_loop()

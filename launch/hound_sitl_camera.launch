@@ -1,0 +1,8 @@
+<launch>
+    <node pkg="hound_core" type="HAL_9000.py" name="HAL" output="screen"/>
+    <arg name="low_level_Config" default="$(find hound_core)/config/low_level_Config.yaml" />
+    <rosparam file="$(arg low_level_Config)" command="load" />
+    <node pkg="hound_core" type="hound_hl_control.py" name="high_level_controller" output="screen"/>
+    <node pkg="hound_core" type="hound_ll_control" name="low_level_controller" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="15 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="log"/>
+</launch>
