@@ -10,6 +10,6 @@ speed_control_ki: 1.0
 safe_mode: true
 track_width: 0.25
 accel_gain: 1.0
-roll_gain: 0.33
+roll_gain: 1.0
 steer_slack: 0.2
 LPF_tau: 0.5

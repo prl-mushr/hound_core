@@ -218,8 +218,8 @@ class BeamNGROS:
         grid_map.info.pose.orientation.y = 0
         grid_map.info.pose.orientation.z = 0
         grid_map.info.pose.orientation.w = 1
-        grid_map.layers=["rec_grid_map", "segmentation", "color"]
-        # grid_map.basic_layers=["elevation"]
+        grid_map.layers=["comp_grid_map", "segmentation", "color"]
+        grid_map.basic_layers=["comp_grid_map"]
 
         # add the elevation layer:
         matrix = cv2.flip(BEV_heght.T, -1)

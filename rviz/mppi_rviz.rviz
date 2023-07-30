@@ -4,7 +4,6 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /GridMap1
         - /MarkerArray1/Status1
       Splitter Ratio: 0.6114649772644043
     Tree Height: 278
@@ -25,7 +24,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: Image
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -49,7 +48,7 @@ Visualization Manager:
       Color Layer: elevation
       Color Transformer: IntensityLayer
       Enabled: true
-      Height Layer: rec_grid_map
+      Height Layer: comp_grid_map
       Height Transformer: Layer
       History Length: 1
       Invert Rainbow: false
@@ -92,7 +91,7 @@ Visualization Manager:
       Marker Topic: /marker
       Name: MarkerArray
       Namespaces:
-        "": true
+        {}
       Queue Size: 100
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -113,7 +112,7 @@ Visualization Manager:
           Value: true
         Value: true
       Enabled: true
-      Keep: 100
+      Keep: 1000
       Name: Odometry
       Position Tolerance: 0.10000000149011612
       Queue Size: 10
@@ -198,7 +197,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 12.493242263793945
+      Distance: 10.98396110534668
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -206,17 +205,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 2.3969886302948
-        Y: 1.6696481704711914
-        Z: 3.6540377140045166
+        X: -0.03161752596497536
+        Y: 0.5014810562133789
+        Z: 0.5473673939704895
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.3747950494289398
+      Pitch: 0.304793119430542
       Target Frame: base_link
-      Yaw: 2.6308534145355225
+      Yaw: 4.2558417320251465
     Saved: ~
 Window Geometry:
   Displays:

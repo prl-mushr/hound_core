@@ -247,7 +247,7 @@ class Hound_HL_Control:
         if self.index is None or self.layers is None:
             assert self.grid_map.info.length_x == self.map_size, "grid map size mismatch, gridmap size was {}, expected size was {}".format(self.grid_map.info.length_x, self.map_size)
             self.layers = self.grid_map.layers
-            self.index = self.layers.index("rec_grid_map")
+            self.index = self.layers.index("comp_grid_map")
             # self.color_index = self.layers.index("color")
         cent = self.grid_map.info.pose.position
         self.map_cent = np.array([cent.x, cent.y, cent.z])
