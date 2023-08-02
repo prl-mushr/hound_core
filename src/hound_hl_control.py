@@ -177,6 +177,19 @@ class Hound_HL_Control:
                 print("terminating")
                 return pos, True, current_wp_index  ## terminate
         else:
+            # d = np.linalg.norm(target_WP[current_wp_index, :2] - pos[:2])
+            # closest_index = np.argmin(np.linalg.norm(target_WP[:,:2] - pos[:2], axis=1))
+            # terminate = False
+            # if d < lookahead:
+            #     if current_wp_index < len(target_WP) - 1:
+            #         current_wp_index += step_size
+            #     else:
+            #         if not looping:
+            #             current_wp_index = len(target_WP) - 1;
+            #             terminate = True
+            #         else:
+            #             current_wp_index += step_size
+            #             current_wp_index %= len(target_WP)
             d = np.linalg.norm(target_WP[current_wp_index, :2] - pos[:2])
             closest_index = np.argmin(np.linalg.norm(target_WP[:,:2] - pos[:2], axis=1))
             terminate = False
@@ -190,7 +203,15 @@ class Hound_HL_Control:
                     else:
                         current_wp_index += step_size
                         current_wp_index %= len(target_WP)
-
+            elif d > lookahead + 1:
+                if current_wp_index > 0:
+                    current_wp_index -= step_size
+                else:
+                    if not looping:
+                        current_wp_index = 0;
+                    else:
+                        current_wp_index -= step_size
+                        current_wp_index %= len(target_WP)
 
             return target_WP[current_wp_index, :3], terminate, current_wp_index  ## new goal
 

@@ -37,6 +37,7 @@
 /mavros/imu/data
 /mavros/imu/data_raw
 /mavros/imu/diff_pressure
+/mavros/imu/static_pressure
 /mavros/imu/temperature_baro
 /mavros/local_position/odom
 /mavros/local_position/pose

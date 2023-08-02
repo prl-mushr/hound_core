@@ -284,7 +284,7 @@ if __name__ == "__main__":
     #initialize the BeamNGROS class:
     parser = argparse.ArgumentParser()
     parser.add_argument("--remote", type=bool, default=True, help="whether to connect to a remote beamng server")
-    parser.add_argument("--host_IP", type=str, default="10.18.172.189", help="host ip address if using remote beamng")
+    parser.add_argument("--host_IP", type=str, default="169.254.216.9", help="host ip address if using remote beamng")
     parser.add_argument("--config_name", type=str, default="hound_mppi.yaml", help="name of the config file to use")
 
     args = parser.parse_args()

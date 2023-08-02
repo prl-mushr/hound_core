@@ -89,7 +89,7 @@ class hal():
         self.notification_pub.publish(playtune)
     
     def start_recording(self):
-        self.command = 'rosbag record --split --duration=2m -O ' + self.bagdir + 'temp ' + self.record_command
+        self.command = 'rosbag record --split --duration=5m -O ' + self.bagdir + 'temp ' + self.record_command
         print("executing: ", self.command)
         self.command = shlex.split(self.command)
         self.rosbag_proc = subprocess.Popen(self.command)

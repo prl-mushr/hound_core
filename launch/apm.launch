@@ -4,6 +4,7 @@
 
 	<arg name="fcu_url" default="/dev/ttyUSB0:921600" />
 	<arg name="gcs_url" default="udp://:14550@192.0.0.4"/>
+	<!-- <arg name="gcs_url" default="udp://:14550@192.168.223.211"/> -->
 	<!--arg name="gcs_url" default=""/-->
 	<arg name="tgt_system" default="1" />
 	<arg name="tgt_component" default="1" />

@@ -4,6 +4,7 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /GridMap1
         - /MarkerArray1/Status1
       Splitter Ratio: 0.6114649772644043
     Tree Height: 278
@@ -24,7 +25,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: Image
+    SyncSource: ""
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -45,7 +46,7 @@ Visualization Manager:
       Autocompute Intensity Bounds: true
       Class: grid_map_rviz_plugin/GridMap
       Color: 200; 200; 200
-      Color Layer: elevation
+      Color Layer: comp_grid_map
       Color Transformer: IntensityLayer
       Enabled: true
       Height Layer: comp_grid_map
@@ -91,7 +92,7 @@ Visualization Manager:
       Marker Topic: /marker
       Name: MarkerArray
       Namespaces:
-        {}
+        "": true
       Queue Size: 100
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -197,7 +198,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 10.98396110534668
+      Distance: 18.041099548339844
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -205,17 +206,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.03161752596497536
-        Y: 0.5014810562133789
-        Z: 0.5473673939704895
+        X: 0.08020172268152237
+        Y: -0.01624554581940174
+        Z: 0.32123875617980957
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.304793119430542
+      Pitch: 0.4047926366329193
       Target Frame: base_link
-      Yaw: 4.2558417320251465
+      Yaw: 3.950836181640625
     Saved: ~
 Window Geometry:
   Displays:

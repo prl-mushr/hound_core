@@ -163,7 +163,7 @@ public:
     accBFmeas.z = imu->linear_acceleration.z;
 
     LPF(accBFmeas, accBF);
-    LPF(rotBFmeas, rotBF);
+    rotBF = rotBFmeas;
 
     rpy_from_quat(imu->orientation);
 
