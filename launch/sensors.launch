@@ -15,5 +15,5 @@
     <node pkg="hound_core" type="vesc_to_odom.py" name="wheel_odom" output="log"/>
 
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="15 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="log"/>
-    <!-- <include file="$(find ntrip_ros)/launch/ntripclient.launch"/> -->
+    <include file="$(find ntrip_ros)/launch/ntripclient.launch"/>
 </launch>

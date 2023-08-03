@@ -109,7 +109,7 @@ class Hound_HL_Control:
                 self.publish_markers(self.controller.print_states)
                 self.odom_update = False
                 dt = time.time() - now
-                print(dt*1e3)
+                #print(dt*1e3)
             self.publish_diagnostics()
 
     def publish_diagnostics(self):
@@ -200,18 +200,19 @@ class Hound_HL_Control:
                     if not looping:
                         current_wp_index = len(target_WP) - 1;
                         terminate = True
+                        print("terminate")
                     else:
                         current_wp_index += step_size
                         current_wp_index %= len(target_WP)
-            elif d > lookahead + 1:
-                if current_wp_index > 0:
-                    current_wp_index -= step_size
-                else:
-                    if not looping:
-                        current_wp_index = 0;
-                    else:
-                        current_wp_index -= step_size
-                        current_wp_index %= len(target_WP)
+            #  elif d > lookahead + 1:
+            #      if current_wp_index > 0:
+            #          current_wp_index -= step_size
+            #      else:
+            #          if not looping:
+            #              current_wp_index = 0;
+            #          else:
+            #              current_wp_index -= step_size
+            #              current_wp_index %= len(target_WP)
 
             return target_WP[current_wp_index, :3], terminate, current_wp_index  ## new goal
 
@@ -330,6 +331,7 @@ class Hound_HL_Control:
         we expect the path to have a resolution of 0.2 meters or less.
         """
         ## get the poses from the path and store them into a numpy array:
+        self.goal_init = False
         self.path_poses = np.zeros((len(path.poses), 4), dtype=np.float32)
         for i in range(len(path.poses)):
             self.path_poses[i, 0] = path.poses[i].pose.position.x
@@ -372,6 +374,7 @@ class Hound_HL_Control:
         looping = False
         if np.linalg.norm(target_WP[0] - target_WP[-1]) < 2:
             looping = True ## this is to cause the system to reset wp index to 0 if loop is detected
+            print("looping")
         N = 40
         wp_list = []
         for i in range(len(target_WP)-1):
@@ -388,7 +391,7 @@ class Hound_HL_Control:
 
 if __name__ == "__main__":
     rospy.init_node("hl_controller")
-    config_name = "hound_mppi.yaml"
+    config_name = "hound_mppi_real.yaml"
     config_path = "/root/catkin_ws/src/hound_core/config/" + config_name
     with open(config_path) as f:
         Config = yaml.safe_load(f)

@@ -33,7 +33,7 @@ public:
 
   float motor_kv, nominal_voltage, max_rated_speed, voltage_input, K_drag;
 
-  float speed_integral, speed_proportional, delta_t, last_throttle;
+  float speed_integral, speed_proportional, delta_t, last_throttle, throttle_delta;
   float speed_control_kp, speed_control_ki;
 
   bool safe_mode;
@@ -125,6 +125,11 @@ public:
     {
       LPF_tau = 0.2;
     }
+    if(not nh.getParam("/throttle_delta", throttle_delta))
+    {
+      throttle_delta = 0.02;
+    }
+
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
     max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
     sleep_rate = new ros::Rate(100);
@@ -230,20 +235,20 @@ public:
 
     speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
     speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
-    // if(wheelspeed < 1)
-    // {
-    //   speed_integral = 0;
-    //   speed_proportional = 0;
-    // }
+    if(wheelspeed < 1)
+    {
+      speed_integral = 0;
+      speed_proportional = 0;
+    }
     // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
     float voltage_gain = nominal_voltage/voltage_input;
     throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
 
-    if(wheelspeed < 1) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
-    {
-      throttle_duty = std::min(std::max(last_throttle - 0.01f, throttle_duty), last_throttle + 0.01f);
-    }
+    // if(wheelspeed < 1) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
+    // {
+   // throttle_duty = std::min(std::max(last_throttle - throttle_delta, throttle_duty), last_throttle + throttle_delta);
+    // }
     last_throttle = throttle_duty;
     return throttle_duty;
   }
