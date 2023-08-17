@@ -37,6 +37,7 @@
   <arg name="depth_fps"           default="30"/>
   <arg name="infra_fps"           default="30"/>
   <arg name="color_fps"           default="30"/>
+  <!-- 200 and 250 are the working values but I don't need IMU from d455 -->
   <arg name="gyro_fps"            default="-1"/>
   <arg name="accel_fps"           default="-1"/>
   <arg name="enable_gyro"         default="false"/>
@@ -57,7 +58,7 @@
   <arg name="filters"                   default=""/>
   <arg name="clip_distance"             default="-2"/>
   <arg name="linear_accel_cov"          default="0.01"/>
-  <arg name="initial_reset"             default="false"/>
+  <arg name="initial_reset"             default="true"/>
   <arg name="unite_imu_method"          default="linear_interpolation"/>
   <arg name="topic_odom_in"             default="odom_in"/>
   <arg name="calib_odom_file"           default=""/>
@@ -129,7 +130,16 @@
       <arg name="ordered_pc"               value="$(arg ordered_pc)"/>
       <arg name="respawn"                  value="$(arg respawn)"/>
     </include>
-    <rosparam> /camera/stereo_module/emitter_enabled: 2</rosparam>
+    <rosparam> /camera/stereo_module/emitter_enabled: 1 </rosparam>
+    <rosparam> /camera/stereo_module/visual_preset: 0 </rosparam>
+    <rosparam> /camera/stereo_module/laser_power: 360 </rosparam>
+    <rosparam> /camera/stereo_module/auto_exposure_roi/top: 240 </rosparam>
+    <rosparam> /camera/rgb_camera/auto_exposure_roi/top: 240 </rosparam>
+<!--     <rosparam> /camera/stereo_module/enable_auto_exposure: 0 </rosparam>
+    <rosparam> /camera/stereo_module/exposure: 8000 </rosparam>
+    <rosparam> /camera/rgb_camera/exposure: 100 </rosparam>
+    <rosparam> /camera/rgb_camera/enable_auto_exposure: 0 </rosparam>
+    <rosparam> /camera/rgb_camera/auto_exposure_priority: 0 </rosparam> -->
     <!-- <rosparam> /camera/motion_module/global_time_enabled: true</rosparam> -->
 <!--     <rosparam param="/camera/infra1/image_rect_raw/disable_pub_plugins" > -'(*)/compressed' -'(*)/compressedDepth' -'(*)/theora' </rosparam>
     <rosparam param="/camera/infra2/image_rect_raw/disable_pub_plugins" > -'(*)/compressed' -'(*)/compressedDepth' -'(*)/theora' </rosparam>

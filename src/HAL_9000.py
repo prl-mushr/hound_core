@@ -155,8 +155,8 @@ class hal():
                          msg.header.stamp,
                          "base_link",
                          "map")
-
-        br.sendTransform((0.15, 0.0, 0.02),
+        ## use (0.15, 0.047, 0.02) for D455, (0.15, 0.025, 0.02) for d435
+        br.sendTransform((0.15, 0.047, 0.02),
                          (0, 0, 0, 1),
                          msg.header.stamp,
                          "camera_depth_frame",

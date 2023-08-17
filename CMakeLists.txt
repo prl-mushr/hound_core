@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   mavros_msgs
   vesc_msgs
+  laser_geometry
 )
 
 find_package( OpenCV REQUIRED )
@@ -118,6 +119,7 @@ CATKIN_DEPENDS roscpp
                std_msgs
                cv_bridge
                image_transport
+               laser_geometry
 )
 
 ###########
@@ -146,6 +148,8 @@ target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 add_executable(hound_ll_control src/hound_ll_control.cpp)
 target_link_libraries(hound_ll_control ${catkin_LIBRARIES})
 
+add_executable(laser_pcl_converter src/laser_pcl_converter.cpp)
+target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
 
 add_executable(hound_control_node src/hound_control_node)
 target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})

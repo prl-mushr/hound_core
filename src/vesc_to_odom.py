@@ -14,8 +14,8 @@ def translate_cb(msg):
 	speed = msg.state.speed
 	odom = Odometry()
 	odom.header.stamp = rospy.Time.now()
-	odom.twist.twist.linear.x = speed/3500
-	odom.twist.covariance[0] = max(0.05*speed/3500,0.1)
+	odom.twist.twist.linear.x = speed/3166
+	odom.twist.covariance[0] = max(0.05*speed/3166,0.1)
 	if(time.time() - last_callback_time > 0.1):
 		odom_pub.publish(odom)
 		last_callback_time = time.time()

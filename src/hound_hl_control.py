@@ -38,11 +38,10 @@ class Hound_HL_Control:
         self.map_size_px = int(self.map_size/self.map_res)
         self.map_elev = None
         self.map_norm = None
-        self.map_cost = None
         self.map_cent = None
         self.layers = None
         self.index = None
-        self.map_cost = np.zeros( (self.map_size_px, self.map_size_px), dtype=np.float32)
+        self.map_cost = np.zeros( (self.map_size_px, self.map_size_px, 3), dtype=np.float32)
         self.grid_map = None
         ## goal variables:
         self.goal = None
@@ -177,19 +176,6 @@ class Hound_HL_Control:
                 print("terminating")
                 return pos, True, current_wp_index  ## terminate
         else:
-            # d = np.linalg.norm(target_WP[current_wp_index, :2] - pos[:2])
-            # closest_index = np.argmin(np.linalg.norm(target_WP[:,:2] - pos[:2], axis=1))
-            # terminate = False
-            # if d < lookahead:
-            #     if current_wp_index < len(target_WP) - 1:
-            #         current_wp_index += step_size
-            #     else:
-            #         if not looping:
-            #             current_wp_index = len(target_WP) - 1;
-            #             terminate = True
-            #         else:
-            #             current_wp_index += step_size
-            #             current_wp_index %= len(target_WP)
             d = np.linalg.norm(target_WP[current_wp_index, :2] - pos[:2])
             closest_index = np.argmin(np.linalg.norm(target_WP[:,:2] - pos[:2], axis=1))
             terminate = False
@@ -204,15 +190,6 @@ class Hound_HL_Control:
                     else:
                         current_wp_index += step_size
                         current_wp_index %= len(target_WP)
-            #  elif d > lookahead + 1:
-            #      if current_wp_index > 0:
-            #          current_wp_index -= step_size
-            #      else:
-            #          if not looping:
-            #              current_wp_index = 0;
-            #          else:
-            #              current_wp_index -= step_size
-            #              current_wp_index %= len(target_WP)
 
             return target_WP[current_wp_index, :3], terminate, current_wp_index  ## new goal
 
@@ -273,9 +250,7 @@ class Hound_HL_Control:
             # self.color_index = self.layers.index("color")
         cent = self.grid_map.info.pose.position
         self.map_cent = np.array([cent.x, cent.y, cent.z])
-        ## generate the cost map:
-        if self.path_poses is not None and self.generate_costmap_from_path:
-            self.map_cost = self.generate_cost( self.map_size_px, self.map_res, self.map_cent, self.path_poses, self.track_width)
+
         if not self.map_init:
             # initialize the map and set the "one time" variables:
             self.map_init = True
@@ -292,6 +267,13 @@ class Hound_HL_Control:
         self.map_norm = cv2.resize(self.map_norm, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR)
         self.map_cent[2] = self.map_elev[self.map_size_px // 2, self.map_size_px // 2]
         self.map_elev -= self.map_cent[2]
+        ## generate the cost map:
+        if self.path_poses is not None and self.generate_costmap_from_path == 1:
+            self.map_cost = self.generate_cost( self.map_size_px, self.map_res, self.map_cent, self.path_poses, self.track_width)
+        elif self.path_poses is not None and self.generate_costmap_from_path == 2:
+            self.map_cost[...,0] = 1/self.map_norm[...,2]
+        elif self.path_poses is not None and self.generate_costmap_from_path == 0:
+            self.map_cost = np.zeros( (self.map_size_px, self.map_size_px, 3), dtype=np.float32)
 
     def generate_normal(self, elev, k=3):
         # use sobel filter to generate the normal map:

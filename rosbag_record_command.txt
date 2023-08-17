@@ -1,3 +1,5 @@
+/camera/aligned_depth_to_color/camera_info
+/camera/aligned_depth_to_color/image_raw
 /camera/color/camera_info
 /camera/color/image_raw
 /camera/color/metadata
@@ -60,7 +62,7 @@
 /marker
 /path
 /interpolate_path
-/elevation_mapping/elevation_map_raw
+/elevation_mapping/elevation_map_cropped
 /grid_map_occlusion_inpainting/all_grid_map
 /tf_static
 /tf

@@ -63,6 +63,7 @@ public:
     delta_t = 0.02f;  // 50 Hz loop rate
     speed_integral = 0;
     K_drag = 0;
+    last_throttle = 0;
 
     if(not nh.getParam("/erpm_gain", erpm_gain))
     {
@@ -245,9 +246,9 @@ public:
     throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
 
-    // if(wheelspeed < 1) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
+    // if(wheelspeed < 2) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
     // {
-   // throttle_duty = std::min(std::max(last_throttle - throttle_delta, throttle_duty), last_throttle + throttle_delta);
+    throttle_duty = std::min(std::max(last_throttle - throttle_delta, throttle_duty), last_throttle + throttle_delta);
     // }
     last_throttle = throttle_duty;
     return throttle_duty;

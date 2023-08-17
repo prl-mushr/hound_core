@@ -36,7 +36,7 @@ Sampling_config:
   noise_0: 1.0
   noise_1: 0.5
   scaled_dt: 0.1 ## this is dt * bandwidth of the physical actuators (in what units?)
-  temperature: 0.1 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
+  temperature: 0.02 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
   max_thr: 0.8 ## max throttle as a fraction between -1,1
   min_thr: 0.0 ## min throttle as a fraction between -1,1
 
@@ -60,7 +60,7 @@ Map_config:
 wp_radius: 2.0 ## waypoint radius for terminal condition
 lookahead: 3.0  # lookahead on scenario by scenario basis
 track_width: 1.0
-generate_costmap_from_path: True
+generate_costmap_from_path: 2
 speed_limit: 10.0
 debug: False
 
