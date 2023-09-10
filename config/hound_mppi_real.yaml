@@ -2,7 +2,7 @@ Cost_config:
   goal_w: 1.0 ## weight on the terminal goal cost
   speed_w: 0.1 ## weight with which target speed will be tracked
   roll_w: 10.0 ## weight on roll index but also controls for lateral acceleration limits.. something to think about is how longitudenal accel affects accel limits..
-  lethal_w: 10.0 # weight on lethal stuff. Note that this is applied to a piecewise function which is :  1/cos(surface angle) for SA < thresh and 1000 for SA > thresh
+  lethal_w: 1.0 # weight on lethal stuff. Note that this is applied to a piecewise function which is :  1/cos(surface angle) for SA < thresh and 1000 for SA > thresh
   stop_w: 10000.0 ## weight on actually lethal things like people, trees, rocks and so on. Set to 1000.0 and query the min(Sampling.total_cost) > 1000.0 to know if all trajs are bad
   speed_target: 10.0 ## target speed in m/s
   critical_SA: 1.414 # 0.5 is the critical slope angle 1/cos(angle) is used for state cost evaluation
@@ -74,3 +74,4 @@ vehicle:
 
 use_speed_ctrl: False
 skip_points: 1
+elevation_multiplier: 1.0

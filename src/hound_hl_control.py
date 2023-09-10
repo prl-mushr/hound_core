@@ -43,6 +43,7 @@ class Hound_HL_Control:
         self.index = None
         self.map_cost = np.zeros( (self.map_size_px, self.map_size_px, 3), dtype=np.float32)
         self.grid_map = None
+        self.elevation_multiplier = Config["elevation_multiplier"]
         ## goal variables:
         self.goal = None
         self.goal_init = False
@@ -102,7 +103,7 @@ class Hound_HL_Control:
                     self.goal_init = False
                     ctrl = np.zeros(2)
                 else:
-                    ctrl = self.controller.update(self.state, self.goal, self.map_elev, self.map_norm, self.map_cost, self.map_cent, speed_limit)
+                    ctrl = self.controller.update(self.state, self.goal, self.map_elev*self.elevation_multiplier, self.map_norm, self.map_cost, self.map_cent, speed_limit)
                 self.state[15:17] = ctrl
                 self.send_ctrl(ctrl)
                 self.publish_markers(self.controller.print_states)

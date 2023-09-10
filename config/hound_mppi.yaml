@@ -74,3 +74,4 @@ vehicle:
 
 use_speed_ctrl: False
 skip_points: 100
+elevation_multiplier: 1.0

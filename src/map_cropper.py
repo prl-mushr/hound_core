@@ -11,7 +11,6 @@ def grid_map_callback(msg):
     index = layers.index("elevation")
     matrix = msg.data[index]
     map_elev = np.float32( cv2.flip( np.reshape( matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size), order="F", ).T, -1, ) )
-    map_elev = cv2.medianBlur(map_elev, 3)
     index = layers.index("variance")
     matrix = msg.data[index]
     map_var = np.float32( cv2.flip( np.reshape( matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size), order="F", ).T, -1, ) )
@@ -32,6 +31,9 @@ def grid_map_callback(msg):
         crop_point = (map_elev.shape[0] - crop_size)//2
         map_elev = map_elev[crop_point: -crop_point, crop_point: -crop_point]
         map_var = map_var[crop_point: -crop_point, crop_point: -crop_point]
+    map_elev = cv2.resize(map_elev, (256, 256))
+    map_elev = cv2.medianBlur(map_elev, 3)
+    map_elev = cv2.resize(map_elev, (64, 64))
     # add the elevation layer:
     matrix = cv2.flip(map_elev.T, -1)
     data_array = Float32MultiArray()
