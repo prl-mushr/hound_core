@@ -18,7 +18,7 @@ def HLC_cb(msg):
 	global high_level_time
 	high_level_time = time.time()
 
-def inpaint_cb(msg):
+def output_cb(msg):
 	global output_time
 	output_time = time.time()
 
@@ -32,13 +32,11 @@ def inpaint_cb(msg):
 
 	latency_avg = np.mean(np.array(latency_list))
 
-	latency_std = np.fabs(np.percentile(np.array(latency_list), 2.5) - np.percentile(np.array(latency_list), 97.5))/2
-
-	print("latency = {} ms, std = {} ms".format(1e3*latency_avg, 1e3*latency_std))
+	print("latency = {} ms, std = {} ms".format(1e3*latency_avg))
 
 
-output_sub = rospy.Subscriber( '/mavros/manual_control/send', GridMap, raw_map_cb)
-hlc_sub = rospy.Subscriber( "", GridMap, crop_map_cb)
+output_sub = rospy.Subscriber( '/mavros/manual_control/send', ManualControl, output_cb)
+hlc_sub = rospy.Subscriber( "/low_level_controller/hound/control", AckermannDriveStamped, HLC_cb)
 
 while not rospy.is_shutdown():
 	time.sleep(0.1)
