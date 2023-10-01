@@ -26,29 +26,30 @@ class hal():
             print("no config found, make sure the config file path is correct")
             exit()
 
-        self.mavros_topic = config["mavros_topic"]
-        self.mavros_action = config["mavros_action"]
+        self.mavros_config = config["mavros"]
+        self.camera_config = config["camera"]
+        self.lidar_config = config["lidar"]
+        self.vesc_config = config["vesc"]
         self.mavros_hz = ROSTopicHz(3)
 
-        self.camera_topic = config["camera_topic"]
         self.camera_hz = ROSTopicHz(3)
 
-        sub_mavros = rospy.Subscriber(self.mavros_topic, rospy.AnyMsg, self.mavros_hz.callback_hz)
-        sub_camera = rospy.Subscriber(self.camera_topic, rospy.AnyMsg, self.camera_hz.callback_hz)
+        sub_mavros = rospy.Subscriber(self.mavros_config["monitor_topic"], rospy.AnyMsg, self.mavros_hz.callback_hz)
+        sub_camera = rospy.Subscriber(self.camera_config["monitor_topic"], rospy.AnyMsg, self.camera_hz.callback_hz)
 
-        sub_channel = rospy.Subscriber("mavros/rc/in", RCIn, self.channel_cb, queue_size=2)
-        sub_voltage = rospy.Subscriber("sensors/core", VescStateStamped, self.voltage_cb, queue_size = 1)
-        sub_gps = rospy.Subscriber("/mavros/gpsstatus/gps1/raw", GPSRAW, self.GPS_cb, queue_size = 1)
-        pose_sub = rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.pose_cb, queue_size=1)
-        scan_sub = rospy.Subscriber("/scan", LaserScan, self.scan_cb)
-        mavros_status_sub = rospy.Subscriber("/mavros/state", State, self.mavros_status_cb, queue_size=10)
+        sub_channel = rospy.Subscriber(self.mavros_config["channel_topic"], RCIn, self.channel_cb, queue_size=2)
+        sub_voltage = rospy.Subscriber(self.vesc_config["topic"], VescStateStamped, self.voltage_cb, queue_size = 1)
+        sub_gps = rospy.Subscriber(self.mavros_config["gps_topic"], GPSRAW, self.GPS_cb, queue_size = 1)
+        pose_sub = rospy.Subscriber(self.mavros_config["pose_topic"], PoseStamped, self.pose_cb, queue_size=1)
+        scan_sub = rospy.Subscriber(self.lidar_config["scan_topic"], LaserScan, self.scan_cb)
+        mavros_status_sub = rospy.Subscriber(self.mavros_config["state_topic"], State, self.mavros_status_cb, queue_size=10)
         self.last_map_clear = time.time()
         
         self.lp = lg.LaserProjection()
-        self.pc_pub = rospy.Publisher("converted_pc", PointCloud2, queue_size=1)
+        self.pc_pub = rospy.Publisher(self.lidar_config["pc_topic"], PointCloud2, queue_size=1)
         self.last_pose_time = None
 
-        self.notification_pub = rospy.Publisher("/mavros/play_tune", PlayTuneV2, queue_size =10)
+        self.notification_pub = rospy.Publisher(self.mavros_config["notification_topic"], PlayTuneV2, queue_size =10)
         
         self.bagdir = config["bagdir"]
         record_command_file = config["record_command_file"]
@@ -61,12 +62,11 @@ class hal():
         self.recording_state = False
         self.rosbag_proc = None
         self.GPS_status = False
-        self.mavros_action = config["mavros_action"]
 
-        self.diagnostics_pub = rospy.Publisher("/SOC_diagnostics", DiagnosticArray, queue_size=2)
+        self.diagnostics_pub = rospy.Publisher(config["diagnostics_topic"], DiagnosticArray, queue_size=2)
         
         time.sleep(15)
-        os.system(self.mavros_action) ## first attempt at getting mavros to run @50 Hz
+        os.system(self.mavros_config["failure_action"]) ## first attempt at getting mavros to run @50 Hz
         self.main_loop()
 
     def publish_notification(self, message):
@@ -153,14 +153,13 @@ class hal():
         br.sendTransform((pos.x, pos.y, pos.z),
                          (rot.x, rot.y, rot.z, rot.w),
                          msg.header.stamp,
-                         "base_link",
+                         self.mavros_config["frame"],
                          "map")
-        ## use (0.15, 0.047, 0.02) for D455, (0.15, 0.025, 0.02) for d435
-        br.sendTransform((0.15, 0.047, 0.02),
-                         (0, 0, 0, 1),
+        br.sendTransform(tuple(self.camera_config["pos"]),
+                         tuple(self.camera_config["rot"]),
                          msg.header.stamp,
-                         "camera_depth_frame",
-                         "base_link")
+                         self.camera_config["depth_frame"],
+                         self.mavros_config["frame"])
 
         br.sendTransform((0, 0, 0),
                          (0, 0, 0, 1),
@@ -171,14 +170,14 @@ class hal():
         br.sendTransform((0, 0, 0),
                          (-0.5, 0.5, -0.5, 0.5),
                          msg.header.stamp,
-                         "camera_depth_optical_frame",
-                         "camera_depth_frame")
+                         self.camera_config["depth_optical_frame"],
+                         self.camera_config["depth_frame"])
 
-        br.sendTransform((0.04, 0, -0.02),
-                         (0, 0, 0, 1),
+        br.sendTransform(tuple(self.lidar_config["pos"]),
+                         tuple(self.lidar_config["rot"]),
                          msg.header.stamp,
-                         "laser_frame",
-                         "base_link")
+                         self.lidar_config["frame"],
+                         self.mavros_config["frame"])
         self.last_pose_time = msg.header.stamp
 
     def mavros_status_cb(self, msg):
@@ -225,15 +224,15 @@ class hal():
             try:
                 mavros_freq = self.mavros_hz.get_hz()
                 mavros_freq = mavros_freq[0]
-                if(mavros_freq >= 40 and self.mavros_init==False):
+                if(mavros_freq >= 0.8*self.mavros_config["fps"] and self.mavros_init==False):
                     self.mavros_init = True
                     self.publish_notification("low level ready")
-                if mavros_freq < 40:
+                if mavros_freq < 0.8*self.mavros_config["fps"]:
                     self.mavros_init = False
-                    os.system(self.mavros_action)
+                    os.system(self.mavros_config["failure_action"])
                 camera_freq = self.camera_hz.get_hz()
                 camera_freq = camera_freq[0]
-                if(camera_freq > 20 and self.camera_init==False):
+                if(camera_freq > 0.8*self.camera_config["fps"] and self.camera_init==False):
                     self.camera_init = True
                     self.publish_notification("camera ready")
                     print("camera READY")
@@ -244,7 +243,3 @@ class hal():
 if __name__ == '__main__':
     rospy.init_node("HAL_9000", anonymous=True)
     hal_obj = hal("/root/catkin_ws/src/hound_core/config/HAL.yaml")
-
-
-
-

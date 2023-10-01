@@ -13,3 +13,4 @@ accel_gain: 1.0
 roll_gain: 1.0
 steer_slack: 0.3
 LPF_tau: 0.5
+liftoff_oversteer: true

@@ -14,3 +14,4 @@ roll_gain: 0.33
 steer_slack: 0.2
 LPF_tau: 0.5
 throttle_delta: 0.02
+liftoff_oversteer: true

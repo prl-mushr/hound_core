@@ -39,6 +39,7 @@ public:
   bool safe_mode;
 
   float accel_gain, roll_gain, steer_slack, LPF_tau;
+  bool liftoff_oversteer;
   
   ros::Rate *sleep_rate;
 
@@ -129,6 +130,10 @@ public:
     if(not nh.getParam("/throttle_delta", throttle_delta))
     {
       throttle_delta = 0.02;
+    }
+    if(not nh.getParam("/liftoff_oversteer", liftoff_oversteer))
+    {
+      liftoff_oversteer = true;
     }
 
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
@@ -246,10 +251,7 @@ public:
     throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
 
-    // if(wheelspeed < 2) // this is to prevent large changes at very low rpm values: we get motor cogging if the change is too large.
-    // {
     throttle_duty = std::min(std::max(last_throttle - throttle_delta, throttle_duty), last_throttle + throttle_delta);
-    // }
     last_throttle = throttle_duty;
     return throttle_duty;
   }
@@ -260,15 +262,20 @@ public:
     float whspd2 = std::max(1.0f, wheelspeed); // this is to protect against a finite/0 situation in the calculation below
     whspd2 *= whspd2;
     
-    float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because dude if your Az is negative you're already fucked.
-    Aylim = sqrtf(std::max(Aylim*Aylim - accBF.x*accBF.x, 0.0f));
-    float steering_limit = fabs(atan2f(wheelbase * Aylim, whspd2)) + steer_slack*steering_max;
-    // this prevents the car from rolling over.
-    
-    if(fabs(steering_setpoint) > steering_limit && steering_setpoint*rotBF.z >= -0.1)
+    float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because god help you if your Az is already negative.
+    if(liftoff_oversteer)
+    {
+      Aylim = sqrtf(std::max(Aylim*Aylim - accBF.x*accBF.x, 0.0f)); // slightly conservative estimate of Ay limit; this is done more or less specifically for the HOUND
+    }
+    float steering_input_temp = steering_setpoint;
+    float steering_limit_max =  atan2f(wheelbase * (Aylim - 9.81*sinf(rpy.x)), whspd2) + steer_slack*steering_max;
+    float steering_limit_min = -atan2f(wheelbase * (Aylim + 9.81*sinf(rpy.x)), whspd2) - steer_slack*steering_max;
+    // static limiter
+    steering_setpoint = std::min(steering_limit_max, std::max(steering_limit_min, steering_setpoint));
+
+    if(fabs(steering_setpoint - steering_input_temp) > 0.01)
     {
       intervention = true;
-      steering_setpoint = std::min(steering_limit, std::max(-steering_limit, steering_setpoint));
     }
     
     // this brings the car back from the roll-over.
