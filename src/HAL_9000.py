@@ -16,6 +16,7 @@ import laser_geometry.laser_geometry as lg
 import tf
 import numpy as np
 import time
+import platform
 
 class hal():
     def __init__(self, config_file):
@@ -25,6 +26,9 @@ class hal():
         if(config == None):
             print("no config found, make sure the config file path is correct")
             exit()
+
+        self.on_jetson = platform.machine() == 'aarch64'
+        self.initial_pos = None
 
         self.mavros_config = config["mavros"]
         self.camera_config = config["camera"]
@@ -150,6 +154,13 @@ class hal():
         br = tf.TransformBroadcaster()
         pos = msg.pose.position
         rot = msg.pose.orientation
+        
+        if self.initial_pos is None:
+            self.initial_pos = pos
+        pos.x -= self.initial_pos.x
+        pos.y -= self.initial_pos.y
+        pos.z -= self.initial_pos.z
+
         br.sendTransform((pos.x, pos.y, pos.z),
                          (rot.x, rot.y, rot.z, rot.w),
                          msg.header.stamp,
@@ -187,6 +198,8 @@ class hal():
             self.last_map_clear = time.time()
 
     def publish_diagnostics(self):
+        if not self.on_jetson:
+            return
         diagnostics_array = DiagnosticArray()
         diagnostics_status = DiagnosticStatus()
         diagnostics_status.name = 'SOC'
