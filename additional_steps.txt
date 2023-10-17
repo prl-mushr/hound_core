@@ -53,8 +53,6 @@ cd ~/catkin_ws/ && catkin build
 git clone https://github.com/rogersce/cnpy.git
 cd cnpy && mkdir build && cd build && cmake .. && make -j2 && sudo make install
 
-the realsense steps in the mushr_install_hw_drivers.bash need to be done again for some reason. Were they not being done correctly the first time around?
-
 for AGX orin/orin devices:
 https://forums.developer.nvidia.com/t/failed-to-run-docker-container-in-privileged-mode-on-jetson-agx-orin/220110
 

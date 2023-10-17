@@ -16,7 +16,7 @@ sleep 2
 rosparam set use_sim_time true
 
 # Run your Python script
-python ~/catkin_ws/src/hound_core/src/BeamNG_hound_ros.py --hal_config_name 'unit_test.yaml' --host_IP "$1" &
+python3 ~/catkin_ws/src/hound_core/src/BeamNG_hound_ros.py --hal_config_name 'unit_test.yaml' --host_IP "$1" &
 
 # Wait for your Python script to finish (you may need to adjust the sleep time)
 sleep 5
