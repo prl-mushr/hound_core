@@ -2,7 +2,7 @@
    <!-- Stereo Odometry -->   
    <!-- <node pkg="tf" type="static_transform_publisher" name="camera_to_base" args="0 0 0 -1.57079632679 0 0 base_link camera_infra1_optical_frame 100"/> -->
 
-   <node pkg="rtabmap_ros" type="rgbd_odometry" name="rgbd_odometry" output="screen">
+   <node pkg="rtabmap_odom" type="rgbd_odometry" name="rgbd_odometry" output="screen">
       <remap from="rgb/image"       to="/camera/infra1/image_rect_raw"/>
       <remap from="rgb/camera_info" to="/camera/infra1/camera_info"/>
       <remap from="depth/image"     to="/camera/depth/image_rect_raw"/>

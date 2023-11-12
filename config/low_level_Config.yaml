@@ -1,4 +1,4 @@
-erpm_gain: 3500.0
+erpm_gain: 3166.0
 steering_max: 0.488
 wheelbase: 0.29
 cg_height: 0.15
@@ -6,11 +6,11 @@ wheelspeed_max: 17.0
 nominal_voltage: 14.8
 motor_kv: 3930
 speed_control_kp: 1.0
-speed_control_ki: 1.0
+speed_control_ki: 0.05
 safe_mode: true
 track_width: 0.25
 accel_gain: 1.0
 roll_gain: 1.0
-steer_slack: 0.3
+steer_slack: 0.5
 LPF_tau: 0.5
 liftoff_oversteer: true

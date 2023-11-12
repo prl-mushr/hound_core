@@ -177,7 +177,7 @@ public:
     rotBF = rotBFmeas;
 
     rpy_from_quat(imu->orientation);
-
+    // TODO: these two if conditions can be combined
     if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
     {
       sleep_rate->sleep();
@@ -206,7 +206,10 @@ public:
 
       // float wheelspeed_setpoint = speed_limiter(lidar scans); 
       bool intervention = false; // test code-block. Ref: https://answers.ros.org/question/262236/publishing-diagnostics-from-c/
-      steering_setpoint = steering_limiter(steering_setpoint, intervention);
+      if(safe_mode)
+      {
+        steering_setpoint = steering_limiter(steering_setpoint, intervention);
+      }
       float throttle_duty = speed_controller(wheelspeed_setpoint);
       pub_ctrl(steering_setpoint / steering_max, throttle_duty);
       
@@ -223,8 +226,18 @@ public:
       speed_error.key = "speed_error";
       speed_error.value = std::to_string(wheelspeed_setpoint - wheelspeed);
 
+      diagnostic_msgs::KeyValue steering_input;
+      steering_input.key = "steering_input";
+      steering_input.value = std::to_string(steering_setpoint);
+
+      diagnostic_msgs::KeyValue wheelspeed_input;
+      wheelspeed_input.key = "wheelspeed_input";
+      wheelspeed_input.value = std::to_string(wheelspeed_setpoint);
+
       robot_status.values.push_back(steering);
       robot_status.values.push_back(speed_error);
+      robot_status.values.push_back(steering_input);
+      robot_status.values.push_back(wheelspeed_input);
       dia_array.status.push_back(robot_status);
       diagnostic_pub.publish(dia_array);
     }

@@ -35,7 +35,7 @@ class mppi:
         self.print_states = None
 
     def set_hard_limit(self, hard_limit):
-        self.Sampling_config["max_thr"] = hard_limit / self.Dynamics_config["throttle_to_wheelspeed"]
+        self.Sampling_config["max_thr"] = min(hard_limit / self.Dynamics_config["throttle_to_wheelspeed"], self.Sampling_config["max_thr"])
         self.mppi.Sampling.max_thr = torch.tensor(self.Sampling_config["max_thr"], device=self.device, dtype=self.dtype)
 
     def update(self, state, goal, map_elev, map_norm, map_cost, map_cent, speed_limit):
@@ -66,7 +66,7 @@ class mppi:
                 self.print_states,
                 state[:2] - map_cent[:2],
                 goal[:2] - map_cent[:2],
-                cv2.applyColorMap(((map_cost)*255).astype(np.uint8), cv2.COLORMAP_JET),
+                cv2.applyColorMap(((map_elev + 4)*255/8).astype(np.uint8), cv2.COLORMAP_JET),
                 1 / self.map_res,
             )
 

@@ -155,11 +155,11 @@ class hal():
         pos = msg.pose.position
         rot = msg.pose.orientation
         
-        if self.initial_pos is None:
-            self.initial_pos = pos
-        pos.x -= self.initial_pos.x
-        pos.y -= self.initial_pos.y
-        pos.z -= self.initial_pos.z
+        # if self.initial_pos is None:
+        #     self.initial_pos = pos
+        # pos.x -= self.initial_pos.x
+        # pos.y -= self.initial_pos.y
+        # pos.z -= self.initial_pos.z
 
         br.sendTransform((pos.x, pos.y, pos.z),
                          (rot.x, rot.y, rot.z, rot.w),

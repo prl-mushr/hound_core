@@ -20,6 +20,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 class Hound_HL_Control:
     def __init__(self, Config):
+        self.debug = Config["debug"]
         self.Dynamics_config = Config["Dynamics_config"]
         self.Cost_config = Config["Cost_config"]
         self.Sampling_config = Config["Sampling_config"]
@@ -39,6 +40,7 @@ class Hound_HL_Control:
         self.map_elev = None
         self.map_norm = None
         self.map_cent = None
+        self.map_elev = None
         self.layers = None
         self.index = None
         self.map_cost = np.zeros( (self.map_size_px, self.map_size_px, 3), dtype=np.float32)
@@ -56,6 +58,7 @@ class Hound_HL_Control:
         self.lookahead = Config["lookahead"]
         self.odom_update = False
         self.looping = False
+        self.loop_dt = 20
 
         ## initialize the controller:
         self.controller = mppi(Config)
@@ -96,7 +99,7 @@ class Hound_HL_Control:
                 self.process_grid_map()
                 speed_limit = np.sqrt((self.Dynamics_config["D"]*9.8)/self.path_poses[self.current_wp_index, 3])
                 speed_limit = min(speed_limit, self.speed_limit)
-                lookahead = np.clip(speed_limit, self.lookahead, 6.0) ## speed dependent lookahead
+                lookahead = np.clip(speed_limit, self.lookahead/2, self.lookahead) ## speed dependent lookahead
                 self.goal, terminate, self.current_wp_index = self.update_goal(self.goal, np.copy(self.state[:3]), self.path_poses, self.current_wp_index, lookahead, wp_radius=self.wp_radius, looping=self.looping)
                 self.controller.set_hard_limit(self.hard_limit)
                 if(terminate):
@@ -108,8 +111,9 @@ class Hound_HL_Control:
                 self.send_ctrl(ctrl)
                 self.publish_markers(self.controller.print_states)
                 self.odom_update = False
-                dt = time.time() - now
-                #print(dt*1e3)
+                self.loop_dt = 1e3*(time.time() - now)
+                if(self.debug):
+                    print("loop_dt: ",self.loop_dt)
             self.publish_diagnostics()
 
     def publish_diagnostics(self):
@@ -123,6 +127,7 @@ class Hound_HL_Control:
         diagnostics_status.values.append(KeyValue(key="state_init", value=str(self.state_init)))
         diagnostics_status.values.append(KeyValue(key="map_init", value=str(self.map_init)))
         diagnostics_status.values.append(KeyValue(key="goal_init", value=str(self.goal_init)))
+        diagnostics_status.values.append(KeyValue(key="delta_t", value=str(self.loop_dt)))
         diagnostics_status.values.append(KeyValue(key="all_bad", value=str(self.controller.all_bad)))
 
         diagnostics_array.status.append(diagnostics_status)
@@ -250,15 +255,17 @@ class Hound_HL_Control:
             self.index = self.layers.index("comp_grid_map")
             # self.color_index = self.layers.index("color")
         cent = self.grid_map.info.pose.position
-        self.map_cent = np.array([cent.x, cent.y, cent.z])
-
-        if not self.map_init:
-            # initialize the map and set the "one time" variables:
+        matrix = self.grid_map.data[self.index]
+        self.temp_map_elev = np.float32( cv2.flip( np.reshape( matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size), order="F", ).T, -1, ) )
+        if np.any(np.isnan(self.temp_map_elev)):
+            self.map_init = False
+            print("got nan")
+        else:
+            self.map_cent = np.array([cent.x, cent.y, cent.z])
             self.map_init = True
 
     def process_grid_map(self):
-        matrix = self.grid_map.data[self.index]
-        self.map_elev = np.float32( cv2.flip( np.reshape( matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size), order="F", ).T, -1, ) )
+        self.map_elev = np.copy(self.temp_map_elev)
         ## template code for how to get color image:
         # matrix = self.grid_map.data[self.color_index]
         # self.map_color = np.transpose(cv2.flip(np.reshape(matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size,3), order='F'), -1), axes=[1,0,2])
@@ -374,7 +381,7 @@ class Hound_HL_Control:
 
 if __name__ == "__main__":
     rospy.init_node("hl_controller")
-    config_name = "hound_mppi_real.yaml"
+    config_name = "hound_mppi.yaml"
     config_path = "/root/catkin_ws/src/hound_core/config/" + config_name
     with open(config_path) as f:
         Config = yaml.safe_load(f)
