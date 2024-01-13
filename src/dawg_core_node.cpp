@@ -983,7 +983,7 @@ public:
 int main(int argc, char **argv)
 {
   //initialize node
-  ros::init(argc, argv, "hound_core");
+  ros::init(argc, argv, "dawg_core");
   ros::NodeHandle nh("~");
   hound_core hc(nh);
   while(ros::ok())

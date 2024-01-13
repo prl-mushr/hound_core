@@ -36,7 +36,7 @@ def output_cb(msg):
 
 
 output_sub = rospy.Subscriber( '/mavros/manual_control/send', ManualControl, output_cb)
-hlc_sub = rospy.Subscriber( "/low_level_controller/hound/control", AckermannDriveStamped, HLC_cb)
+hlc_sub = rospy.Subscriber( "/low_level_controller/dawg/control", AckermannDriveStamped, HLC_cb)
 
 while not rospy.is_shutdown():
 	time.sleep(0.1)

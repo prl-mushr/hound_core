@@ -1,18 +1,18 @@
 <launch>
-    <node pkg="hound_core" type="HAL_9000.py" name="HAL" output="screen"/>
+    <node pkg="dawg_core" type="HAL_9000.py" name="HAL" output="screen"/>
     
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 hound_core apm.launch" name="apm_timed" output="screen"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="30 hound_core X4.launch" name="lidar_timed" output="screen"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="50 hound_core vesc_driver_node.launch" name="vesc_timed" output="screen"/>
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="70 hound_core realsense_d455_HOUND.launch" name="camera_timed" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 dawg_core apm.launch" name="apm_timed" output="screen"/>
+   <!-- <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="30 dawg_core X4.launch" name="lidar_timed" output="screen"/> -->
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="50 dawg_core vesc_driver_node.launch" name="vesc_timed" output="screen"/>
+   <!--  <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="70 dawg_core realsense_d455_HOUND.launch" name="camera_timed" output="screen"/> -->
     
-    <arg name="low_level_Config" default="$(find hound_core)/config/low_level_Config_real.yaml" />
+    <arg name="low_level_Config" default="$(find dawg_core)/config/low_level_Config_real.yaml" />
     <rosparam file="$(arg low_level_Config)" command="load" />
     
-    <node pkg="hound_core" type="hound_ll_control" name="low_level_controller" output="screen"/>
-    <node pkg="hound_core" type="osm_router.py" name="router" output="screen"/>
+    <node pkg="dawg_core" type="dawg_ll_control" name="low_level_controller" output="screen"/>
+    <node pkg="dawg_core" type="osm_router.py" name="router" output="screen"/>
 
-    <node pkg="hound_core" type="vesc_to_odom.py" name="wheel_odom" output="log"/>
+    <node pkg="dawg_core" type="vesc_to_odom.py" name="wheel_odom" output="log"/>
 
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="15 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="log"/>
     <!-- <include file="$(find ntrip_ros)/launch/ntripclient.launch"/> -->

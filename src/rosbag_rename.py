@@ -21,7 +21,7 @@ def rename_rosbags_in_folder(folder_path):
             formatted_datetime = datetime.datetime.fromtimestamp(mtime).strftime("%Y_%m_%d_%H_%M_%S")
 
             # Construct the new filename with the format "hound_{date-time}.bag"
-            new_filename = f"hound_{formatted_datetime}.bag"
+            new_filename = f"dawg_{formatted_datetime}.bag"
 
             # Get the full new file path
             new_file_path = os.path.join(folder_path, new_filename)

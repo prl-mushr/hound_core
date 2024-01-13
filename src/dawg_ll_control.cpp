@@ -411,7 +411,7 @@ public:
 int main(int argc, char **argv)
 {
   //initialize node
-  ros::init(argc, argv, "hound_ll_control");
+  ros::init(argc, argv, "dawg_ll_control");
   ros::NodeHandle nh("~");
   ll_controller ll_ctrl(nh);
   while(ros::ok())

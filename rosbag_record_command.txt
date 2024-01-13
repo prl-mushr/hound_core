@@ -55,7 +55,7 @@
 /scan
 /sensors/core
 /control_limits
-/low_level_controller/hound/control
+/low_level_controller/dawg/control
 /low_level_diagnostics
 /high_level_diagnostics
 /SOC_diagnostics

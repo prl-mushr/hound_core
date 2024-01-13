@@ -29,7 +29,7 @@ class BeamNGROS:
         Map_config["map_res"] = Map_config["map_res_hitl"] ## this is only done for HITL simulation.
         map_size = Map_config["map_size"]
 
-        WP_file = "/root/catkin_ws/src/hound_core/waypoints/{}.npy".format(Config["scenario"])
+        WP_file = "/root/catkin_ws/src/dawg_core/waypoints/{}.npy".format(Config["scenario"])
         self.target_WP = np.load(WP_file)
         start_pos = self.target_WP[0,:3]
         start_quat = self.target_WP[0,3:]
@@ -409,11 +409,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     config_name = args.config_name
-    config_path = "/root/catkin_ws/src/hound_core/config/{}".format(config_name)
+    config_path = "/root/catkin_ws/src/dawg_core/config/{}".format(config_name)
     with open(config_path) as f:
         Config = yaml.safe_load(f)
     hal_config_name = args.hal_config_name
-    hal_config_path = "/root/catkin_ws/src/hound_core/config/{}".format(hal_config_name)
+    hal_config_path = "/root/catkin_ws/src/dawg_core/config/{}".format(hal_config_name)
     with open(hal_config_path) as f:
         hal_Config = yaml.safe_load(f)
     bingchilling = BeamNGROS(Config, hal_Config, args)

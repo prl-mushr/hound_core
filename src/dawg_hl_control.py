@@ -381,8 +381,8 @@ class Hound_HL_Control:
 
 if __name__ == "__main__":
     rospy.init_node("hl_controller")
-    config_name = "hound_mppi.yaml"
-    config_path = "/root/catkin_ws/src/hound_core/config/" + config_name
+    config_name = "dawg_mppi.yaml"
+    config_path = "/root/catkin_ws/src/dawg_core/config/" + config_name
     with open(config_path) as f:
         Config = yaml.safe_load(f)
     planner = Hound_HL_Control(Config)
