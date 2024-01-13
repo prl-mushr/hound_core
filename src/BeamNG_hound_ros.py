@@ -117,7 +117,7 @@ class BeamNGROS:
                 self.publish_camera()
                 self.publish_lidar()
                 self.publish_clock()
-                self.publish_hound_specific()
+                self.publish_dawg_specific()
                 self.bng_interface.send_ctrl(self.ctrl, speed_ctrl=self.use_speed_ctrl, speed_max = self.max_speed, Kp=1, Ki=0.05, Kd=0.0, FF_gain=0.0)
             else:
                 self.bng_interface.reset()
@@ -127,7 +127,7 @@ class BeamNGROS:
                 self.reset = False
         self.bng_interface.bng.close()
 
-    def publish_hound_specific(self):
+    def publish_dawg_specific(self):
         timestamp = rospy.Time.from_sec(self.bng_interface.timestamp)
         avg_wheelspeed = self.bng_interface.avg_wheelspeed
         # publish dummy rc message and state message:
@@ -404,7 +404,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--remote", type=bool, default=True, help="whether to connect to a remote beamng server")
     parser.add_argument("--host_IP", type=str, default="169.254.216.9", help="host ip address if using remote beamng")
-    parser.add_argument("--config_name", type=str, default="hound_mppi.yaml", help="name of the config file to use")
+    parser.add_argument("--config_name", type=str, default="dawg_mppi.yaml", help="name of the config file to use")
     parser.add_argument("--hal_config_name", type=str, default="HAL.yaml", help="name of config used by HAL")
 
     args = parser.parse_args()

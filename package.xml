@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>hound_core</name>
+  <name>dawg_core</name>
   <version>0.0.0</version>
   <description>The dawg_core package</description>
 

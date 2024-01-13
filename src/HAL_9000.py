@@ -110,7 +110,7 @@ class hal():
         files.sort(key = lambda x: os.path.getmtime(self.bagdir+'/'+x))
         for i in range(len(files)):
             source = self.bagdir + '/' + files[i]
-            dest = self.bagdir + '/' + 'hound_' + str(i) + '.bag'
+            dest = self.bagdir + '/' + 'dawg_' + str(i) + '.bag'
             os.rename(source, dest)
     
     def voltage_cb(self, msg):
@@ -255,4 +255,4 @@ class hal():
 
 if __name__ == '__main__':
     rospy.init_node("HAL_9000", anonymous=True)
-    hal_obj = hal("/root/catkin_ws/src/hound_core/config/HAL.yaml")
+    hal_obj = hal("/root/catkin_ws/src/dawg_core/config/HAL.yaml")

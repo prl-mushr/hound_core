@@ -49,7 +49,7 @@ public:
     sub_channel = nh.subscribe("/mavros/rc/in", 1, &ll_controller::channel_cb, this);
     sub_mode = nh.subscribe("/mavros/state", 1, &ll_controller::mode_cb, this);
     sub_imu = nh.subscribe("/mavros/imu/data_raw", 1, &ll_controller::imu_cb, this);
-    sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
+    sub_auto_control = nh.subscribe("dawg/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
     limits_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("/control_limits", 1);
@@ -278,7 +278,7 @@ public:
     float Aylim = track_width * 0.5f * std::max(1.0f, fabs(accBF.z)) / cg_height; // taking fabs(Az) because god help you if your Az is already negative.
     if(liftoff_oversteer)
     {
-      Aylim = sqrtf(std::max(Aylim*Aylim - accBF.x*accBF.x, 0.0f)); // slightly conservative estimate of Ay limit; this is done more or less specifically for the HOUND
+      Aylim = sqrtf(std::max(Aylim*Aylim - accBF.x*accBF.x, 0.0f)); // slightly conservative estimate of Ay limit; this is done more or less specifically for the dawg
     }
     float steering_input_temp = steering_setpoint;
     float steering_limit_max =  atan2f(wheelbase * (Aylim - 9.81*sinf(rpy.x)), whspd2) + steer_slack*steering_max;

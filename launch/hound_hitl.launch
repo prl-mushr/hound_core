@@ -2,7 +2,7 @@
     <node pkg="dawg_core" type="HAL_9000.py" name="HAL" output="screen"/>
     <arg name="low_level_Config" default="$(find dawg_core)/config/low_level_Config.yaml" />
     <rosparam file="$(arg low_level_Config)" command="load" />
-    <node pkg="dawg_core" type="hound_ll_control" name="low_level_controller" output="screen"/>
+    <node pkg="dawg_core" type="dawg_ll_control" name="low_level_controller" output="screen"/>
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="15 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="log"/>
-    <node pkg="dawg_core" type="hound_hl_control.py" name="high_level_controller" output="screen"/>
+    <node pkg="dawg_core" type="dawg_hl_control.py" name="high_level_controller" output="screen"/>
 </launch>

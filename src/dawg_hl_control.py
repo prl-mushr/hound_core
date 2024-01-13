@@ -2,7 +2,7 @@
 import rospy
 import cv2
 import numpy as np
-from hound_mppi import mppi
+from dawg_mppi import mppi
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import Odometry, Path as navPath
 from sensor_msgs.msg import Imu
@@ -18,7 +18,7 @@ import torch
 from Bezier import *
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
-class Hound_HL_Control:
+class dawg_HL_Control:
     def __init__(self, Config):
         self.debug = Config["debug"]
         self.Dynamics_config = Config["Dynamics_config"]
@@ -73,7 +73,7 @@ class Hound_HL_Control:
         self.large_dt = False
 
         ## set up publishers:
-        self.control_pub = rospy.Publisher( "low_level_controller/hound/control", AckermannDriveStamped, queue_size=1)
+        self.control_pub = rospy.Publisher( "low_level_controller/dawg/control", AckermannDriveStamped, queue_size=1)
         self.marker_pub = rospy.Publisher("marker", MarkerArray, queue_size=1)
         self.reset_pub = rospy.Publisher("/simulation_reset", AckermannDriveStamped, queue_size=2)
         self.interpolated_path_pub = rospy.Publisher("/interpolate_path", navPath, latch=True, queue_size=2)
@@ -385,5 +385,5 @@ if __name__ == "__main__":
     config_path = "/root/catkin_ws/src/dawg_core/config/" + config_name
     with open(config_path) as f:
         Config = yaml.safe_load(f)
-    planner = Hound_HL_Control(Config)
+    planner = dawg_HL_Control(Config)
     rospy.spin()

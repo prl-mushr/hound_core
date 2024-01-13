@@ -130,7 +130,7 @@ public:
 };
 
 
-class hound_core
+class dawg_core
 {
 public:
   ros::Subscriber sub_depth_image, sub_cam_info, sub_pose, sub_scan, sub_path;
@@ -184,7 +184,7 @@ public:
   float delta_curvature_cost, delta_length_cost;
   float last_steering, last_speed, speed_meas;
 
-  hound_core(ros::NodeHandle &nh) // constructor
+  dawg_core(ros::NodeHandle &nh) // constructor
   {
     cam_init = false;
     pose_init = false;
@@ -196,61 +196,61 @@ public:
     path_received = false;
 
 
-    sub_depth_image = nh.subscribe("image", 1, &hound_core::depth_image_cb, this);
-    sub_cam_info = nh.subscribe("camera_info", 10, &hound_core::cam_info_cb, this);
-    sub_pose = nh.subscribe("pose", 1, &hound_core::pose_cb, this);
-    sub_scan = nh.subscribe("scan", 1, &hound_core::scan_cb, this);
-    sub_path = nh.subscribe("path", 1, &hound_core::path_cb, this);
+    sub_depth_image = nh.subscribe("image", 1, &dawg_core::depth_image_cb, this);
+    sub_cam_info = nh.subscribe("camera_info", 10, &dawg_core::cam_info_cb, this);
+    sub_pose = nh.subscribe("pose", 1, &dawg_core::pose_cb, this);
+    sub_scan = nh.subscribe("scan", 1, &dawg_core::scan_cb, this);
+    sub_path = nh.subscribe("path", 1, &dawg_core::path_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
 
-    if(not nh.getParam("hound/cam_pitch",cam_pitch))
+    if(not nh.getParam("dawg/cam_pitch",cam_pitch))
     {
       cam_pitch = 0;
     }
-    if(not nh.getParam("hound/depth_err_coeff", depth_err_coeff))
+    if(not nh.getParam("dawg/depth_err_coeff", depth_err_coeff))
     {
       depth_err_coeff = 0.004f; 
     }
-    if(not nh.getParam("hound/max_height", max_height))
+    if(not nh.getParam("dawg/max_height", max_height))
     {
       max_height = 0.5;
     }
-    if(not nh.getParam("hound/min_height", min_height))
+    if(not nh.getParam("dawg/min_height", min_height))
     {
       min_height = -1.3;
     }
-    if(not nh.getParam("hound/costmap_length_m", costmap_length_m))
+    if(not nh.getParam("dawg/costmap_length_m", costmap_length_m))
     {
       costmap_length_m = 20;
     }
-    if(not nh.getParam("hound/costmap_width_m", costmap_width_m))
+    if(not nh.getParam("dawg/costmap_width_m", costmap_width_m))
     {
       costmap_width_m = 20;
     }
-    if(not nh.getParam("hound/resolution_m", resolution_m))
+    if(not nh.getParam("dawg/resolution_m", resolution_m))
     {
       resolution_m = 0.1;
     }
-    if(not nh.getParam("hound/float_encoding_img", float_flag))
+    if(not nh.getParam("dawg/float_encoding_img", float_flag))
     {
       float_flag = false;
     }
-    if(not nh.getParam("hound/max_depth", max_depth))
+    if(not nh.getParam("dawg/max_depth", max_depth))
     {
       max_depth = 10.0f;
     }
-    if(not nh.getParam("hound/max_scan_range", max_scan_range))
+    if(not nh.getParam("dawg/max_scan_range", max_scan_range))
     {
       max_scan_range = 10.0f;
     }
-    if(not nh.getParam("hound/map_update_rate", map_update_rate))
+    if(not nh.getParam("dawg/map_update_rate", map_update_rate))
     {
       map_update_rate = 10;
     }
 
     for(int i = 0; i< 3; i++)
     {
-      if(not nh.getParam("hound/cam_pos_"+std::to_string(i), cam_pos[i]))
+      if(not nh.getParam("dawg/cam_pos_"+std::to_string(i), cam_pos[i]))
       {
         cam_pos[i] = 0;
       }
@@ -258,7 +258,7 @@ public:
 
     for(int i=0;i<3;i++)
     {
-      if(not nh.getParam("hound/lidar_pos_"+std::to_string(i), lidar_pos[i]))
+      if(not nh.getParam("dawg/lidar_pos_"+std::to_string(i), lidar_pos[i]))
       {
         lidar_pos[i] = 0;
       }
@@ -266,59 +266,59 @@ public:
 
     for(int i = 0;i < 4;i++)
     {
-      if(not nh.getParam("hound/roi_" + std::to_string(i), roi[i]))
+      if(not nh.getParam("dawg/roi_" + std::to_string(i), roi[i]))
       {
         roi[i] = 1.0f;
       }
       ROS_INFO("roi_%d = %f",i,roi[i]);
     }
 
-    if(not nh.getParam("hound/lookahead_distance", lookahead_distance))
+    if(not nh.getParam("dawg/lookahead_distance", lookahead_distance))
     {
       lookahead_distance = 5;
     }
 
-    if(not nh.getParam("hound/visualize_path", visualize_path))
+    if(not nh.getParam("dawg/visualize_path", visualize_path))
     {
       visualize_path = false;
     }
-    if(not nh.getParam("hound/lookahead_distance", lookahead_distance))
+    if(not nh.getParam("dawg/lookahead_distance", lookahead_distance))
     {
       lookahead_distance = 10;
     }
-    if(not nh.getParam("hound/car_width", car_width))
+    if(not nh.getParam("dawg/car_width", car_width))
     {
       car_width = 2;
     }
-    if(not nh.getParam("hound/car_length", car_length))
+    if(not nh.getParam("dawg/car_length", car_length))
     {
       car_length = 2;
     }
-    if(not nh.getParam("hound/goal_cost_multiplier", goal_cost_multiplier))
+    if(not nh.getParam("dawg/goal_cost_multiplier", goal_cost_multiplier))
     {
       goal_cost_multiplier = 5;
     }
-    if(not nh.getParam("hound/length_x", length_x))
+    if(not nh.getParam("dawg/length_x", length_x))
     {
       length_x = 7;
     }
-    if(not nh.getParam("hound/width_y", width_y))
+    if(not nh.getParam("dawg/width_y", width_y))
     {
       width_y = 3;
     }
-    if(not nh.getParam("hound/step_x", step_x))
+    if(not nh.getParam("dawg/step_x", step_x))
     {
       step_x = 5;
     }
-    if(not nh.getParam("hound/step_y", step_y))
+    if(not nh.getParam("dawg/step_y", step_y))
     {
       step_y = 5;
     }
-    if(not nh.getParam("hound/delta_curvature_cost", delta_curvature_cost))
+    if(not nh.getParam("dawg/delta_curvature_cost", delta_curvature_cost))
     {
       delta_curvature_cost = 10;
     }
-    if(not nh.getParam("hound/delta_length_cost", delta_length_cost))
+    if(not nh.getParam("dawg/delta_length_cost", delta_length_cost))
     {
       delta_length_cost = 10;
     }
@@ -341,8 +341,8 @@ public:
     last_speed = 0;
     last_steering = 0;
 
-    boost::thread proc_thread(&hound_core::mapping_run, this);
-    boost::thread plan_thread(&hound_core::planner_run, this);
+    boost::thread proc_thread(&dawg_core::mapping_run, this);
+    boost::thread plan_thread(&dawg_core::planner_run, this);
 
   }
 
@@ -985,7 +985,7 @@ int main(int argc, char **argv)
   //initialize node
   ros::init(argc, argv, "dawg_core");
   ros::NodeHandle nh("~");
-  hound_core hc(nh);
+  dawg_core hc(nh);
   while(ros::ok())
   {
     ros::spinOnce();
