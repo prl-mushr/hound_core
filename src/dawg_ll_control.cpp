@@ -54,17 +54,17 @@ public:
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
     limits_pub = nh.advertise<ackermann_msgs::AckermannDriveStamped>("/control_limits", 1);
 
-    guided = false;  
-    switch_pos = 0;  // 0 = manual, 1 = semi auto, 2 = auto
-    mode_init = false;
-    channel_init = false;
-    vesc_init = false;
-    imu_init = false;
-    auto_init = false;
-    delta_t = 0.02f;  // 50 Hz loop rate
+    guided         = false;  
+    switch_pos     = 0;  // 0 = manual, 1 = semi auto, 2 = auto
+    mode_init      = false;
+    channel_init   = false;
+    vesc_init      = false;
+    imu_init       = false;
+    auto_init      = false;
+    delta_t        = 0.02f;  // 50 Hz loop rate
     speed_integral = 0;
-    K_drag = 0;
-    last_throttle = 0;
+    K_drag         = 0;
+    last_throttle  = 0;
 
     if(not nh.getParam("/erpm_gain", erpm_gain))
     {
@@ -318,7 +318,7 @@ public:
 
   void channel_cb(const mavros_msgs::RCIn::ConstPtr rc)
   {
-
+    std::cout << "channel_cb" << std::endl;
     if(rc->channels.empty())
     {
         return;
