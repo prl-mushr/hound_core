@@ -177,13 +177,8 @@ public:
     rotBF = rotBFmeas;
 
     rpy_from_quat(imu->orientation);
-    // TODO: these two if conditions can be combined
-    if(!channel_init or !mode_init or !vesc_init or switch_pos == 0)
-    {
-      sleep_rate->sleep();
-      return;
-    }
-    if( (switch_pos == 2 and guided ) and !auto_init)
+    // TODO: combined
+    if(!channel_init or !mode_init or !vesc_init or switch_pos == 0 or ((switch_pos == 2 and guided ) and !auto_init))
     {
       sleep_rate->sleep();
       return;
@@ -192,9 +187,10 @@ public:
     if((switch_pos >= 1 and guided))
     {
       float wheelspeed_setpoint, steering_setpoint;
-      
+      std::cout << "semi-auto or auto and guided" <<std::endl;
       if(switch_pos == 1)
       {
+        std::cout<<"switch_pos = 1" <<std::endl;
         wheelspeed_setpoint = semi_wheelspeed;
         steering_setpoint = semi_steering;
       }
@@ -318,7 +314,7 @@ public:
 
   void channel_cb(const mavros_msgs::RCIn::ConstPtr rc)
   {
-    std::cout << "channel_cb" << std::endl;
+    std::cout << "channel cb" <<std::endl;
     if(rc->channels.empty())
     {
         return;

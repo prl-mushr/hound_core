@@ -7,6 +7,6 @@
     <rosparam file="$(arg low_level_Config)" command="load" />
     
     <node pkg="dawg_core" type="dawg_ll_control" name="low_level_controller" output="screen"/>
-
+    
     <!-- <include file="$(find ntrip_ros)/launch/ntripclient.launch"/> -->
 </launch>

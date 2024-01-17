@@ -129,6 +129,7 @@ class hal():
             time.sleep(1)
     
     def channel_cb(self, rc):
+        print("channel_cb, py")
         try:
             if(len(rc.channels) == 0 ):
                 return
