@@ -7,7 +7,7 @@ camera:
   height: 480  # Default height
   fps: 30  # Default frames per second
   fov: 87.0 # default fov of d400 series
-  pos: [0.15, 0.047, 0.02] ## use (0.15, 0.047, 0.02) for D455, (0.15, 0.025, 0.02) for d435
+  pos: [0.15, 0.047, 0.04] ## use (0.15, 0.047, 0.02) for D455, (0.15, 0.025, 0.02) for d435
   dir: [0, -1, 0]
   up: [0, 0, 1]
   rot: [0, 0, 0, 1] ## technically, the up and forward dir should be derivable from this, however, I need to talk to the BnG devs to figure out the conversion from REP103 to BnG
