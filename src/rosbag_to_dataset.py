@@ -40,7 +40,8 @@ def get_tolerance(bag):
             topic2_msgs[t] = msg
     counter = 0
     min_length = min(len(topic1_msgs), len(topic2_msgs))
-    tolerance = 0.00
+    print(len(topic1_msgs), len(topic2_msgs))
+    tolerance = 0.008
     while counter < min_length*0.9:
         tolerance += 1e-3
         counter = 0
@@ -77,7 +78,7 @@ def get_tolerance(bag):
     return tolerance_state, tolerance_camera, state_length
 
 def get_state_data(imu_msg, odom_msg):
-    state = np.zeros(17)
+    state = np.zeros(19)
     state[0:3] = [odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z]
     rpy = euler_from_quaternion([odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y, odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w])
     state[3:6] = [rpy[0], rpy[1], rpy[2]]
@@ -87,9 +88,14 @@ def get_state_data(imu_msg, odom_msg):
     return state
 
 def get_control(msg):
-    ctrls = np.zeros(2)
-    ctrls[0] = -msg.y/1000.0
-    ctrls[1] = msg.z/1000.0
+    # ctrls = np.zeros(2)
+    # ctrls[0] = -msg.y/1000.0
+    # ctrls[1] = msg.z/1000.0
+    ctrls = np.zeros(4)
+    ctrls[0] =  ((msg.channels[0] - 1500) / 500.0 )
+    ctrls[1] =  ((msg.channels[2] - 1000) / 1000.0 )
+    ctrls[2] =  ((msg.channels[1] - 1500) / 500.0 )
+    ctrls[3] =  ((msg.channels[3] - 1500) / 500.0 )
     return ctrls
 
 def generate_normal(elev, k=3):
@@ -162,6 +168,8 @@ def main(Config):
     rgb_info_file = str(output_path) + "/rgb_info.yaml"
     depth_info = None
     depth_info_file = str(output_path) + "/depth_info.yaml"
+    tgt_res = int(Config["Map_config"]["map_size"]/Config["Map_config"]["map_res"]) ## this results in 256 x 256 pixels for the MPPI"]
+    tgt_res = (tgt_res, tgt_res)
 
     for bagdir_name in bagdir_list:
         bagdir = os.path.join(base, bagdir_name)
@@ -195,7 +203,7 @@ def main(Config):
                     counter += 1
                 elif topic == "/mavros/local_position/odom":
                     odom_data[t] = msg
-                elif topic == "/mavros/manual_control/send":
+                elif topic == "/mavros/rc/in":
                     control_data[t] = msg
                 elif topic == "/grid_map_occlusion_inpainting/all_grid_map":
                     grid_map_data[t] = msg
@@ -238,7 +246,7 @@ def main(Config):
                 closest_timestamp = min(timestamps, key=lambda x: abs(x - t2))
                 index = timestamps.index(closest_timestamp)
                 control_data = get_control(control_msg)
-                state_data[index,15:17] = control_data
+                state_data[index,15:19] = control_data
 
             for t1, color_msg in color_data.items():
                 for t2, depth_msg in depth_data.items():
@@ -308,11 +316,16 @@ def main(Config):
                 reset_data.append(False)
                 timestamp_data.append(timestamps[state_index].to_sec() - ts_start.to_sec())
                 output_state.append(state_data[state_index])
-                elev_data.append(map_elev[camera_index])
-                segmt_data.append(map_segmt[camera_index])
-                color_data.append(map_color[camera_index])
-                path_data.append(map_path[camera_index])
-                normal_data.append(map_norm[camera_index])
+                elev = cv2.resize(map_elev[camera_index], tgt_res, cv2.INTER_LINEAR)
+                segmt = cv2.resize(map_segmt[camera_index], tgt_res, cv2.INTER_LINEAR)
+                color_map = cv2.resize(map_color[camera_index], tgt_res, cv2.INTER_LINEAR)
+                path = cv2.resize(map_path[camera_index], tgt_res, cv2.INTER_LINEAR)
+                norm = cv2.resize(map_norm[camera_index], tgt_res, cv2.INTER_LINEAR)
+                elev_data.append(elev)
+                segmt_data.append(segmt)
+                color_data.append(color_map)
+                path_data.append(path)
+                normal_data.append(norm)
                 camera_color_data.append(color[camera_index])
                 camera_depth_data.append(depth[camera_index])
 
@@ -333,7 +346,7 @@ def main(Config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config_name", type=str, default="Data_Collection_Config.yaml", help="name of the config file to use")
+    parser.add_argument("--config_name", type=str, default="Hound_Data_Config.yaml", help="name of the config file to use")
     args = parser.parse_args()
 
     config_name = args.config_name
