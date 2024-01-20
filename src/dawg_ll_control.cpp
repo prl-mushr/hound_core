@@ -314,7 +314,6 @@ public:
 
   void channel_cb(const mavros_msgs::RCIn::ConstPtr rc)
   {
-    std::cout << "channel cb" <<std::endl;
     if(rc->channels.empty())
     {
         return;

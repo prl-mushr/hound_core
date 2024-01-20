@@ -129,19 +129,17 @@ class hal():
             time.sleep(1)
     
     def channel_cb(self, rc):
-        print("channel_cb, py")
         try:
-            if(len(rc.channels) == 0 ):
-                return
-            stick = rc.channels[3]
-            if(self.recording_state == False and stick > 1900):
-                print("start recording")
-                self.start_recording()
-                self.recording_state = True
-            elif(self.recording_state == True and stick < 1100):
-                print("stop recording")
-                self.stop_recording()
-                self.recording_state = False
+            if (rc.channels[8] > 1900):
+                if not self.recording_state:
+                    self.recording_state = True
+                    print("start recording..")
+                    self.start_recording()
+            else:
+                if self.recording_state:
+                    self.recording_state = False
+                    print("stop recording")
+                    self.stop_recording()
         except:
             pass
 
