@@ -11,6 +11,7 @@
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
+#include <unitree_legged_control/unitree_legged_sdk/include/unitree_wireless.h>
 
 
 class ll_controller
@@ -40,7 +41,24 @@ public:
 
   float accel_gain, roll_gain, steer_slack, LPF_tau;
   bool liftoff_oversteer;
-  
+
+
+  // object pointer to WIRE_LESS_CONTROL class 
+  static WIRE_LESS_CONTROL* wcon; 
+
+  //for memcpying to wirelessremote field of cmd struct
+  //that is to be sent to unitree
+  xRockerBtnDataStruct _keyData;
+  // TRT | rc channel 4 | 1041, 1501, 1951}
+
+  bool arm;  //L2 + B   rc channel | 1951
+  bool init_mode; //L1 + start rc channel | 1041
+ 
+  // rc channel 1501 | break
+  //TRT
+
+  bool change_mode;     //start
+
   ros::Rate *sleep_rate;
 
   ll_controller(ros::NodeHandle &nh) // constructor
@@ -65,6 +83,13 @@ public:
     speed_integral = 0;
     K_drag         = 0;
     last_throttle  = 0;
+    
+    wcon           = GetUdpInstance(LOWLEVEL);
+    _keyData       = {0};
+    arm            = false;
+    init_mode      = false;
+    change_mode    = false;
+
 
     if(not nh.getParam("/erpm_gain", erpm_gain))
     {
@@ -352,6 +377,53 @@ public:
     {
       switch_pos = 0;
     }
+
+
+// For arming and initialzing the dawg
+    if (rc->channel[4] > 1900)
+      {
+        if (init_mode)
+            init_mode = false;
+
+        if (!arm){
+          arm = true;
+          wcon->_keyData.L2 = 1;
+          wcon->_keyData.B  = 1;
+          memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
+        }
+        else{
+          if (wcon->_keyData != {0})
+            memset(wcon->_keyData, 0x0, 40);
+        }
+      }
+    
+    else if((rc->channel[4] < 1400) && (rc->channel[4] > 1000)){
+      if (arm)
+        arm = false;
+
+      if (!init_mode){
+        init_mode = true;
+        wcon->_keyData.L1    = 1;
+        wcon->_keyData.start = 1;
+        memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
+      }
+      else{
+        if (wcon->_keyData != {0})
+          memset(wcon->_keyData, 0x0, 40);
+      }
+    }
+
+    else{
+      if (arm)
+        arm = false;
+      if (init_mode)
+        init_mode = false;
+       if (wcon->_keyData != {0})
+          memset(wcon->_keyData, 0x0, 40);
+    }
+
+
+
   }
 
   void mode_cb(const mavros_msgs::State::ConstPtr state)

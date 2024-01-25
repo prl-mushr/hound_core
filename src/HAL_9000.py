@@ -130,7 +130,8 @@ class hal():
     
     def channel_cb(self, rc):
         try:
-            if (rc.channels[8] > 1900):
+            # Button A for recording
+            if (rc.channels[6] > 1900):
                 if not self.recording_state:
                     self.recording_state = True
                     print("start recording..")
