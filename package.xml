@@ -82,6 +82,8 @@
   <build_depend>laser_geometry</build_depend>
   <exec_depend>laser_geometry</exec_depend>
   <build_export_depend>laser_geometry</build_export_depend>
+  <build_depend>unitree_legged_control</build_depend>
+  <exec_depend>unitree_legged_control</exec_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

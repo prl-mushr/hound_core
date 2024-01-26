@@ -1,4 +1,5 @@
-#include <unitree_legged_control/unitree_legged_sdk/include/unitree_wireless.h>
+#include "unitree_legged_sdk/unitree_wireless.h"
+
 
 // Singleton class for maintaining one udp instance
 WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
@@ -10,7 +11,7 @@ WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
 void WIRE_LESS_CONTROL :: UdpDeleteInstance(){
     if (wirelesscontrol != nullptr)
         delete wirelesscontrol;
-        wirelesscontrol = nullptr
+        wirelesscontrol = nullptr;
 }
 
 

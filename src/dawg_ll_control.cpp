@@ -11,7 +11,7 @@
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
-#include <unitree_legged_control/unitree_legged_sdk/include/unitree_wireless.h>
+#include "unitree_legged_sdk/unitree_wireless.h"
 
 
 class ll_controller
@@ -48,7 +48,7 @@ public:
 
   //for memcpying to wirelessremote field of cmd struct
   //that is to be sent to unitree
-  xRockerBtnDataStruct _keyData;
+  xRockerBtnDcomponents.ataStruct _keyData;
   // TRT | rc channel 4 | 1041, 1501, 1951}
 
   bool arm;  //L2 + B   rc channel | 1951
@@ -84,8 +84,8 @@ public:
     K_drag         = 0;
     last_throttle  = 0;
     
-    wcon           = GetUdpInstance(LOWLEVEL);
-    _keyData       = {0};
+    wcon           = WIRE_LESS_CONTROL::GetUdpInstance(LOWLEVEL);
+    wcon->_keyData = {0};
     arm            = false;
     init_mode      = false;
     change_mode    = false;
@@ -380,36 +380,38 @@ public:
 
 
 // For arming and initialzing the dawg
-    if (rc->channel[4] > 1900)
+    if (rc->channels[4] > 1900)
       {
         if (init_mode)
             init_mode = false;
 
         if (!arm){
           arm = true;
-          wcon->_keyData.L2 = 1;
-          wcon->_keyData.B  = 1;
+          wcon->_keyData.btn.components.L2 = 1;
+          wcon->_keyData.btn.components.B  = 1;
           memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
         }
         else{
           if (wcon->_keyData != {0})
-            memset(wcon->_keyData, 0x0, 40);
+              wcon->_keyData.btn.components.L2 = 0;
+              wcon->_keyData.btn.components.B  = 0;
         }
       }
     
-    else if((rc->channel[4] < 1400) && (rc->channel[4] > 1000)){
+    else if((rc->channels[4] < 1400) && (rc->channels[4] > 1000)){
       if (arm)
         arm = false;
 
       if (!init_mode){
         init_mode = true;
-        wcon->_keyData.L1    = 1;
-        wcon->_keyData.start = 1;
+        wcon->_keyData.btn.components.L1    = 1;
+        wcon->_keyData.btn.components.start = 1;
         memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
       }
       else{
         if (wcon->_keyData != {0})
-          memset(wcon->_keyData, 0x0, 40);
+          wcon->_keyData.btn.components.L1    = 0;
+          wcon->_keyData.btn.components.start = 0;
       }
     }
 
@@ -419,7 +421,7 @@ public:
       if (init_mode)
         init_mode = false;
        if (wcon->_keyData != {0})
-          memset(wcon->_keyData, 0x0, 40);
+          memset((WIRE_LESS_CONTROL* )wcon->_keyData, 0x0, 40);
     }
 
 

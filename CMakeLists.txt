@@ -16,11 +16,15 @@ find_package(catkin REQUIRED COMPONENTS
   mavros_msgs
   vesc_msgs
   laser_geometry
+  unitree_legged_sdk
 )
+set(UNITREE_SDK_INCLUDE_DIRS, "/root/catkin_ws/src/unitree_legged_control/unitree_legged_sdk/include/unitree_legged_sdk")
+
 
 find_package( OpenCV REQUIRED )
 find_package(Eigen3 REQUIRED)
-include_directories(${EIGEN3_INCLUDE_DIRS})
+include_directories(${EIGEN3_INCLUDE_DIRS} ${UNITREE_SDK_INCLUDE_DIRS})
+
 add_definitions(${EIGEN3_DEFINITIONS})
 
 ## System dependencies are found with CMake's conventions
@@ -131,6 +135,7 @@ CATKIN_DEPENDS roscpp
 include_directories(
 ${catkin_INCLUDE_DIRS}
 ${OpenCV_INCLUDE_DIRS}
+${UNITREE_SDK_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -153,6 +158,10 @@ target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
 
 add_executable(dawg_control_node src/dawg_control_node)
 target_link_libraries(dawg_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+
+
+add_executable(dawg_wireless_control src/dawg_wireless_control.cpp)
+target_link_libraries(dawg_wireless_control ${catkin_LIBRARIES})
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
