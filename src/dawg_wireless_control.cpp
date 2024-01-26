@@ -1,6 +1,8 @@
 #include "unitree_legged_sdk/unitree_wireless.h"
 
 
+static WIRE_LESS_CONTROL* wirelesscontrol = nullptr;
+
 // Singleton class for maintaining one udp instance
 WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
     if (wirelesscontrol == nullptr)

@@ -48,7 +48,7 @@ public:
 
   //for memcpying to wirelessremote field of cmd struct
   //that is to be sent to unitree
-  xRockerBtnDcomponents.ataStruct _keyData;
+
   // TRT | rc channel 4 | 1041, 1501, 1951}
 
   bool arm;  //L2 + B   rc channel | 1951
@@ -392,7 +392,7 @@ public:
           memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
         }
         else{
-          if (wcon->_keyData != {0})
+          if (!(wcon->_keyData.btn.value))
               wcon->_keyData.btn.components.L2 = 0;
               wcon->_keyData.btn.components.B  = 0;
         }
@@ -409,7 +409,7 @@ public:
         memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
       }
       else{
-        if (wcon->_keyData != {0})
+        if (!(wcon->_keyData.btn.value) )
           wcon->_keyData.btn.components.L1    = 0;
           wcon->_keyData.btn.components.start = 0;
       }
@@ -420,8 +420,8 @@ public:
         arm = false;
       if (init_mode)
         init_mode = false;
-       if (wcon->_keyData != {0})
-          memset((WIRE_LESS_CONTROL* )wcon->_keyData, 0x0, 40);
+       if (!(wcon->_keyData.btn.value))
+          wcon->_keyData.btn.value = 0;
     }
 
 
