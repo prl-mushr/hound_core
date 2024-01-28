@@ -11,8 +11,59 @@
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
-#include "unitree_legged_sdk/unitree_wireless.h"
+#include <unitree_legged_sdk/unitree_wireless.h>
 
+
+// object pointer to WIRE_LESS_CONTROL class 
+static WIRE_LESS_CONTROL* wcon; 
+
+WIRE_LESS_CONTROL* WIRE_LESS_CONTROL::wirelesscontrol = nullptr;
+
+// Singleton class for maintaining one udp instance
+WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
+    if (wirelesscontrol == nullptr)
+        wirelesscontrol = new WIRE_LESS_CONTROL(level);
+    return wirelesscontrol;
+}
+
+void WIRE_LESS_CONTROL :: UdpDeleteInstance(){
+    if (!wirelesscontrol){
+        delete wirelesscontrol;
+        wirelesscontrol = nullptr;
+    }
+}
+
+WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: GetUdpInstance(uint8_t level){
+     return UdpSingleton(level);
+}
+
+void WIRE_LESS_CONTROL :: UDPSend(){
+    wirelesscontrol->udp.Send();
+}
+
+void WIRE_LESS_CONTROL :: UDPRecv(){
+    wirelesscontrol->udp.Recv();
+}
+
+void WIRE_LESS_CONTROL ::  UDPCont(){
+
+    wirelesscontrol->udp.GetRecv(wirelesscontrol->state);
+    wirelesscontrol->safe.PowerProtect(wirelesscontrol->cmd, wirelesscontrol->state, 1);
+    wirelesscontrol->udp.SetSend(wirelesscontrol->cmd);
+
+}
+
+void WIRE_LESS_CONTROL :: UDPLoop(){
+
+    LoopFunc loop_control("control_loop", wirelesscontrol->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wirelesscontrol));
+    LoopFunc loop_udpSend("udp_send",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wirelesscontrol));
+    LoopFunc loop_udpRecv("udp_recv",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wirelesscontrol));
+
+    loop_udpSend.start();
+    loop_udpRecv.start();
+    loop_control.start();
+
+}
 
 class ll_controller
 {
@@ -41,10 +92,6 @@ public:
 
   float accel_gain, roll_gain, steer_slack, LPF_tau;
   bool liftoff_oversteer;
-
-
-  // object pointer to WIRE_LESS_CONTROL class 
-  static WIRE_LESS_CONTROL* wcon; 
 
   //for memcpying to wirelessremote field of cmd struct
   //that is to be sent to unitree
@@ -84,8 +131,6 @@ public:
     K_drag         = 0;
     last_throttle  = 0;
     
-    wcon           = WIRE_LESS_CONTROL::GetUdpInstance(LOWLEVEL);
-    wcon->_keyData = {0};
     arm            = false;
     init_mode      = false;
     change_mode    = false;
@@ -379,7 +424,7 @@ public:
     }
 
 
-// For arming and initialzing the dawg
+//For arming and initialzing the dawg
     if (rc->channels[4] > 1900)
       {
         if (init_mode)
@@ -423,9 +468,6 @@ public:
        if (!(wcon->_keyData.btn.value))
           wcon->_keyData.btn.value = 0;
     }
-
-
-
   }
 
   void mode_cb(const mavros_msgs::State::ConstPtr state)
@@ -480,12 +522,26 @@ public:
 int main(int argc, char **argv)
 {
   //initialize node
+  wcon    = WIRE_LESS_CONTROL::GetUdpInstance(LOWLEVEL);
+
   ros::init(argc, argv, "dawg_ll_control");
   ros::NodeHandle nh("~");
   ll_controller ll_ctrl(nh);
+
+  ros::Rate rate(10);
+
+  LoopFunc loop_control("control_loop", wcon->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wcon));
+  LoopFunc loop_udpSend("udp_send",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wcon));
+  LoopFunc loop_udpRecv("udp_recv",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wcon));
+
+  loop_udpSend.start();
+  loop_udpRecv.start();
+  loop_control.start();
+
   while(ros::ok())
   {
     ros::spinOnce();
+    rate.sleep();
   }
   return 0;
 }

@@ -150,6 +150,8 @@ ${UNITREE_SDK_INCLUDE_DIRS}
 add_executable(dawg_core_node src/dawg_core_node.cpp)
 target_link_libraries(dawg_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
+
+
 add_executable(dawg_ll_control src/dawg_ll_control.cpp)
 target_link_libraries(dawg_ll_control ${catkin_LIBRARIES})
 
@@ -160,8 +162,6 @@ add_executable(dawg_control_node src/dawg_control_node)
 target_link_libraries(dawg_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
 
-add_executable(dawg_wireless_control src/dawg_wireless_control.cpp)
-target_link_libraries(dawg_wireless_control ${catkin_LIBRARIES})
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
