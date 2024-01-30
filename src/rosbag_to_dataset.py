@@ -78,7 +78,7 @@ def get_tolerance(bag):
     return tolerance_state, tolerance_camera, state_length
 
 def get_state_data(imu_msg, odom_msg):
-    state = np.zeros(19)
+    state = np.zeros(17)
     state[0:3] = [odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, odom_msg.pose.pose.position.z]
     rpy = euler_from_quaternion([odom_msg.pose.pose.orientation.x, odom_msg.pose.pose.orientation.y, odom_msg.pose.pose.orientation.z, odom_msg.pose.pose.orientation.w])
     state[3:6] = [rpy[0], rpy[1], rpy[2]]
@@ -88,14 +88,14 @@ def get_state_data(imu_msg, odom_msg):
     return state
 
 def get_control(msg):
-    # ctrls = np.zeros(2)
-    # ctrls[0] = -msg.y/1000.0
-    # ctrls[1] = msg.z/1000.0
-    ctrls = np.zeros(4)
-    ctrls[0] =  ((msg.channels[0] - 1500) / 500.0 )
-    ctrls[1] =  ((msg.channels[2] - 1000) / 1000.0 )
-    ctrls[2] =  ((msg.channels[1] - 1500) / 500.0 )
-    ctrls[3] =  ((msg.channels[3] - 1500) / 500.0 )
+    ctrls = np.zeros(2)
+    ctrls[0] = -msg.y/1000.0
+    ctrls[1] = msg.z/1000.0
+    # ctrls = np.zeros(4)
+    # ctrls[0] =  ((msg.channels[0] - 1500) / 500.0 )
+    # ctrls[1] =  ((msg.channels[2] - 1000) / 1000.0 )
+    # ctrls[2] =  ((msg.channels[1] - 1500) / 500.0 )
+    # ctrls[3] =  ((msg.channels[3] - 1500) / 500.0 )
     return ctrls
 
 def generate_normal(elev, k=3):
@@ -203,7 +203,7 @@ def main(Config):
                     counter += 1
                 elif topic == "/mavros/local_position/odom":
                     odom_data[t] = msg
-                elif topic == "/mavros/rc/in":
+                elif topic == "/mavros/manual_control/send":
                     control_data[t] = msg
                 elif topic == "/grid_map_occlusion_inpainting/all_grid_map":
                     grid_map_data[t] = msg
@@ -246,7 +246,7 @@ def main(Config):
                 closest_timestamp = min(timestamps, key=lambda x: abs(x - t2))
                 index = timestamps.index(closest_timestamp)
                 control_data = get_control(control_msg)
-                state_data[index,15:19] = control_data
+                state_data[index,15:] = control_data
 
             for t1, color_msg in color_data.items():
                 for t2, depth_msg in depth_data.items():
