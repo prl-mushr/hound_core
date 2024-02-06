@@ -1,3 +1,4 @@
+![](content/hound.png)
 # HOUND
 This repository serves as the cornerstone of the HOUND project. Note that as the HOUND project depends on several other repositories, this repository only contains instructions on installing the HOUND stack and instructions for running the minimal examples.
 
