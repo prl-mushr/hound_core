@@ -91,6 +91,10 @@ cd ~/catkin_ws/src/hound_core
 
 You should see the following on your autonomy computer's screen:
 
+![](content/hound_hitl.gif)
+
+Note: The MPPI may not follow the desired trajectory exactly, and the car may spin out. This may happen because of the car being used by the HITL simulation has different tire parameters than the ones being assumed by the MPPI model.
+
 #### In case the map looks weird/caved, you need to reset the map:
 ```bash
 rosservice call /elevation_mapping/clear_map
