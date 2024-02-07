@@ -101,6 +101,22 @@ rosservice call /elevation_mapping/clear_map
 ```
 This concludes running the HITL unit test.
 
+## Datasets:
+Several datasets were collected during the testing of the HOUND hardware.
+First few datasets collected using the HOUND hardware: 
+1) [new_bags_1](https://drive.google.com/drive/folders/1sS3eayuNPIDPXBG4Ejq77Rzc-OpJaYks?usp=sharing)
+2) [new_bags_2](https://drive.google.com/drive/folders/1CcIw9SoD6V5kblfzP96k5vfq1-5Uju_v?usp=sharing)
+
+Datasets collected using the d455 instead of the d435 camera:
+1) [new_bags_3](https://drive.google.com/drive/folders/1dut0QQscM1zGSM1hDTDna4EqMtbCVdnB?usp=sharing) -- This dataset is not particularly useful, as we were experimenting with region of interest settings on the camera, and ended up saturating the camera sensor in most of the frames. The dataset is only included in case someone wants to tally the kilometers operated by the system.
+2) [new_bags_4](https://drive.google.com/drive/folders/12D8AFurK10BF6UKG0dReFFSA7qQtGr2w?usp=sharing)
+3) [new_bags_5](https://drive.google.com/drive/folders/1w7_21CfkHCaU1jUW_0Nw0ZIm3knlXst0?usp=sharing)
+
+Datasets collected for evaluating simulator accuracy:
+[new_bags_6](https://drive.google.com/drive/folders/1mX6f5TXzX6WHbrv4zwV3bbimhbbg5moI?usp=sharing)
+
+
+
 
 
 
