@@ -36,7 +36,9 @@ class OSM_Router:
         )
 
         self.path_pub = rospy.Publisher("/path", Path, queue_size=1, latch=True)
-        self.diagnostics_pub = rospy.Publisher("/planner_diagnostics", DiagnosticArray, queue_size=2)
+        self.diagnostics_pub = rospy.Publisher(
+            "/planner_diagnostics", DiagnosticArray, queue_size=2
+        )
 
         self.gps_origin = (0, 0)
         self.local_pos = None
@@ -51,12 +53,11 @@ class OSM_Router:
     def diagnostic_publisher(self, status):
         diagnostics_array = DiagnosticArray()
         diagnostics_status = DiagnosticStatus()
-        diagnostics_status.name = 'planner'
+        diagnostics_status.name = "planner"
         diagnostics_status.level = status
 
         diagnostics_array.status.append(diagnostics_status)
         self.diagnostics_pub.publish(diagnostics_array)
-
 
     def waypoint_callback(self, msg):
         self.waypoint_list = msg.waypoints
