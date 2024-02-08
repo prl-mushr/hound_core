@@ -23,6 +23,8 @@ print("vertical acceleration during rollover", roll_vert_acc)
 print("avg_vert_acc_auto: ", np.mean(roll_vert_acc[np.where(mode)]))
 print("avg_vert_acc_manual: ", np.mean(roll_vert_acc[np.where(mode == 0)]))
 
+# remove data points where the car rolled over to avoid counting lateral acceleration from rolls
+states = np.delete(states, roll_indices, 0)
 auto = np.where(states[:,17])
 manl = np.where(states[:,17]==0)
 auto_dist = np.sum(speeds[auto]*0.02)
@@ -30,10 +32,9 @@ manl_dist = np.sum(speeds[manl]*0.02)
 print("auto dist:", auto_dist*1e-3, " km")
 
 order = 2  # Filter order
-cutoff_freq = 0.04  # Cutoff frequency as a fraction of Nyquist frequency
+cutoff_freq = 0.04  # 10hz. utoff frequency as a fraction of Nyquist frequency
 b, a = signal.butter(order, cutoff_freq, btype='low', analog=False)
-lat_acc = np.fabs(signal.lfilter(b, a, A[:, 1])) - 9.81*RPY[:,0]
-
+lat_acc = np.fabs(signal.lfilter(b, a, A[:, 1] - 9))
 body_vel = np.fabs(signal.lfilter(b, a, V[:, 0]))
 body_vel[np.where(body_vel > speeds)] = 0
 
@@ -52,3 +53,5 @@ print("peak lateral acceleration in auto mode: ", auto_lat_max)
 print("peak lateral acceleration in manual mode: ", manl_lat_max)
 print("peak speed in auto mode: ", auto_spd_max)
 print("peak speed in manual mode: ", manl_spd_max)
+print("mean/std lateral acceleration: ", np.fabs(A[:, 1]).mean(), np.fabs(A[:, 1]).std())
+print("mean/std speed: ", V[:, 0].mean(), V[:, 0].std())
