@@ -8,7 +8,7 @@ Note:
 
 ### Hardware Requirements:
 #### Setting up just the autonomy stack:
-1) If installing on the HOUND, then HOUND hardware. Otherwise, no additional hardware is required.
+1) If installing on the HOUND, then [HOUND hardware](https://github.com/prl-mushr/hound_hardware). Otherwise, no additional hardware is required.
 2) An internet connection
 
 #### Requirements for running the BeamNG simulator:
