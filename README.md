@@ -55,8 +55,8 @@ cd ~/catkin_ws/ && catkin build
 This concludes the installation of the hound's autonomy stack.
 
 ### Installing the simulator integration:
-Follow the instructions on [BeamNGRL](https://github.com/prl-mushr/BeamNGRL) to set up the BeamNG simulator integration.
-Note that you will need to install BeamNGRL on the Windows host as well. 
+The docker install pulls the BeamNG integration code, however, there are some additional setup steps. Follow the instructions on [BeamNGRL](https://github.com/prl-mushr/BeamNGRL) to set up the BeamNG simulator integration.
+Note that you will need to git clone BeamNGRL on the Windows host as well to start the simulator on it.
 
 ### Testing the stack in HITL mode:
 The HITL unit test is useful for testing your entire stack before you go for a real-world field test. It runs the autonomy stack in ROS as if it was running with real hardware data, communicating the control outputs to the simulator.
