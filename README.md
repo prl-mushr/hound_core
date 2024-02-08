@@ -22,12 +22,7 @@ Step 1: [Install docker](https://docs.docker.com/desktop/install/debian/#install
 Step 2: [Install Nvidia Docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#installing-on-ubuntu-and-debian)
 
 ### Environment setup for Jetson:
-Follow the instructions [here](https://github.com/sidtalia/HOUND_hardware) to set up your Nvidia Orin NX.
-```bash
-sudo apt-get update
-sudo apt-get install jetpack
-sudo reboot
-```
+Follow the instructions [here](https://github.com/prl-mushr/hound_hardware) to set up your Nvidia Orin NX.
 
 ### Installing HOUND stack:
 Step 1:
@@ -60,7 +55,7 @@ cd ~/catkin_ws/ && catkin build
 This concludes the installation of the hound's autonomy stack.
 
 ### Installing the simulator integration:
-Follow the instructions on [BeamNGRL](https://github.com/sidtalia/BeamNGRL) to set up the BeamNG simulator integration.
+Follow the instructions on [BeamNGRL](https://github.com/prl-mushr/BeamNGRL) to set up the BeamNG simulator integration.
 Note that you will need to install BeamNGRL on the Windows host as well. 
 
 ### Testing the stack in HITL mode:
