@@ -34,6 +34,7 @@ class hal():
         self.camera_config = config["camera"]
         self.lidar_config = config["lidar"]
         self.vesc_config = config["vesc"]
+        self.dawg_config = config["dawg"]
         self.mavros_hz = ROSTopicHz(3)
 
         self.camera_hz = ROSTopicHz(3)
@@ -62,9 +63,11 @@ class hal():
         
         self.mavros_init = False
         self.camera_init = False
+        self.dawg_init   = False
         
         self.recording_state = False
         self.rosbag_proc = None
+        self.dawg_proc   = None
         self.GPS_status = False
 
         self.diagnostics_pub = rospy.Publisher(config["diagnostics_topic"], DiagnosticArray, queue_size=2)
@@ -127,6 +130,13 @@ class hal():
             self.publish_notification("GPS bad")
             self.GPS_status = False
             time.sleep(1)
+
+    def start_dawg(self):
+        cmd = shlex.split(self.dawg_config["dawg_launch"])
+        self.dawg_proc = subprocess.Popen(cmd)
+
+    def stop_dawg(self):
+        self.dawg_proc.send_signal(subprocess.signal.SIGINT)
     
     def channel_cb(self, rc):
         try:
@@ -141,6 +151,18 @@ class hal():
                     self.recording_state = False
                     print("stop recording")
                     self.stop_recording()
+
+            if (rc.channels[7] > 1900):
+                if not self.dawg_init:
+                    self.dawg_init = True
+                    print("Dawg initiated!")
+                    self.start_dawg()
+            else:
+                if self.dawg_init:
+                    self.dawg_init = False
+                    print("Dawg down!")
+                    self.stop_dawg()
+
         except:
             pass
 

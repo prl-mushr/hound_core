@@ -11,59 +11,59 @@
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
-#include <unitree_legged_sdk/unitree_wireless.h>
+// #include <unitree_legged_sdk/unitree_wireless.h>
 
 
 // object pointer to WIRE_LESS_CONTROL class 
-static WIRE_LESS_CONTROL* wcon; 
+// static WIRE_LESS_CONTROL* wcon; 
 
-WIRE_LESS_CONTROL* WIRE_LESS_CONTROL::wirelesscontrol = nullptr;
+// WIRE_LESS_CONTROL* WIRE_LESS_CONTROL::wirelesscontrol = nullptr;
 
-// Singleton class for maintaining one udp instance
-WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
-    if (wirelesscontrol == nullptr)
-        wirelesscontrol = new WIRE_LESS_CONTROL(level);
-    return wirelesscontrol;
-}
+// // Singleton class for maintaining one udp instance
+// WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: UdpSingleton(uint8_t level){
+//     if (wirelesscontrol == nullptr)
+//         wirelesscontrol = new WIRE_LESS_CONTROL(level);
+//     return wirelesscontrol;
+// }
 
-void WIRE_LESS_CONTROL :: UdpDeleteInstance(){
-    if (!wirelesscontrol){
-        delete wirelesscontrol;
-        wirelesscontrol = nullptr;
-    }
-}
+// void WIRE_LESS_CONTROL :: UdpDeleteInstance(){
+//     if (!wirelesscontrol){
+//         delete wirelesscontrol;
+//         wirelesscontrol = nullptr;
+//     }
+// }
 
-WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: GetUdpInstance(uint8_t level){
-     return UdpSingleton(level);
-}
+// WIRE_LESS_CONTROL* WIRE_LESS_CONTROL :: GetUdpInstance(uint8_t level){
+//      return UdpSingleton(level);
+// }
 
-void WIRE_LESS_CONTROL :: UDPSend(){
-    wirelesscontrol->udp.Send();
-}
+// void WIRE_LESS_CONTROL :: UDPSend(){
+//     wirelesscontrol->udp.Send();
+// }
 
-void WIRE_LESS_CONTROL :: UDPRecv(){
-    wirelesscontrol->udp.Recv();
-}
+// void WIRE_LESS_CONTROL :: UDPRecv(){
+//     wirelesscontrol->udp.Recv();
+// }
 
-void WIRE_LESS_CONTROL ::  UDPCont(){
+// void WIRE_LESS_CONTROL ::  UDPCont(){
 
-    wirelesscontrol->udp.GetRecv(wirelesscontrol->state);
-    wirelesscontrol->safe.PowerProtect(wirelesscontrol->cmd, wirelesscontrol->state, 1);
-    wirelesscontrol->udp.SetSend(wirelesscontrol->cmd);
+//     wirelesscontrol->udp.GetRecv(wirelesscontrol->state);
+//     wirelesscontrol->safe.PowerProtect(wirelesscontrol->cmd, wirelesscontrol->state, 1);
+//     wirelesscontrol->udp.SetSend(wirelesscontrol->cmd);
 
-}
+// }
 
-void WIRE_LESS_CONTROL :: UDPLoop(){
+// void WIRE_LESS_CONTROL :: UDPLoop(){
 
-    LoopFunc loop_control("control_loop", wirelesscontrol->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wirelesscontrol));
-    LoopFunc loop_udpSend("udp_send",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wirelesscontrol));
-    LoopFunc loop_udpRecv("udp_recv",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wirelesscontrol));
+//     LoopFunc loop_control("control_loop", wirelesscontrol->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wirelesscontrol));
+//     LoopFunc loop_udpSend("udp_send",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wirelesscontrol));
+//     LoopFunc loop_udpRecv("udp_recv",     wirelesscontrol->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wirelesscontrol));
 
-    loop_udpSend.start();
-    loop_udpRecv.start();
-    loop_control.start();
+//     loop_udpSend.start();
+//     loop_udpRecv.start();
+//     loop_control.start();
 
-}
+// }
 
 class ll_controller
 {
@@ -425,68 +425,68 @@ public:
 
 
 //For arming and initialzing the dawg
-    if (rc->channels[4] > 1900)
-      {
-        if (init_mode)
-            init_mode = false;
+    // if (rc->channels[4] > 1900)
+    //   {
+    //     if (init_mode)
+    //         init_mode = false;
 
-        if (!arm){
-          arm = true;
-          wcon->_keyData.btn.components.L2 = 1;
-          wcon->_keyData.btn.components.B  = 1;
-        }
-        else{
-          if (!(wcon->_keyData.btn.value))
-              wcon->_keyData.btn.components.L2 = 0;
-              wcon->_keyData.btn.components.B  = 0;
-        }
-      }
+    //     if (!arm){
+    //       arm = true;
+    //       wcon->_keyData.btn.components.L2 = 1;
+    //       wcon->_keyData.btn.components.B  = 1;
+    //     }
+    //     else{
+    //       if (!(wcon->_keyData.btn.value))
+    //           wcon->_keyData.btn.components.L2 = 0;
+    //           wcon->_keyData.btn.components.B  = 0;
+    //     }
+    //   }
     
-    else if((rc->channels[4] < 1400) && (rc->channels[4] > 1000)){
-      if (arm)
-        arm = false;
+    // else if((rc->channels[4] < 1400) && (rc->channels[4] > 1000)){
+    //   if (arm)
+    //     arm = false;
 
-      if (!init_mode){
-        init_mode = true;
-        wcon->_keyData.btn.components.L1    = 1;
-        wcon->_keyData.btn.components.start = 1;
-      }
-      else{
-        if (!(wcon->_keyData.btn.value) )
-          wcon->_keyData.btn.components.L1    = 0;
-          wcon->_keyData.btn.components.start = 0;
-      }
-    }
+    //   if (!init_mode){
+    //     init_mode = true;
+    //     wcon->_keyData.btn.components.L1    = 1;
+    //     wcon->_keyData.btn.components.start = 1;
+    //   }
+    //   else{
+    //     if (!(wcon->_keyData.btn.value) )
+    //       wcon->_keyData.btn.components.L1    = 0;
+    //       wcon->_keyData.btn.components.start = 0;
+    //   }
+    // }
 
-    else{
-      if (arm)
-        arm = false;
-      if (init_mode)
-        init_mode = false;
-       if (!(wcon->_keyData.btn.value))
-          wcon->_keyData.btn.value = 0;
-    }
+    // else{
+    //   if (arm)
+    //     arm = false;
+    //   if (init_mode)
+    //     init_mode = false;
+    //    if (!(wcon->_keyData.btn.value))
+    //       wcon->_keyData.btn.value = 0;
+    // }
 
-     //starting .. 
-    if (rc->channels[4] > 1900){
+    //  //starting .. 
+    // if (rc->channels[4] > 1900){
 
-      if(!change_mode){
-        change_mode = true;
-        wcon->_keyData.btn.components.start = 1;
-      }
-      else{
-        if (!(wcon->_keyData.btn.value) )
-          wcon->_keyData.btn.components.start = 0;
-      }
-      }
-    else{
-      if (change_mode)
-          change_mode = false;
-          // More functionalities required?
-    }
+    //   if(!change_mode){
+    //     change_mode = true;
+    //     wcon->_keyData.btn.components.start = 1;
+    //   }
+    //   else{
+    //     if (!(wcon->_keyData.btn.value) )
+    //       wcon->_keyData.btn.components.start = 0;
+    //   }
+    //   }
+    // else{
+    //   if (change_mode)
+    //       change_mode = false;
+    //       // More functionalities required?
+    // }
     
 
-    memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
+    // memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
 
   }
 
@@ -542,26 +542,26 @@ public:
 int main(int argc, char **argv)
 {
   //initialize node
-  wcon    = WIRE_LESS_CONTROL::GetUdpInstance(LOWLEVEL);
+  // wcon    = WIRE_LESS_CONTROL::GetUdpInstance(LOWLEVEL);
 
   ros::init(argc, argv, "dawg_ll_control");
   ros::NodeHandle nh("~");
   ll_controller ll_ctrl(nh);
 
-  ros::Rate rate(10);
+  // ros::Rate rate(10);
 
-  LoopFunc loop_control("control_loop", wcon->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wcon));
-  LoopFunc loop_udpSend("udp_send",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wcon));
-  LoopFunc loop_udpRecv("udp_recv",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wcon));
+  // LoopFunc loop_control("control_loop", wcon->dt,    boost::bind(&WIRE_LESS_CONTROL::UDPCont,      wcon));
+  // LoopFunc loop_udpSend("udp_send",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPSend,      wcon));
+  // LoopFunc loop_udpRecv("udp_recv",     wcon->dt, 3, boost::bind(&WIRE_LESS_CONTROL::UDPRecv,      wcon));
 
-  loop_udpSend.start();
-  loop_udpRecv.start();
-  loop_control.start();
+  // loop_udpSend.start();
+  // loop_udpRecv.start();
+  // loop_control.start();
 
   while(ros::ok())
   {
     ros::spinOnce();
-    rate.sleep();
+    // rate.sleep();
   }
   return 0;
 }

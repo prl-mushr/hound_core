@@ -52,3 +52,5 @@ mavros:
   raw_input_topic: '/mavros/manual_control/send'
   frame: "base_link"
   failure_action: "rosrun mavros mavsys rate --all 50"
+dawg:
+  dawg_launch: "roslaunch unitree_legged_control real.launch ctrl_level:=lowlevel"

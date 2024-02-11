@@ -2,19 +2,11 @@
     <node pkg="dawg_core" type="HAL_9000.py" name="HAL" output="screen"/>
     
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 dawg_core apm.launch" name="apm_timed" output="screen"/>
-
+    
     <arg name="low_level_Config" default="$(find dawg_core)/config/low_level_Config_real.yaml" />
     <rosparam file="$(arg low_level_Config)" command="load" />
     
     <node pkg="dawg_core" type="dawg_ll_control" name="low_level_controller" output="screen"/>
 
-    <arg name="ctrl_level" default="highlevel"/>
 
-    <node pkg="unitree_legged_control" type="ros_udp" name="node_ros_udp" output="screen" args="$(arg ctrl_level)"/>
-
-   <!--<node pkg = "rosbag" type = "record" name = "a1bag" args = "-O /root/src/unitree_legged_control/unitree_legged_control/launch/bagfiles/a1bag.bag low_state/imu"/>-->
-
-    <param name="control_level" value="$(arg ctrl_level)"/>
-    
-    <!-- <include file="$(find ntrip_ros)/launch/ntripclient.launch"/> -->
 </launch>
