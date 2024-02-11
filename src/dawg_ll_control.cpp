@@ -434,7 +434,6 @@ public:
           arm = true;
           wcon->_keyData.btn.components.L2 = 1;
           wcon->_keyData.btn.components.B  = 1;
-          memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
         }
         else{
           if (!(wcon->_keyData.btn.value))
@@ -451,7 +450,6 @@ public:
         init_mode = true;
         wcon->_keyData.btn.components.L1    = 1;
         wcon->_keyData.btn.components.start = 1;
-        memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
       }
       else{
         if (!(wcon->_keyData.btn.value) )
@@ -468,6 +466,28 @@ public:
        if (!(wcon->_keyData.btn.value))
           wcon->_keyData.btn.value = 0;
     }
+
+     //starting .. 
+    if (rc->channels[4] > 1900){
+
+      if(!change_mode){
+        change_mode = true;
+        wcon->_keyData.btn.components.start = 1;
+      }
+      else{
+        if (!(wcon->_keyData.btn.value) )
+          wcon->_keyData.btn.components.start = 0;
+      }
+      }
+    else{
+      if (change_mode)
+          change_mode = false;
+          // More functionalities required?
+    }
+    
+
+    memcpy(wcon->cmd.wirelessRemote, &(wcon->_keyData), 40);
+
   }
 
   void mode_cb(const mavros_msgs::State::ConstPtr state)
