@@ -1,17 +1,17 @@
-erpm_gain: 3166.6
-steering_max: 0.488
-wheelbase: 0.29
-cg_height: 0.125
-wheelspeed_max: 17.0
-nominal_voltage: 14.8
-motor_kv: 3930
-speed_control_kp: 1.0
-speed_control_ki: 1.0
-safe_mode: true
-track_width: 0.25
-accel_gain: 1.0
-roll_gain: 0.33
-steer_slack: 0.2
-LPF_tau: 0.5
-throttle_delta: 0.02
-liftoff_oversteer: true
+erpm_gain: 3166.6 # this is the wheelspeed in (m/s) = motor_erpm / erpm_gain
+steering_max: 0.488 # maximum steering in either direction in radians
+wheelbase: 0.29 # wheelbase of the car
+cg_height: 0.125 # height of the center of mass
+track_width: 0.25 ## track width of the vehicle
+wheelspeed_max: 17.0 # maximum allowed wheelspeed -- the maximum speed that can be commanded through the low-level controller
+nominal_voltage: 14.8 # nominal battery voltage
+motor_kv: 3930 # motor KV rating
+speed_control_kp: 1.0  # speed controller Kp gain
+speed_control_ki: 1.0  # speed controller Ki gain
+safe_mode: true  # safe mode -- enables rollover prevention
+accel_gain: 1.0  # gain on lateral acceleration 
+roll_gain: 0.33  # gain on roll rate
+steer_slack: 0.2 # steering slack value
+LPF_tau: 0.5  # low-pass filter coefficient for filtering accelerations
+throttle_delta: 0.02  # maximum change in throttle duty cycle between two timesteps
+liftoff_oversteer: true  # make RPS compensate for liftoff oversteer
