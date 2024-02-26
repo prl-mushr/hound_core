@@ -16,7 +16,7 @@ Note:
 2) Full duplex ethernet cable.
 3) BeamNG also has experimental support for running the simulator on an Ubuntu host, however, this at the moment does not support the camera and LiDAR sensors.
 
-### Environment setup for Running Autonomy stack on Ubuntu x86_64 (Autonomy stack installation not supported on MacOS or Windows):
+### Environment setup for Running Autonomy stack on Ubuntu x86_64 (Autonomy stack installation not supported on MacOS or Windows. WSL instructions coming soon!):
 Step 1: [Install docker](https://docs.docker.com/desktop/install/debian/#install-docker-desktop)
 
 Step 2: [Install Nvidia Docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#installing-on-ubuntu-and-debian)
