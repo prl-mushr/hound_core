@@ -110,8 +110,9 @@ class hal():
         self.rosbag_proc.send_signal(subprocess.signal.SIGINT)
         self.publish_notification("record stop")
         files = os.listdir(self.bagdir)
-        files.sort(key = lambda x: os.path.getmtime(self.bagdir+'/'+x))
-        for i in range(len(files)):
+        dawg_files = list(filter(lambda file : file[ : 4] == "dawg" , files))
+        dawg_files.sort(key = lambda x: os.path.getmtime(self.bagdir+'/'+x))
+        for i in range(len(dawg_files)):
             source = self.bagdir + '/' + files[i]
             dest = self.bagdir + '/' + 'dawg_' + str(i) + '.bag'
             os.rename(source, dest)
