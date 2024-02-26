@@ -113,7 +113,7 @@ class hal():
         dawg_files = list(filter(lambda file : file[ : 4] == "dawg" , files))
         dawg_files.sort(key = lambda x: os.path.getmtime(self.bagdir+'/'+x))
         for i in range(len(dawg_files)):
-            source = self.bagdir + '/' + files[i]
+            source = self.bagdir + '/' + dawg_files[i]
             dest = self.bagdir + '/' + 'dawg_' + str(i) + '.bag'
             os.rename(source, dest)
     
