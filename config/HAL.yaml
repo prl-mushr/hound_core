@@ -1,4 +1,4 @@
-bagdir: "/root/catkin_ws/src/Dawg_Bags/" # may have to create this directory
+bagdir: "/root/catkin_ws/src/Legged_bags/Bags/" # may have to create this directory
 record_command_file: "/root/catkin_ws/src/dawg_core/rosbag_record_command.txt"
 diagnostics_topic: "/SOC_diagnostics"
 camera:
