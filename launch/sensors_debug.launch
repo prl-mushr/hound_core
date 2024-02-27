@@ -2,6 +2,12 @@
     <node pkg="dawg_core" type="HAL_9000.py" name="HAL" output="screen"/>
     
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 dawg_core apm.launch" name="apm_timed" output="screen"/>
+
+     
+     <!-- d435i for default a1 camera. T265 for external camera. Use any one -->
+     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="70 dawg_core realsense_d435_HOUND.launch" name="camera_timed" output="screen"/>
+     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="70 dawg_core realsense_t265_HOUND.launch" name="camera_timed" output="screen"/>
+   
     
     <arg name="low_level_Config" default="$(find dawg_core)/config/low_level_Config_real.yaml" />
     <rosparam file="$(arg low_level_Config)" command="load" />
