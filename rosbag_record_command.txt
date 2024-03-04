@@ -58,6 +58,7 @@
 /low_level_controller/dawg/control
 /low_level_diagnostics
 /low_state
+/high_state
 /high_level_diagnostics
 /SOC_diagnostics
 /marker

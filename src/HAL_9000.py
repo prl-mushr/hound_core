@@ -133,7 +133,7 @@ class hal():
             time.sleep(1)
 
     def start_dawg(self):
-        cmd = shlex.split(self.dawg_config["dawg_launch"])
+        cmd = shlex.split(self.dawg_config["dawg_high_launch"])
         self.dawg_proc = subprocess.Popen(cmd)
 
     def stop_dawg(self):

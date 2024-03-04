@@ -53,4 +53,6 @@ mavros:
   frame: "base_link"
   failure_action: "rosrun mavros mavsys rate --all 50"
 dawg:
-  dawg_launch: "roslaunch unitree_legged_control real.launch ctrl_level:=lowlevel"
+  dawg_low_launch: "roslaunch unitree_legged_control real.launch ctrl_level:=lowlevel"
+  dawg_high_launch : "roslaunch unitree_legged_control control_high.launch ctrl_level:=highlevel"
+  dawg_walk : "roslaunch unitree_legged_control real_high_walk.launch ctrl_level:=highlevel"
