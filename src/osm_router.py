@@ -8,6 +8,7 @@ from mavros_msgs.msg import WaypointList
 from sensor_msgs.msg import NavSatFix
 import time
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+import yaml
 
 
 class OSM_Router:
@@ -50,6 +51,47 @@ class OSM_Router:
 
         self.generate_path = False
 
+        # make it possible to import a yaml file with waypoints and publish that in a latched manner
+        # name of waypoint file will be provided in a config file, which is by default: /root/catkin_ws/src/hound_core/config/hound_mppi_real.yaml
+        # if the flag "use yaml" is set to true, the waypoints will be read from the yaml file and published as a path immediately (make sure to latch the message)
+
+        config_file = "/root/catkin_ws/src/hound_core/config/hound_mppi_real.yaml"
+        # use yaml to read the fields "use_yaml" and "waypoint_file"
+        with open(config_file) as f:
+            Config = yaml.safe_load(f)
+        self.use_yaml = Config["use_yaml"]
+        waypoint_file = "/root/catkin_ws/src/hound_core/waypoints/" + Config["waypoint_file"]
+        # waypoints are saved in the format: yaml_file.write("waypoint_" + str(len(lats)) + ": [" + str(lat) + ", " + str(lon) + "]\n")
+        if self.use_yaml:
+            while self.global_pos is None or self.local_pos is None:
+                time.sleep(1)
+                self.diagnostic_publisher(1)
+            local_x = self.local_pos.position.x
+            local_y = self.local_pos.position.y
+            global_lat = self.global_pos.latitude
+            global_lon = self.global_pos.longitude
+            self.gps_origin = self.calcposLLH(global_lat, global_lon, -local_x, -local_y)
+            with open(waypoint_file, "r") as stream:
+                try:
+                    waypoints = yaml.safe_load(stream)
+                    path = Path()
+                    path.header.frame_id = "map"
+                    path.header.stamp = rospy.Time.now()
+                    for i in range(len(waypoints)):
+                        lat = waypoints["waypoint_" + str(i)][0]
+                        lon = waypoints["waypoint_" + str(i)][1]
+                        X, Y = self.calcposNED(lat, lon, self.gps_origin[0], self.gps_origin[1])
+                        pose = PoseStamped()
+                        pose.header.frame_id = "map"
+                        pose.header.stamp = rospy.Time.now()
+                        pose.pose.position.x = X
+                        pose.pose.position.y = Y
+                        pose.pose.position.z = 2
+                        path.poses.append(pose)
+                    self.path_pub.publish(path)
+                except yaml.YAMLError as exc:
+                    print(exc)
+
     def diagnostic_publisher(self, status):
         diagnostics_array = DiagnosticArray()
         diagnostics_status = DiagnosticStatus()
@@ -60,6 +102,9 @@ class OSM_Router:
         self.diagnostics_pub.publish(diagnostics_array)
 
     def waypoint_callback(self, msg):
+        if self.use_yaml:
+            return
+        
         self.waypoint_list = msg.waypoints
         while self.global_pos is None or self.local_pos is None:
             time.sleep(1)
