@@ -16,7 +16,7 @@ Note:
 2) Full duplex ethernet cable.
 3) BeamNG also has experimental support for running the simulator on an Ubuntu host, however, this at the moment does not support the camera and LiDAR sensors.
 
-### Environment setup for Running Autonomy stack on Ubuntu x86_64 (Autonomy stack installation not supported on MacOS or Windows):
+### Environment setup for Running Autonomy stack on Ubuntu x86_64 (Autonomy stack installation not supported on MacOS or Windows. WSL instructions coming soon!):
 Step 1: [Install docker](https://docs.docker.com/desktop/install/debian/#install-docker-desktop)
 
 Step 2: [Install Nvidia Docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#installing-on-ubuntu-and-debian)
@@ -122,13 +122,15 @@ To this:
 docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 -d --rm mushr_noetic /root/catkin_ws/src/hound_core/entry_command.sh
 ```
 
- - The [entry_command.sh](https://github.com/prl-mushr/hound_core/blob/main/entry_command.sh) is executed upon entering the docker.
+Now, when you reboot the system, it should automatically start the docker, as well as the sensor nodes and the elevation mapping stack. 
 
- - It takes care of sourcing the workspace and launching [sensors.launch](https://github.com/prl-mushr/hound_core/blob/main/launch/sensors.launch) which starts all of the peripherals.
+### High level description of the components involved in the auto-start process: 
+
+ - When you make the aforementioned change to the mushr_noetic file, The [entry_command.sh](https://github.com/prl-mushr/hound_core/blob/main/entry_command.sh) is executed upon entering the docker. It takes care of sourcing the workspace and launching [sensors.launch](https://github.com/prl-mushr/hound_core/blob/main/launch/sensors.launch) which starts all of the peripherals.
  
- - [HAL_9000.py](https://github.com/prl-mushr/hound_core/blob/main/src/HAL_9000.py) is the Hardware Abstraction Layer that manages publishing of transforms, setting/resetting sensor rates, managing data recording and a bunch of other miscellaneous tasks. This node publishes System-on-Chip diagnostics, such as CPU/GPU temperatures, frequencies etc. on `/SOC_diagnostics`. It uses the [HAL.yaml](https://github.com/prl-mushr/hound_core/blob/main/config/HAL.yaml) config file, which describes the sensor orientations, update rates, recovery actions and so on.
+ - `sensors.launch` first starts [HAL_9000.py](https://github.com/prl-mushr/hound_core/blob/main/src/HAL_9000.py), which is the Hardware Abstraction Layer that manages publishing of transforms, setting/resetting sensor rates, managing data recording and a bunch of other miscellaneous tasks. This node publishes System-on-Chip diagnostics, such as CPU/GPU temperatures, frequencies etc. on `/SOC_diagnostics`. It uses the [HAL.yaml](https://github.com/prl-mushr/hound_core/blob/main/config/HAL.yaml) config file, which describes the sensor orientations, update rates, recovery actions and so on.
   
- - `sensors.launch` uses [timed-roslaunch](https://github.com/prl-mushr/timed_roslaunch) to make sure that peripherals don't run into conflicts over access to the USB port driver. The peripheral driver nodes are:
+ - `sensors.launch` then uses [timed-roslaunch](https://github.com/prl-mushr/timed_roslaunch) to launch the sensor nodes and the elevation mapping system to make sure that peripherals don't run into conflicts over access to the USB port driver, and that the elevation mapping stack doesn't start too early. The peripheral driver nodes are:
    - `apm.launch` which starts the ardupilot interface to ROS
    - `X4.launch` which starts the YDLiDAR
    - `vesc_driver_node.launch` which starts the VESC driver
