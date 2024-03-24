@@ -184,6 +184,11 @@ Now, when you reboot the system, it should automatically start the docker, as we
 
 ## Datasets:
 Several datasets were collected during the testing of the HOUND hardware.
+### Note:
+1) Some of the rosbags may not contain "all" the messages. Usually, this will be the case for rosbags that are too small (only a few seconds long). This mostly happens because rosbag record takes a few seconds to start recording all the messages.
+2) Some of the rosbags may contain odometry and IMU data at 12.5 Hz instead of 50 Hz. The standard is 50 Hz, but sometimes the ardupilot-mavros node does not increase the update rate to 50 Hz. This is caused by a bug that has been fixed now, but had not been addressed when the bags were collected (it was a rare event).
+
+ 
 First few datasets collected using the HOUND hardware: 
 1) [new_bags_1](https://drive.google.com/drive/folders/1sS3eayuNPIDPXBG4Ejq77Rzc-OpJaYks?usp=sharing)
 2) [new_bags_2](https://drive.google.com/drive/folders/1CcIw9SoD6V5kblfzP96k5vfq1-5Uju_v?usp=sharing)
