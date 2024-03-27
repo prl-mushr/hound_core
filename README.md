@@ -2,9 +2,11 @@
 # HOUND
 This repository serves as the cornerstone of the HOUND project. Note that as the HOUND project depends on several other repositories, this repository only contains instructions on installing the HOUND stack and instructions for running the minimal examples.
 
-Note: 
+### Note: 
 1) The installation requires a few reboots, please save and close any work before starting this process.
 2) These instructions have only been tested on the Nvidia Jetson Orin series hardware running Jetpack 5.1.2 and on an Ubuntu x86_64 machine running ubuntu 20.04.
+3) If you use the docker and find important packages useful for research please make a PR/Github issue! We'll update the docker ASAP, assuming the required package does not break existing stuff.
+4) If you need something that breaks the rest of our stack in the docker, you'd modify the [docker generation](https://github.com/prl-mushr/mushr/tree/noetic-HOUND/mushr_utils/install) files as well as the [jetson-container's](https://github.com/prl-mushr/jetson-containers) related files and then build the docker from scratch (which takes a while).
 
 ### Hardware Requirements:
 #### Setting up just the autonomy stack:
