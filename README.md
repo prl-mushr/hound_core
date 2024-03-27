@@ -174,10 +174,10 @@ Now, when you reboot the system, it should automatically start the docker, as we
 
 4. In general, any config files that end with `_real.yaml` are meant to be used on the real system.
 
-## Adapting the HOUND stack to your platform:
+## Adapting the HOUND stack to your platform (separate README for each is a WIP! If you need help immediately, please create a Github issue and I can help you out!):
    If you're interested in adapting the HOUND stack to your platform, here are the things you will likely need to tune (please read the usage section first), assuming you are using the same set of sensors, but are just changing their orientations and size of the platform:
   - `HAL.yaml` -- this defines the sensor configurations
-  - `D455_parameters.yaml` -- this defines the raw elevation mapping parameters
+  - `D455_parameters.yaml` -- this defines the raw elevation mapping parameters (this is where you'd have to change the sensor noise, min-max elevation thresholds, and so on).
   - `low_level_config_real.yaml` -- this defines the parameters for low-level control
   - `hound_mppi_real.yaml` -- this defines the high-level control parameters
 
@@ -188,7 +188,23 @@ Several datasets were collected during the testing of the HOUND hardware.
 1) Some of the rosbags may not contain "all" the messages. Usually, this will be the case for rosbags that are too small (only a few seconds long). This mostly happens because rosbag record takes a few seconds to start recording all the messages.
 2) Some of the rosbags may contain odometry and IMU data at 12.5 Hz instead of 50 Hz. The standard is 50 Hz, but sometimes the ardupilot-mavros node does not increase the update rate to 50 Hz. This is caused by a bug that has been fixed now, but had not been addressed when the bags were collected (it was a rare event).
 
- 
+### Visualizing the data in rviz:
+1) Start roscore:
+```bash
+roscore
+```
+2) Set use_sim_time parameter:
+```bash
+rosparam set use_sim_time true
+```
+3) Start a rosbag with clock:
+```bash
+roslaunch play /path/to/bag_folder/hound_x.launch --clock
+```
+4) Start rviz as follows:
+```bash
+rviz -d /root/catkin_ws/src/hound_core/rviz/mppi_rviz.rviz
+```
 First few datasets collected using the HOUND hardware: 
 1) [new_bags_1](https://drive.google.com/drive/folders/1sS3eayuNPIDPXBG4Ejq77Rzc-OpJaYks?usp=sharing)
 2) [new_bags_2](https://drive.google.com/drive/folders/1CcIw9SoD6V5kblfzP96k5vfq1-5Uju_v?usp=sharing)
