@@ -219,7 +219,16 @@ Datasets collected using the d455 instead of the d435 camera:
 Datasets collected for evaluating simulator accuracy:
 [new_bags_6](https://drive.google.com/drive/folders/1mX6f5TXzX6WHbrv4zwV3bbimhbbg5moI?usp=sharing)
 
-
+### ACKNOWLEDGEMENT:
+This repository was part of the following works. If you found this repository or its related repositories (such as BeamNGRL, hound_hardware) useful in your research, please cite the following paper.
+```
+@article{talia2023hound,
+  title={HOUND: An Open-Source, Low-cost Research Platform for High-speed Off-road Underactuated Nonholonomic Driving},
+  author={Talia, Sidharth and Schmittle, Matt and Lambert, Alexander and Spitzer, Alexander and Mavrogiannis, Christoforos and Srinivasa, Siddhartha S},
+  journal={arXiv preprint arXiv:2311.11199},
+  year={2023}
+}
+```
 
 
 
