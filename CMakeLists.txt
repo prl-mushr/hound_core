@@ -7,21 +7,13 @@ add_compile_options(-std=c++11)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
-  cv_bridge
-  image_transport
   roscpp
   rospy
   sensor_msgs
   std_msgs
   mavros_msgs
-  vesc_msgs
-  laser_geometry
-  unitree_legged_sdk
 )
-set(UNITREE_SDK_INCLUDE_DIRS, "/root/catkin_ws/src/unitree_legged_control/unitree_legged_sdk/include/unitree_legged_sdk")
 
-
-find_package( OpenCV REQUIRED )
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIRS} ${UNITREE_SDK_INCLUDE_DIRS})
 
@@ -121,9 +113,7 @@ INCLUDE_DIRS
 CATKIN_DEPENDS roscpp
                sensor_msgs
                std_msgs
-               cv_bridge
-               image_transport
-               laser_geometry
+               mavros_msgs
 )
 
 ###########
@@ -134,8 +124,6 @@ CATKIN_DEPENDS roscpp
 ## Your package locations should be listed before other locations
 include_directories(
 ${catkin_INCLUDE_DIRS}
-${OpenCV_INCLUDE_DIRS}
-${UNITREE_SDK_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -147,19 +135,19 @@ ${UNITREE_SDK_INCLUDE_DIRS}
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
 # add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-add_executable(dawg_core_node src/dawg_core_node.cpp)
-target_link_libraries(dawg_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+# add_executable(dawg_core_node src/dawg_core_node.cpp)
+# target_link_libraries(dawg_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
 
 
-add_executable(dawg_ll_control src/dawg_ll_control.cpp)
-target_link_libraries(dawg_ll_control ${catkin_LIBRARIES})
+# add_executable(dawg_ll_control src/dawg_ll_control.cpp)
+# target_link_libraries(dawg_ll_control ${catkin_LIBRARIES})
 
-add_executable(laser_pcl_converter src/laser_pcl_converter.cpp)
-target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
+# add_executable(laser_pcl_converter src/laser_pcl_converter.cpp)
+# target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
 
-add_executable(dawg_control_node src/dawg_control_node)
-target_link_libraries(dawg_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+# add_executable(dawg_control_node src/dawg_control_node)
+# target_link_libraries(dawg_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
 
 ## Declare a C++ executable
