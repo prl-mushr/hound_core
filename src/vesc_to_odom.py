@@ -8,14 +8,16 @@ import time
 rospy.init_node('vesc_to_odom_node', anonymous=True)
 
 last_callback_time = time.time()
+erpm_gain =rospy.get_param('/erpm_gain')
 
 def translate_cb(msg):
 	global last_callback_time
+	global erpm_gain
 	speed = msg.state.speed
 	odom = Odometry()
 	odom.header.stamp = rospy.Time.now()
-	odom.twist.twist.linear.x = speed/3166
-	odom.twist.covariance[0] = max(0.05*speed/3166,0.1)
+	odom.twist.twist.linear.x = speed/erpm_gain
+	odom.twist.covariance[0] = max(0.01*speed/erpm_gain,0.1)
 	if(time.time() - last_callback_time > 0.1):
 		odom_pub.publish(odom)
 		last_callback_time = time.time()

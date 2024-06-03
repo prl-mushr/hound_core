@@ -130,11 +130,11 @@
       <arg name="ordered_pc"               value="$(arg ordered_pc)"/>
       <arg name="respawn"                  value="$(arg respawn)"/>
     </include>
-    <rosparam> /camera/stereo_module/emitter_enabled: 1 </rosparam>
+    <rosparam> /camera/stereo_module/emitter_enabled: 0 </rosparam>
     <rosparam> /camera/stereo_module/visual_preset: 0 </rosparam>
     <rosparam> /camera/stereo_module/laser_power: 360 </rosparam>
-    <rosparam> /camera/stereo_module/auto_exposure_roi/top: 240 </rosparam>
-    <rosparam> /camera/rgb_camera/auto_exposure_roi/top: 240 </rosparam>
+    <rosparam> /camera/stereo_module/auto_exposure_roi/top: 0 </rosparam>
+    <rosparam> /camera/rgb_camera/auto_exposure_roi/top: 0 </rosparam>
 <!--     <rosparam> /camera/stereo_module/enable_auto_exposure: 0 </rosparam>
     <rosparam> /camera/stereo_module/exposure: 8000 </rosparam>
     <rosparam> /camera/rgb_camera/exposure: 100 </rosparam>

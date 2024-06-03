@@ -6,6 +6,7 @@
 #include "mavros_msgs/RCIn.h"
 #include "sensor_msgs/Imu.h"
 #include "mavros_msgs/State.h"
+#include <sensor_msgs/LaserScan.h>
 #include "ackermann_msgs/AckermannDriveStamped.h"
 #include "vesc_msgs/VescStateStamped.h"
 #include <diagnostic_msgs/DiagnosticArray.h>
@@ -16,7 +17,7 @@
 class ll_controller
 {
 public:
-  ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control;
+  ros::Subscriber sub_vesc, sub_channel, sub_mode, sub_imu, sub_auto_control, sub_scan;
   ros::Publisher control_pub, diagnostic_pub, limits_pub;
 
   float wheelspeed, steering_angle;
@@ -39,7 +40,8 @@ public:
   bool safe_mode;
 
   float accel_gain, roll_gain, steer_slack, LPF_tau;
-  bool liftoff_oversteer;
+  bool liftoff_oversteer, lidar_stop, scan_init;
+  float safe_distance, lidar_angle_threshold, lidar_angle_limit;
   
   ros::Rate *sleep_rate;
 
@@ -49,6 +51,7 @@ public:
     sub_channel = nh.subscribe("/mavros/rc/in", 1, &ll_controller::channel_cb, this);
     sub_mode = nh.subscribe("/mavros/state", 1, &ll_controller::mode_cb, this);
     sub_imu = nh.subscribe("/mavros/imu/data_raw", 1, &ll_controller::imu_cb, this);
+    sub_scan = nh.subscribe("/scan", 1, &ll_controller::scan_cb, this);
     sub_auto_control = nh.subscribe("hound/control", 1, &ll_controller::auto_control_cb, this);
     control_pub = nh.advertise<mavros_msgs::ManualControl>("/mavros/manual_control/send", 10);
     diagnostic_pub = nh.advertise<diagnostic_msgs::DiagnosticArray>("/low_level_diagnostics", 1);
@@ -60,7 +63,9 @@ public:
     channel_init = false;
     vesc_init = false;
     imu_init = false;
+    scan_init = false;
     auto_init = false;
+    lidar_stop = false;
     delta_t = 0.02f;  // 50 Hz loop rate
     speed_integral = 0;
     K_drag = 0;
@@ -135,9 +140,21 @@ public:
     {
       liftoff_oversteer = true;
     }
+    if(not nh.getParam("/safe_distance", safe_distance))
+    {
+      safe_distance = -1;
+    }
+    if(not nh.getParam("/lidar_angle_threshold", lidar_angle_threshold))
+    {
+      lidar_angle_threshold = 10.0/57.3;
+    }
+    if(not nh.getParam("/lidar_angle_limit", lidar_angle_limit))
+    {
+      lidar_angle_limit = 20.0/57.3;
+    }
 
     // the 3930 kv rating is for "no-load". Under load the kv rating drops by 30%;
-    max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / erpm_gain;
+    max_rated_speed = 2 * 0.69 * motor_kv * nominal_voltage / abs(erpm_gain);
     sleep_rate = new ros::Rate(100);
   }
 
@@ -210,6 +227,10 @@ public:
       {
         steering_setpoint = steering_limiter(steering_setpoint, intervention);
       }
+      if(lidar_stop or (safe_distance > 0.1 and not scan_init))
+      {
+        wheelspeed_setpoint = 0;
+      }
       float throttle_duty = speed_controller(wheelspeed_setpoint);
       pub_ctrl(steering_setpoint / steering_max, throttle_duty);
       
@@ -234,10 +255,15 @@ public:
       wheelspeed_input.key = "wheelspeed_input";
       wheelspeed_input.value = std::to_string(wheelspeed_setpoint);
 
+      diagnostic_msgs::KeyValue safety_stop;
+      safety_stop.key = "lidar_stop";
+      safety_stop.value = std::to_string(lidar_stop);
+
       robot_status.values.push_back(steering);
       robot_status.values.push_back(speed_error);
       robot_status.values.push_back(steering_input);
       robot_status.values.push_back(wheelspeed_input);
+      robot_status.values.push_back(safety_stop);
       dia_array.status.push_back(robot_status);
       diagnostic_pub.publish(dia_array);
     }
@@ -253,14 +279,15 @@ public:
     float Ki_speed_error_dt =  speed_control_ki * speed_error *  delta_t;
 
     speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
-    speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
-    if(wheelspeed < 1)
+    speed_integral = std::min(std::max(-0.025f, Ki_speed_error_dt + speed_integral), 0.025f); // add to previous value and then constrain
+
+    // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
+    float voltage_gain = nominal_voltage/voltage_input;
+    if(wheelspeed_setpoint < 0.1*wheelspeed_max)
     {
       speed_integral = 0;
       speed_proportional = 0;
     }
-    // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
-    float voltage_gain = nominal_voltage/voltage_input;
     throttle_duty = voltage_gain*((1 + K_drag)*(wheelspeed_setpoint / max_rated_speed) + speed_error + speed_integral);
     throttle_duty = std::max(throttle_duty, 0.0f); // prevent negative values because we don't support reverse.
 
@@ -406,6 +433,33 @@ public:
       control_pub.publish(manual_control_msg);
   }
 
+  void scan_cb(const sensor_msgs::LaserScan::ConstPtr msg)
+  {
+    if(!scan_init)
+    {
+      scan_init = true;
+    }
+    lidar_stop = false;
+    if(safe_distance < 0) // safe distance disabled
+    {
+      return;
+    }
+
+    int index_start = int((3.14 - lidar_angle_limit)/ msg->angle_increment);
+    int index_count = int(2*lidar_angle_limit/msg->angle_increment);
+    int lidar_threshold = int(lidar_angle_threshold / msg->angle_increment);
+    // Iterate over the selected range of angles and store corresponding distances
+    int hits = 0;
+
+    for (int i = index_start; i <= index_start + index_count; i++)
+    {
+        hits += int(msg->ranges[i] < safe_distance and msg->ranges[i] > 0.0f);
+        lidar_stop = (hits > lidar_threshold);
+    }
+
+    return;
+  }
+
 };
 
 int main(int argc, char **argv)
@@ -414,9 +468,12 @@ int main(int argc, char **argv)
   ros::init(argc, argv, "hound_ll_control");
   ros::NodeHandle nh("~");
   ll_controller ll_ctrl(nh);
-  while(ros::ok())
-  {
-    ros::spinOnce();
-  }
+  // while(ros::ok())
+  // {
+  //   ros::spinOnce();
+  // }
+  ros::AsyncSpinner spinner(16);  // Use n threads
+  spinner.start();
+  ros::waitForShutdown();
   return 0;
 }
