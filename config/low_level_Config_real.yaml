@@ -15,3 +15,4 @@ steer_slack: 0.2 # steering slack value
 LPF_tau: 0.5  # low-pass filter coefficient for filtering accelerations
 throttle_delta: 0.02  # maximum change in throttle duty cycle between two timesteps
 liftoff_oversteer: true  # make RPS compensate for liftoff oversteer
+safe_distance: 0.8
