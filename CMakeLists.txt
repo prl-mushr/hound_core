@@ -142,17 +142,17 @@ ${OpenCV_INCLUDE_DIRS}
 ## as an example, code may need to be generated before libraries
 ## either from message generation or dynamic reconfigure
 # add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-add_executable(hound_core_node src/hound_core_node.cpp)
-target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+# add_executable(hound_core_node src/hound_core_node.cpp)
+# target_link_libraries(hound_core_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 
 add_executable(hound_ll_control src/hound_ll_control.cpp)
 target_link_libraries(hound_ll_control ${catkin_LIBRARIES})
 
-add_executable(laser_pcl_converter src/laser_pcl_converter.cpp)
-target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
+# add_executable(laser_pcl_converter src/laser_pcl_converter.cpp)
+# target_link_libraries(laser_pcl_converter ${catkin_LIBRARIES})
 
-add_executable(hound_control_node src/hound_control_node)
-target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
+# add_executable(hound_control_node src/hound_control_node)
+# target_link_libraries(hound_control_node ${catkin_LIBRARIES} ${OpenCV_LIBS})
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide

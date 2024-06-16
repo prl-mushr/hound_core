@@ -75,3 +75,6 @@ vehicle:
 use_speed_ctrl: False
 skip_points: 1
 elevation_multiplier: 1.0
+
+use_yaml: False
+waypoint_file: "waypoints.yaml"

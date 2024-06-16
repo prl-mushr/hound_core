@@ -1,7 +1,7 @@
 <launch>
     <node pkg="hound_core" type="HAL_9000.py" name="HAL" output="screen"/>
     
-    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 hound_core apm.launch" name="apm_timed" output="screen"/>
+    <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="10 hound_core apm.launch" name="apm_timed" output="screen" launch-prefix="nice -n -1"/>
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="30 hound_core X4.launch" name="lidar_timed" output="screen"/>
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="50 hound_core vesc_driver_node.launch" name="vesc_timed" output="screen"/>
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="70 hound_core realsense_d455_HOUND.launch" name="camera_timed" output="screen"/>
@@ -15,6 +15,7 @@
     <rosparam file="$(arg low_level_Config)" command="load" />
     
     <node pkg="hound_core" type="hound_ll_control" name="low_level_controller" launch-prefix="nice -n -1"/>
+
     <node pkg="hound_core" type="osm_router.py" name="router" output="screen"/>
 
     <node pkg="timed_roslaunch" type="timed_roslaunch.sh" args="15 elevation_mapping_cupy elevation_mapping_cupy_no_vis.launch" name="elevation_mapping" output="log"/>
