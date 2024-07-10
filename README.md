@@ -212,8 +212,8 @@ First few datasets collected using the HOUND hardware:
 2) [new_bags_2](https://drive.google.com/drive/folders/1CcIw9SoD6V5kblfzP96k5vfq1-5Uju_v?usp=sharing)
 
 Datasets collected using the d455 instead of the d435 camera:
-1) [new_bags_3](https://drive.google.com/drive/folders/1dut0QQscM1zGSM1hDTDna4EqMtbCVdnB?usp=sharing) -- This dataset is not particularly useful, as we were experimenting with region of interest settings on the camera, and ended up saturating the camera sensor in most of the frames. The dataset is only included in case someone wants to tally the kilometers operated by the system.
-2) [new_bags_4](https://drive.google.com/drive/folders/12D8AFurK10BF6UKG0dReFFSA7qQtGr2w?usp=sharing)
+1) [new_bags_3](https://drive.google.com/drive/folders/1dut0QQscM1zGSM1hDTDna4EqMtbCVdnB?usp=sharing) 
+2) [new_bags_4](https://drive.google.com/drive/folders/12D8AFurK10BF6UKG0dReFFSA7qQtGr2w?usp=sharing)-- This dataset is not particularly useful, as we were experimenting with the region of interest settings on the camera, and ended up saturating the camera sensor in most of the frames. The dataset is only included in case someone wants to tally the kilometers operated by the system.
 3) [new_bags_5](https://drive.google.com/drive/folders/1w7_21CfkHCaU1jUW_0Nw0ZIm3knlXst0?usp=sharing)
 
 Datasets collected for evaluating simulator accuracy:
