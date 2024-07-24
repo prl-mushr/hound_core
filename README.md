@@ -139,11 +139,9 @@ Datasets collected for evaluating simulator accuracy:
 ### ACKNOWLEDGEMENT:
 This repository was part of the following work. If you found this repository or its related repositories (such as BeamNGRL, hound_hardware) useful in your research, please cite the following paper.
 ```
-@article{talia2023hound,
-  title={HOUND: An Open-Source, Low-cost Research Platform for High-speed Off-road Underactuated Nonholonomic Driving},
-  author={Talia, Sidharth and Schmittle, Matt and Lambert, Alexander and Spitzer, Alexander and Mavrogiannis, Christoforos and Srinivasa, Siddhartha S},
-  journal={Robotics: Science and Systems},
-  year={2024}
+@article{taliademonstrating,
+  title={Demonstrating HOUND: A Low-cost Research Platform for High-speed Off-road Underactuated Nonholonomic Driving},
+  author={Talia, Sidharth and Schmittle, Matt and Lambert, Alexander and Spitzer, Alexander and Mavrogiannis, Christoforos and Srinivasa, Siddhartha S}
 }
 ```
 
