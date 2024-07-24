@@ -99,6 +99,7 @@ rosservice call /elevation_mapping/clear_map
 ```
 This concludes running the HITL unit test.
 
+Instructions for [running the stack](https://github.com/prl-mushr/hound_core/blob/main/Run_instructions.md) on the real car, and a [high level overview](https://github.com/prl-mushr/hound_core/blob/main/Stack_overview.md) of the stack (WIP) are also provided.
 
 ## Datasets:
 Several datasets were collected during the testing of the HOUND hardware. Note that these datasets were NOT collected for the purposes of training a model or for benchmarking. They were collected as a "receipt" for the distance covered by the HOUND platform during testing.
@@ -136,13 +137,13 @@ Datasets collected for evaluating simulator accuracy:
 [new_bags_6](https://drive.google.com/drive/folders/1mX6f5TXzX6WHbrv4zwV3bbimhbbg5moI?usp=sharing)
 
 ### ACKNOWLEDGEMENT:
-This repository was part of the following works. If you found this repository or its related repositories (such as BeamNGRL, hound_hardware) useful in your research, please cite the following paper.
+This repository was part of the following work. If you found this repository or its related repositories (such as BeamNGRL, hound_hardware) useful in your research, please cite the following paper.
 ```
 @article{talia2023hound,
   title={HOUND: An Open-Source, Low-cost Research Platform for High-speed Off-road Underactuated Nonholonomic Driving},
   author={Talia, Sidharth and Schmittle, Matt and Lambert, Alexander and Spitzer, Alexander and Mavrogiannis, Christoforos and Srinivasa, Siddhartha S},
-  journal={arXiv preprint arXiv:2311.11199},
-  year={2023}
+  journal={Robotics: Science and Systems},
+  year={2024}
 }
 ```
 
