@@ -62,6 +62,7 @@ TODO: add description of which thing does what
 #### Your first run with the car:
 
 We highly recommend running the car in semi-auto mode first and recording the data to visualize the elevation maps before trying the autonomy mode.
+    
     1) For your first experiment, go to a relatively open area/field. Turn on your phone's hotspot and start the car. You should be able to ssh into the car after a while
     2) Wait for the sensors.launch to finish booting up. You can check whether everything is up and running by using ssh and typing `rostopic echo /SOC_diagnostics`. It should save True for mavros_init and camera_init. Alternatively, if you don't have a laptop with you (usually the case when just doing data collection), you can listen in for the "tones".
     	1) Tone for when the [low-level controller](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2A) is up and running.
@@ -78,6 +79,7 @@ We highly recommend running the car in semi-auto mode first and recording the da
     10) Drive the car around for a bit. If you drive it around enough, you will eventually drain the battery, and hear [this alarm tone](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dddP8ddd) that tells you that the battery is about to reach its minimum safe voltage (and that you should shut the car down). It is annoying on purpose.
 
 After the field test, it is time to visualize the data we collected and verify that everything is functioning correctly.
+    
     1) Connect a monitor, mouse, and keyboard to the car's Orin NX (you can use a wireless keyboard and mouse). Start the car
     2) Open a terminal and type: "docker kill $(docker ps -q)". This will kill the current docker.
     3) Reset the mushr_noetic file to:
@@ -87,7 +89,6 @@ After the field test, it is time to visualize the data we collected and verify t
 	xhost -local:docker
 	# docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 -d --rm mushr_noetic /root/catkin_ws/src/hound_core/entry_command.sh
 	```
-
     4) Start mushr_noetic -- this time it will not start the sensors, it will just create a bash terminal into the docker.
     5) Start roscore
     6) Open 2 more terminals, and type "dbash" in both of them -- this opens new windows into the existing docker. "dbash" is just an alias for "docker exec -it $(docker ps -q) bash".
@@ -107,6 +108,7 @@ After the field test, it is time to visualize the data we collected and verify t
 
 #### Your first autonomy test with the car:
 For autonomous operation, We use the mppi and mission planner as follows
+	
 	1) Follow steps 1-4 from the previous section (getting the car up and running, making sure it has enough GPS satellites and so on).
 	2) In mission planner, go to the [plan tab](https://ardupilot.org/planner/docs/common-planning-a-mission-with-waypoints-and-events.html) and set up the waypoints you want the car to follow. These waypoints can be 5-10 meters away from each other, and the car will automatically create Bezier splines that connect these points smoothly (global planner that plans through these waypoints is a WIP). You can also save the waypoints in the same tab so that you don't have to repeat this step for the same path each time.
     2) Write the waypoints (there should be a button for this). 
