@@ -56,8 +56,35 @@ Note: We recommend using the D455 instead of the D435 camera as the depth perfro
 2) Change the maximum depth [here](https://github.com/prl-mushr/elevation_mapping_cupy/blob/main/elevation_mapping_cupy/config/D455_parameters.yaml#L78) to 5.0 meters. 
 
 #### Familiarize yourself with the R/C remote:
-TODO: insert image of transmitter
-TODO: add description of which thing does what
+![](content/transmitter.png)
+Assuming you've followed the transmitter setup [here](https://github.com/prl-mushr/hound_hardware?tab=readme-ov-file#setting-up-the-hardware),
+1) Arm switch: This switch, in the high position, disarms the vehicle, and in the low position, arms the vehicle.
+In the disarmed mode, only the steering may function, and the motor control is disabled; this mode is useful when you wish to leave the car unattended for a while, or if you just want to prevent unintentional throttle input from causing havoc.
+This is the ultimate "e-stop" in the hands of the user. If the car is currently moving and is disarmed, the wheelspeed will be brought to 0 immediately. The steering should still be controllable.
+2) Mode switch: This swtich controls which mode the system is operating in. 
+	1) Manual mode: Putting the switch to the heighest position puts it in manual control mode. 
+	The controls from the transmitter are being written directly to the motor and steering, the jetson is not involved.
+	This mode works even with the jetson turned off, and is kept as a last-resort in case if the low-level controller also fails or the jetson turns off mid-experiment.
+	2) Semi-autonomous mode/safe mode: Putting the switch to the middle position puts the car in "safe" mode.
+	This requires the low-level controller to be running, meaning this does not work unless the jetson is powered up.
+	In this mode, the throttle input corresponds to a wheelspeed target, which is managed by the low-level controller (PID + feed forward) and the steering input is corrected by the rollover prevention system.
+	Additionally, a naive lidar-based safety controller also runs in this mode which sets the wheelspeed target to 0 if there is something in front of the lidar within some set distance (usually set to ~0.5 meters).
+	3) Autonomy mode: Putting the switch into the lowest position puts the car into "autonomy" mode.
+	In this mode, the steering input on the transmitter has no impact on the car, but the throttle stick still corresponds to the maximum allowable wheel-speed. This allows the user to slowly increase the allowable wheelspeed as they gain more confidence in the autonomy stack they have developed. This speed limit is enforced by the low level controller.
+	Rollover prevention is also active in this mode.
+	Lidar safety controller also remains active in this mode.
+1) Throttle: Depending on the mode, the throttle controls either the raw duty cycle (manual mode), the wheelspeed (semi-auto) or the wheelspeed limit (auto). 
+2) Yaw: This stick is used to turn the data collection on and off. Turning it right starts data collection, turning it left turns data collection off. The data collection on-off can also be mapped to the pitch stick.
+3) Pitch: This stick is currently unused.
+4) Roll: This stick controls the steering angle in the manual mode and semi auto mode, but does not control it in the autonomy mode.
+
+
+#### Configuration files:
+For initial usage, the user should not need to modify the config files, but we give a high level overview of what can be configured by the user.
+1) [Low level config](https://github.com/prl-mushr/hound_core/blob/main/config/low_level_Config_real.yaml): This file exposes parameters relevant to rollover prevention and speed control
+2) [Hardware abstraction layer config](https://github.com/prl-mushr/hound_core/blob/main/config/HAL.yaml): This file exposes parameters relevant to the configuration of sensors, where the data is stored and so on.
+3) [MPPI/high level controller config](https://github.com/prl-mushr/hound_core/blob/main/config/hound_mppi_real.yaml): This file exposes parameters relevant to the high level controller, which in this case is the MPPI controller.
+
 
 #### Your first run with the car:
 
@@ -70,6 +97,7 @@ We highly recommend running the car in semi-auto mode first and recording the da
 	3) Tone for when the [GPS has achieved a good lock](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dP8d) (usually happens after the bad lock)
 	4) Tone for when the [camera has started running](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2C) (happens last, approximately 2 minutes after boot)
 3) On your phone start the [Mission planner app](https://play.google.com/store/apps/details?id=com.michaeloborne.MissionPlanner&hl=en_US&pli=1) or [QGC](https://apps.apple.com/us/app/alta-qgroundcontrol/id1447536334)(if you're on iPhone. It may not have all the functionality, but it will do). If the IP Addresses are set up correctly, the mission planner/QGC should automatically connect to the car on boot. If it does not, you can connect the mission planner to the vehicle manually by pressing on the "connect" button on the top left and just going with the default settings for all the prompts.
+![](content/data_tab.png)
 4) Wait for the GPS satellite count to be more than 12 (I prefer at least 16 satellites before I start my experiments). The Hdop should be around 1.0 m or less. Sometimes solar flares interfere. You can check if solar flares are going to interfere with GPS [here](https://www.swpc.noaa.gov/products/planetary-k-index).
 5) On the transmitter, there are set SWC to the middle position (semi-auto mode), and set SWD to the lowest position (arming).
 6) The car is now in semi-auto mode where it will do speed control and rollover prevention. Slowly increase the throttle and drive the car around manually. You should observe that the car does not let you turn very hard as you increase speed -- it is actively trying to prevent roll-overs.
@@ -103,7 +131,8 @@ Where # represents the bag number you want to play
 ```bash
 rviz -d /root/catkin_ws/src/hound_core/rviz/mppi_rviz.rviz
 ```
-9) You should now be able to visualize an elevation map, with the vehicle in the center. Similar to the following GIF: (TODO: add GIF)
+9) You should now be able to visualize an elevation map, with the vehicle in the center. Similar to the following image:
+![](content/heigtmap.png)
 
 
 #### Your first autonomy test with the car:
@@ -111,6 +140,7 @@ For autonomous operation, We use the mppi and mission planner as follows
 
 1) Follow steps 1-4 from the previous section (getting the car up and running, making sure it has enough GPS satellites and so on).
 2) In mission planner, go to the [plan tab](https://ardupilot.org/planner/docs/common-planning-a-mission-with-waypoints-and-events.html) and set up the waypoints you want the car to follow. These waypoints can be 5-10 meters away from each other, and the car will automatically create Bezier splines that connect these points smoothly (global planner that plans through these waypoints is a WIP). You can also save the waypoints in the same tab so that you don't have to repeat this step for the same path each time.
+![](content/plan_tab.png)
 2) Write the waypoints (there should be a button for this). 
 3) SSH into the car, then type `dbash` in the terminal to enter the docker, and run the following command to start the MPPI controller.
 ```bash
@@ -120,4 +150,6 @@ rosrun hound_core hound hound_hl_control.py
 5) The mppi controller will now have a path through the waypoints that it can follow.
 6) Set the mode stick on the RC transmitter to the position corresponding to the guided auto. If you're using the same RC transmitter as me, this would mean setting SWC to the lowest position. Then, arm the vehicle by pulling down on SWD. (TODO: insert image)
 7) Slowly increase the throttle -- the car should start moving autonomously to follow the waypoints -- in the autonomy mode, the throttle stick still controls the maximum wheelspeed that the MPPI controller (or any policy) can send to the motor; this is done for safety reasons. If you're trying to train an RL agent, this will likely break some assumptions, and you may have to modify the code so that the speed is not restricted by the throttle stick.
-8) Observe the motion of the vehicle -- if the vehicle does something unexpected or bad, you can always 1) pull down the throttle to reduce the speed 2) disarm the vehicle by flicking the SWD to the top position. Disarming the vehicle also resets the elevation map process.
+8) Observe the motion of the vehicle -- if the vehicle does something unexpected or bad, you can always 
+	1) pull down the throttle to reduce the speed 
+	2) disarm the vehicle by flicking the SWD to the top position. Disarming the vehicle also resets the elevation map process.
