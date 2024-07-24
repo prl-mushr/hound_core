@@ -62,62 +62,62 @@ TODO: add description of which thing does what
 #### Your first run with the car:
 
 We highly recommend running the car in semi-auto mode first and recording the data to visualize the elevation maps before trying the autonomy mode.
-    
-    1) For your first experiment, go to a relatively open area/field. Turn on your phone's hotspot and start the car. You should be able to ssh into the car after a while
-    2) Wait for the sensors.launch to finish booting up. You can check whether everything is up and running by using ssh and typing `rostopic echo /SOC_diagnostics`. It should save True for mavros_init and camera_init. Alternatively, if you don't have a laptop with you (usually the case when just doing data collection), you can listen in for the "tones".
-    	1) Tone for when the [low-level controller](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2A) is up and running.
-    	2) Tone for when the [GPS has a "bad lock"](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8ddP8dd) or initial lock.
-    	3) Tone for when the [GPS has achieved a good lock](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dP8d) (usually happens after the bad lock)
-    	4) Tone for when the [camera has started running](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2C) (happens last, approximately 2 minutes after boot)
-    3) On your phone start the [Mission planner app](https://play.google.com/store/apps/details?id=com.michaeloborne.MissionPlanner&hl=en_US&pli=1) or [QGC](https://apps.apple.com/us/app/alta-qgroundcontrol/id1447536334)(if you're on iPhone. It may not have all the functionality, but it will do). If the IP Addresses are set up correctly, the mission planner/QGC should automatically connect to the car on boot. If it does not, you can connect the mission planner to the vehicle manually by pressing on the "connect" button on the top left and just going with the default settings for all the prompts.
-    4) Wait for the GPS satellite count to be more than 12 (I prefer at least 16 satellites before I start my experiments). The Hdop should be around 1.0 m or less. Sometimes solar flares interfere. You can check if solar flares are going to interfere with GPS [here](https://www.swpc.noaa.gov/products/planetary-k-index).
-    5) On the transmitter, there are set SWC to the middle position (semi-auto mode), and set SWD to the lowest position (arming).
-    6) The car is now in semi-auto mode where it will do speed control and rollover prevention. Slowly increase the throttle and drive the car around manually. You should observe that the car does not let you turn very hard as you increase speed -- it is actively trying to prevent roll-overs.
-    7) To record rosbags of the data, move the yaw stick towards the right -- you should hear [this tone](https://firmware.ardupilot.org/Tools/ToneTester/#MLO3L8CD).
-    8) To stop the rosbag record, move the yaw stick towards the left -- you should hear [this tone](https://firmware.ardupilot.org/Tools/ToneTester/#MLO3L8DC).
-    9) The rosbags are automatically split into chunks that are 5 minutes long if you forget to turn the recording off, or if you try to record for a long amount of time. You can change the chunk size [here](https://github.com/prl-mushr/hound_core/blob/main/src/HAL_9000.py#L130C41-L130C50).
-    10) Drive the car around for a bit. If you drive it around enough, you will eventually drain the battery, and hear [this alarm tone](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dddP8ddd) that tells you that the battery is about to reach its minimum safe voltage (and that you should shut the car down). It is annoying on purpose.
+
+1) For your first experiment, go to a relatively open area/field. Turn on your phone's hotspot and start the car. You should be able to ssh into the car after a while
+2) Wait for the sensors.launch to finish booting up. You can check whether everything is up and running by using ssh and typing `rostopic echo /SOC_diagnostics`. It should save True for mavros_init and camera_init. Alternatively, if you don't have a laptop with you (usually the case when just doing data collection), you can listen in for the "tones".
+	1) Tone for when the [low-level controller](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2A) is up and running.
+	2) Tone for when the [GPS has a "bad lock"](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8ddP8dd) or initial lock.
+	3) Tone for when the [GPS has achieved a good lock](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dP8d) (usually happens after the bad lock)
+	4) Tone for when the [camera has started running](https://firmware.ardupilot.org/Tools/ToneTester/#MLO2L2C) (happens last, approximately 2 minutes after boot)
+3) On your phone start the [Mission planner app](https://play.google.com/store/apps/details?id=com.michaeloborne.MissionPlanner&hl=en_US&pli=1) or [QGC](https://apps.apple.com/us/app/alta-qgroundcontrol/id1447536334)(if you're on iPhone. It may not have all the functionality, but it will do). If the IP Addresses are set up correctly, the mission planner/QGC should automatically connect to the car on boot. If it does not, you can connect the mission planner to the vehicle manually by pressing on the "connect" button on the top left and just going with the default settings for all the prompts.
+4) Wait for the GPS satellite count to be more than 12 (I prefer at least 16 satellites before I start my experiments). The Hdop should be around 1.0 m or less. Sometimes solar flares interfere. You can check if solar flares are going to interfere with GPS [here](https://www.swpc.noaa.gov/products/planetary-k-index).
+5) On the transmitter, there are set SWC to the middle position (semi-auto mode), and set SWD to the lowest position (arming).
+6) The car is now in semi-auto mode where it will do speed control and rollover prevention. Slowly increase the throttle and drive the car around manually. You should observe that the car does not let you turn very hard as you increase speed -- it is actively trying to prevent roll-overs.
+7) To record rosbags of the data, move the yaw stick towards the right -- you should hear [this tone](https://firmware.ardupilot.org/Tools/ToneTester/#MLO3L8CD).
+8) To stop the rosbag record, move the yaw stick towards the left -- you should hear [this tone](https://firmware.ardupilot.org/Tools/ToneTester/#MLO3L8DC).
+9) The rosbags are automatically split into chunks that are 5 minutes long if you forget to turn the recording off, or if you try to record for a long amount of time. You can change the chunk size [here](https://github.com/prl-mushr/hound_core/blob/main/src/HAL_9000.py#L130C41-L130C50).
+10) Drive the car around for a bit. If you drive it around enough, you will eventually drain the battery, and hear [this alarm tone](https://firmware.ardupilot.org/Tools/ToneTester/#MSO3L8dddP8ddd) that tells you that the battery is about to reach its minimum safe voltage (and that you should shut the car down). It is annoying on purpose.
 
 After the field test, it is time to visualize the data we collected and verify that everything is functioning correctly.
-    
-    1) Connect a monitor, mouse, and keyboard to the car's Orin NX (you can use a wireless keyboard and mouse). Start the car
-    2) Open a terminal and type: "docker kill $(docker ps -q)". This will kill the current docker.
-    3) Reset the mushr_noetic file to:
-    ```bash
-	xhost +local:docker
-	docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 --rm mushr_noetic bash
-	xhost -local:docker
-	# docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 -d --rm mushr_noetic /root/catkin_ws/src/hound_core/entry_command.sh
-	```
-    4) Start mushr_noetic -- this time it will not start the sensors, it will just create a bash terminal into the docker.
-    5) Start roscore
-    6) Open 2 more terminals, and type "dbash" in both of them -- this opens new windows into the existing docker. "dbash" is just an alias for "docker exec -it $(docker ps -q) bash".
-    7) In the second terminal 
-    ```bash
-    cd ~/catkin_ws/src/bags
-    rosparam set use_sim_time true
-    rosbag play hound_#.bag --clock
-    ```
-    Where # represents the bag number you want to play
-    8) In the third terminal, type 
-    ```bash
-    rviz -d /root/catkin_ws/src/hound_core/rviz/mppi_rviz.rviz
-    ```
-    9) You should now be able to visualize an elevation map, with the vehicle in the center. Similar to the following GIF: (TODO: add GIF)
+  
+1) Connect a monitor, mouse, and keyboard to the car's Orin NX (you can use a wireless keyboard and mouse). Start the car
+2) Open a terminal and type: "docker kill $(docker ps -q)". This will kill the current docker.
+3) Reset the mushr_noetic file to:
+```bash
+xhost +local:docker
+docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 --rm mushr_noetic bash
+xhost -local:docker
+# docker-compose -f $MUSHR_INSTALL_PATH/$MUSHR_COMPOSE_FILE run -p 9090:9090 -d --rm mushr_noetic /root/catkin_ws/src/hound_core/entry_command.sh
+```
+4) Start mushr_noetic -- this time it will not start the sensors, it will just create a bash terminal into the docker.
+5) Start roscore
+6) Open 2 more terminals, and type "dbash" in both of them -- this opens new windows into the existing docker. "dbash" is just an alias for "docker exec -it $(docker ps -q) bash".
+7) In the second terminal 
+```bash
+cd ~/catkin_ws/src/bags
+rosparam set use_sim_time true
+rosbag play hound_#.bag --clock
+```
+Where # represents the bag number you want to play
+8) In the third terminal, type 
+```bash
+rviz -d /root/catkin_ws/src/hound_core/rviz/mppi_rviz.rviz
+```
+9) You should now be able to visualize an elevation map, with the vehicle in the center. Similar to the following GIF: (TODO: add GIF)
 
 
 #### Your first autonomy test with the car:
 For autonomous operation, We use the mppi and mission planner as follows
-	
-	1) Follow steps 1-4 from the previous section (getting the car up and running, making sure it has enough GPS satellites and so on).
-	2) In mission planner, go to the [plan tab](https://ardupilot.org/planner/docs/common-planning-a-mission-with-waypoints-and-events.html) and set up the waypoints you want the car to follow. These waypoints can be 5-10 meters away from each other, and the car will automatically create Bezier splines that connect these points smoothly (global planner that plans through these waypoints is a WIP). You can also save the waypoints in the same tab so that you don't have to repeat this step for the same path each time.
-    2) Write the waypoints (there should be a button for this). 
-    3) SSH into the car, then type `dbash` in the terminal to enter the docker, and run the following command to start the MPPI controller.
-    ```bash
-    rosrun hound_core hound hound_hl_control.py
-    ```
-    4) In the mission planner's plan tab, read the waypoints -- this makes the ardupilot board republish the waypoints so that the mppi controller can also read them.
-    5) The mppi controller will now have a path through the waypoints that it can follow.
-    6) Set the mode stick on the RC transmitter to the position corresponding to the guided auto. If you're using the same RC transmitter as me, this would mean setting SWC to the lowest position. Then, arm the vehicle by pulling down on SWD. (TODO: insert image)
-    7) Slowly increase the throttle -- the car should start moving autonomously to follow the waypoints -- in the autonomy mode, the throttle stick still controls the maximum wheelspeed that the MPPI controller (or any policy) can send to the motor; this is done for safety reasons. If you're trying to train an RL agent, this will likely break some assumptions, and you may have to modify the code so that the speed is not restricted by the throttle stick.
-    8) Observe the motion of the vehicle -- if the vehicle does something unexpected or bad, you can always 1) pull down the throttle to reduce the speed 2) disarm the vehicle by flicking the SWD to the top position. Disarming the vehicle also resets the elevation map process.
+
+1) Follow steps 1-4 from the previous section (getting the car up and running, making sure it has enough GPS satellites and so on).
+2) In mission planner, go to the [plan tab](https://ardupilot.org/planner/docs/common-planning-a-mission-with-waypoints-and-events.html) and set up the waypoints you want the car to follow. These waypoints can be 5-10 meters away from each other, and the car will automatically create Bezier splines that connect these points smoothly (global planner that plans through these waypoints is a WIP). You can also save the waypoints in the same tab so that you don't have to repeat this step for the same path each time.
+2) Write the waypoints (there should be a button for this). 
+3) SSH into the car, then type `dbash` in the terminal to enter the docker, and run the following command to start the MPPI controller.
+```bash
+rosrun hound_core hound hound_hl_control.py
+```
+4) In the mission planner's plan tab, read the waypoints -- this makes the ardupilot board republish the waypoints so that the mppi controller can also read them.
+5) The mppi controller will now have a path through the waypoints that it can follow.
+6) Set the mode stick on the RC transmitter to the position corresponding to the guided auto. If you're using the same RC transmitter as me, this would mean setting SWC to the lowest position. Then, arm the vehicle by pulling down on SWD. (TODO: insert image)
+7) Slowly increase the throttle -- the car should start moving autonomously to follow the waypoints -- in the autonomy mode, the throttle stick still controls the maximum wheelspeed that the MPPI controller (or any policy) can send to the motor; this is done for safety reasons. If you're trying to train an RL agent, this will likely break some assumptions, and you may have to modify the code so that the speed is not restricted by the throttle stick.
+8) Observe the motion of the vehicle -- if the vehicle does something unexpected or bad, you can always 1) pull down the throttle to reduce the speed 2) disarm the vehicle by flicking the SWD to the top position. Disarming the vehicle also resets the elevation map process.
