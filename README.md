@@ -60,8 +60,9 @@ This concludes the installation of the hound's autonomy stack.
 The docker install pulls the BeamNG integration code, however, there are some additional setup steps. Follow the instructions on [BeamNGRL](https://github.com/prl-mushr/BeamNGRL) to set up the BeamNG simulator integration.
 Note that you will need to git clone BeamNGRL on the Windows host as well to start the simulator on it.
 
-### Testing the stack in HITL mode:
+### Confirming that the stack installed correctly using the HITL unit test:
 The HITL unit test is useful for testing your entire stack before you go for a real-world field test. It runs the autonomy stack in ROS as if it was running with real hardware data, communicating the control outputs to the simulator.
+However, as it runs both the simulator and the autonomy stack, we can also use it as a means to verify that all the components required for HOUND were installed correctly.
 
 1) Make sure the computer running the autonomy stack and the one running the simulator are connected via the ethernet cable. On the computer running the autonomy stack:
 ```bash
