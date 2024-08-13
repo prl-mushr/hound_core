@@ -144,7 +144,7 @@ For autonomous operation, We use the mppi and mission planner as follows
 2) Write the waypoints (there should be a button for this). 
 3) SSH into the car, then type `dbash` in the terminal to enter the docker, and run the following command to start the MPPI controller.
 ```bash
-rosrun hound_core hound hound_hl_control.py
+rosrun hound_core hound_hl_control.py
 ```
 4) In the mission planner's plan tab, read the waypoints -- this makes the ardupilot board republish the waypoints so that the mppi controller can also read them.
 5) The mppi controller will now have a path through the waypoints that it can follow.
