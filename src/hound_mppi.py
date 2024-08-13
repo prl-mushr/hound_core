@@ -36,11 +36,12 @@ class mppi:
         self.mppi = MPPI(dynamics, costs, sampling, self.MPPI_config)
         self.mppi.reset()
         self.print_states = None
+        self.default_max_thr = self.Sampling_config["max_thr"] # set the default value. consider using a deep-copy?
 
     def set_hard_limit(self, hard_limit):
         self.Sampling_config["max_thr"] = min(
             hard_limit / self.Dynamics_config["throttle_to_wheelspeed"],
-            self.Sampling_config["max_thr"],
+            self.default_max_thr,
         )
         self.mppi.Sampling.max_thr = torch.tensor(
             self.Sampling_config["max_thr"], device=self.device, dtype=self.dtype
