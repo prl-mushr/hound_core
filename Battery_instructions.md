@@ -53,7 +53,7 @@ This [tutorial](https://youtu.be/fkSFUXZkIVU?si=4x1yKB1FYm833Ymd&t=620) is also 
 
 ### Step 1:
 Place the battery in the slot highlighted in the image
-![](content/battery_placement.jpg)
+![](content/battery_placement.jpg?)
 ### Step 2:
 Plug the battery's connector into the blue connector. Match the red and black wires of both connectors before plugging. There is only one way in which the connectors join, so reverse polarity isn't possible (unless you somehow mush the plastic of the connectors).
-![](content/battery_connectors.jpg)
+![](content/battery_connectors.jpg?)
