@@ -13,6 +13,8 @@ from tf.transformations import euler_from_quaternion
 from pathlib import Path
 import subprocess
 from cv_bridge import CvBridge
+import time
+from scipy import signal
 
 cv_bridge = CvBridge()
 
@@ -120,11 +122,11 @@ def get_state_data(imu_msg, odom_msg):
 
 def get_control(msg):
     ctrls = np.zeros(2)
-    ctrls[0] = -msg.y / 1000.0
-    ctrls[1] = msg.z / 1000.0
+    # ctrls[0] = -msg.y / 1000.0
+    # ctrls[1] = (17/23)*msg.z / 1000.0
     # ctrls = np.zeros(4)
-    # ctrls[0] =  ((msg.channels[0] - 1500) / 500.0 )
-    # ctrls[1] =  ((msg.channels[2] - 1000) / 1000.0 )
+    ctrls[0] =  -((msg.channels[3] - 1500) / 270.0 )
+    ctrls[1] =  (23/17)*((msg.channels[2] - 1050) / 1000.0 )
     # ctrls[2] =  ((msg.channels[1] - 1500) / 500.0 )
     # ctrls[3] =  ((msg.channels[3] - 1500) / 500.0 )
     return ctrls
@@ -143,10 +145,13 @@ def generate_normal(elev, k=3):
     return normal
 
 
-def grid_map_callback(grid_map):
+def grid_map_callback(grid_map, topic_name):
     map_size = grid_map.info.length_x
     layers = grid_map.layers
-    index = layers.index("comp_grid_map")
+    if topic_name == "/grid_map_occlusion_inpainting/all_grid_map":
+        index = layers.index("comp_grid_map")
+    else:
+        index = layers.index("elevation")
     cent = grid_map.info.pose.position
     map_cent = np.array([cent.x, cent.y, cent.z])
 
@@ -164,18 +169,18 @@ def grid_map_callback(grid_map):
     ## template code for how to get color image:
     # matrix = grid_map.data[color_index]
     # map_color = np.transpose(cv2.flip(np.reshape(matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size,3), order='F'), -1), axes=[1,0,2])
-    map_norm = generate_normal(map_elev)
+    map_norm = map_elev #generate_normal(map_elev)
     ## upscaling this AFTER calculating the surface normal.
     map_cent[2] = map_elev[map_elev.shape[0] // 2, map_elev.shape[1] // 2]
     map_elev -= map_cent[2]
     ## eventually this function should return 5 maps: height, normal, color, segment, path/costmap
     valid = np.array(
-        [1, 1, 0, 0, 0]
+        [1, 0, 0, 0, 0]
     )  ## valid variable tells us which of these maps are "valid"
     map_color = cv2.applyColorMap(
         ((map_elev + 4) * 255 / 8).astype(np.uint8), cv2.COLORMAP_JET
     )
-    return map_elev, map_norm, map_norm, map_norm, map_color, valid
+    return map_elev, map_norm, map_norm, map_norm, map_color, valid, map_cent
 
 
 def save_cam_config(camera_info, filename):
@@ -211,14 +216,17 @@ def main(Config):
     output_path.mkdir(parents=True, exist_ok=True)
 
     topic_list = [
-        "/sensors/core",
+        # "/sensors/core",
         "/mavros/imu/data_raw",
         "/mavros/local_position/odom",
-        "/mavros/manual_control/send",
-        "/mavros/rc/in",
-        "/camera/color/image_raw",
-        "/camera/depth/image_rect_raw",
+        # "/mavros/manual_control/send",
+        # "/mavros/rc/in",
+        "/mavros/rc/out",
+        # "/camera/color/image_raw",
+        # "/camera/depth/image_rect_raw",
         "/grid_map_occlusion_inpainting/all_grid_map",
+        "/elevation_mapping/elevation_map_cropped"
+        "/tf"
     ]
 
     rgb_info = None
@@ -238,54 +246,80 @@ def main(Config):
         for i in range(len(files)):
             source = os.path.join(bagdir, files[i])
             bag = rosbag.Bag(source, "r")
+            print(source)
             print("Processed: {} percent".format(100 * i / len(files)))
             new_bag = True
             ts_start = None
             state_buffer = 0
 
-            imu_data = {}
-            odom_data = {}
-            grid_map_data = {}
-            color_data = {}
-            depth_data = {}
-            control_data = {}
+            imu_data = []
+            imu_ts = []
+            odom_data = []
+            odom_ts = []
+            grid_map_data = []
+            map_ts = []
+            camera_color_msg = []
+            color_ts = []
+            camera_depth_msg = []
+            depth_ts = []
+            control_msg = []
+            control_ts = []
 
-            tolerance_state, tolerance_camera, sequence_length = get_tolerance(bag)
-            print(
-                "tolerance state: {}, tolerance_camera: {}, sequence_length: {}".format(
-                    tolerance_state, tolerance_camera, sequence_length
-                )
-            )
-            # tolerance_state= 0.009
-            # tolerance_camera=0.005
-            # sequence_length=3872
+            # tolerance_state, tolerance_camera, sequence_length = get_tolerance(bag)
+            # print(
+            #     "tolerance state: {}, tolerance_camera: {}, sequence_length: {}".format(
+            #         tolerance_state, tolerance_camera, sequence_length
+            #     )
+            # )
+            # tolerance_state = 0.01
+            # tolerance_camera= 0.01
+            sequence_length = 14946
+
             counter = 0
+            topic_list = []
+            grid_map_topic_name = None
+            print("\n")
             for topic, msg, t in bag.read_messages(topics=topic_list):
                 if topic == "/mavros/imu/data_raw":
-                    imu_data[t] = msg
+                    imu_data.append(msg)
+                    imu_ts.append(t.to_sec())
                     counter += 1
                 elif topic == "/mavros/local_position/odom":
-                    odom_data[t] = msg
-                elif topic == "/mavros/manual_control/send":
-                    control_data[t] = msg
-                elif topic == "/grid_map_occlusion_inpainting/all_grid_map":
-                    grid_map_data[t] = msg
-                elif topic == "/camera/color/image_raw":
-                    color_data[t] = msg
-                elif topic == "/camera/depth/image_rect_raw":
-                    depth_data[t] = msg
-                elif topic == "/camera/color/camera_info" and rgb_info is None:
-                    save_cam_config(msg, rgb_info_file)
-                    rgb_info = 1
-                elif topic == "/camera/depth/camera_info" and depth_info is None:
-                    save_cam_config(msg, depth_info_file)
-                    depth_info = 1
-                elif ts_start is None and topic == "/tf":
-                    ts_start = msg.header.stamp
+                    odom_data.append(msg)
+                    odom_ts.append(t.to_sec())
+                elif topic == "/mavros/rc/out":
+                    control_msg.append(msg)
+                    control_ts.append(t.to_sec())
+                elif topic == "/elevation_mapping/elevation_map_cropped" or topic == "/grid_map_occlusion_inpainting/all_grid_map":
+                    grid_map_data.append(msg)
+                    map_ts.append(t.to_sec())
+                    if grid_map_topic_name is None:
+                        grid_map_topic_name = topic
+                # optional extras:
+                # elif topic == "/camera/color/image_raw":
+                #     camera_color_msg.append(msg)
+                #     color_ts.append(t)
+                # elif topic == "/camera/depth/image_rect_raw":
+                #     camera_depth_msg.append(msg)
+                #     depth_ts.append(t)
+                # elif topic == "/camera/color/camera_info" and rgb_info is None:
+                #     save_cam_config(msg, rgb_info_file)
+                #     rgb_info = 1
+                # elif topic == "/camera/depth/camera_info" and depth_info is None:
+                #     save_cam_config(msg, depth_info_file)
+                #     depth_info = 1
+                elif topic == "/tf":
+                    if ts_start is None: 
+                        ts_start = t.to_sec()
                 print(
                     "Data collection iter: {}".format(100 * counter / sequence_length),
                     end="\r",
                 )
+            print("\n")
+            imu_ts = np.array(imu_ts)
+            odom_ts = np.array(odom_ts)
+            control_ts = np.array(control_ts)
+            map_ts = np.array(map_ts)
             state_data = []
             color = []
             depth = []
@@ -294,60 +328,7 @@ def main(Config):
             map_segmt = []
             map_color = []
             map_path = []
-            timestamps = []
-            timestamps_camera = []
-
-            for t1, imu_msg in imu_data.items():
-                if ts_start is None or t1.to_sec() < ts_start.to_sec():
-                    ts_start = t1
-                for t2, odom_msg in odom_data.items():
-                    time_diff = abs((t1 - t2).to_sec())
-                    if time_diff <= tolerance_state:
-                        temp_state_data = get_state_data(imu_msg, odom_msg)
-                        state_data.append(temp_state_data)
-                        timestamps.append(t1)
-            state_data = np.array(state_data)
-
-            for t2, control_msg in control_data.items():
-                closest_timestamp = min(timestamps, key=lambda x: abs(x - t2))
-                index = timestamps.index(closest_timestamp)
-                control_data = get_control(control_msg)
-                state_data[index, 15:] = control_data
-
-            for t1, color_msg in color_data.items():
-                for t2, depth_msg in depth_data.items():
-                    time_diff = abs((t1 - t2).to_sec())
-                    if time_diff <= tolerance_camera:
-                        c = cv_bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
-                        d = cv_bridge.imgmsg_to_cv2(
-                            depth_msg, desired_encoding="passthrough"
-                        )
-                        color.append(c)
-                        depth.append(d)
-                        timestamps_camera.append(t1)
-
-            index_list = []
-            for t2, map_msg in grid_map_data.items():
-                closest_timestamp = min(timestamps_camera, key=lambda x: abs(x - t2))
-                index = timestamps_camera.index(closest_timestamp)
-                index_list.append(index)
-                ## TODO paste valid flag/ config in the config file to let the next data pipeline thing know which maps are valid.
-                elev, norm, path, segmt, clr, valid = grid_map_callback(map_msg)
-                map_elev.append(elev)
-                map_norm.append(norm)
-                map_color.append(clr)
-                map_segmt.append(segmt)
-                map_path.append(path)
-
-            color = np.array(color)
-            depth = np.array(depth)
-            index_list = np.array(index_list)
-            color = color[index_list]
-            depth = depth[index_list]
-            timestamps_camera = np.array(timestamps_camera)
-            timestamps_camera = timestamps_camera[
-                index_list
-            ]  ## only those timestamps, color images and depth images for which we have corresponding elevation map
+            map_center = []
 
             reset_data = []
             timestamp_data = []
@@ -356,61 +337,62 @@ def main(Config):
             color_data = []
             segmt_data = []
             elev_data = []
+            center_data = []
             normal_data = []
             camera_color_data = []
             camera_depth_data = []
             output_state = []
 
-            state_index = 0
-            camera_index = 0
-
-            camera_timestamp = timestamps_camera[0]
-            state_timestamp = timestamps[0]
-            while state_timestamp.to_sec() < camera_timestamp.to_sec() - 0.02:
-                state_index += 1
-                state_timestamp = timestamps[state_index]
-            while camera_timestamp.to_sec() < state_timestamp.to_sec() + 0.02:
-                camera_index += 1
-                camera_timestamp = timestamps_camera[camera_index]
-            print(
-                "pruned camera and state sequence_lengths:",
-                len(timestamps) - state_index,
-                len(timestamps_camera),
-            )
-
-            while state_index < len(timestamps) and camera_index < len(
-                timestamps_camera
-            ):
-                state_timestamp = timestamps[state_index]
-                if state_timestamp.to_sec() > camera_timestamp.to_sec():
-                    camera_index += 1
-                    if camera_index >= len(timestamps_camera):
-                        break
-                camera_timestamp = timestamps_camera[camera_index]
-
-                # The timestamps are sufficiently close, so combine the data
-                reset_data.append(False)
-                timestamp_data.append(
-                    timestamps[state_index].to_sec() - ts_start.to_sec()
+            for imu_msg in imu_data:
+                t1s = imu_msg.header.stamp.to_sec()
+                if ts_start is None or t1s < ts_start:
+                    ts_start = t1s
+                print(
+                    "Data generation for bag{}: {}".format(files[i],100 * (t1s - ts_start)/(imu_ts[-1] - ts_start)),
+                    end="\r",
                 )
-                output_state.append(state_data[state_index])
-                elev = cv2.resize(map_elev[camera_index], tgt_res, cv2.INTER_LINEAR)
-                segmt = cv2.resize(map_segmt[camera_index], tgt_res, cv2.INTER_LINEAR)
-                color_map = cv2.resize(
-                    map_color[camera_index], tgt_res, cv2.INTER_LINEAR
-                )
-                path = cv2.resize(map_path[camera_index], tgt_res, cv2.INTER_LINEAR)
-                norm = cv2.resize(map_norm[camera_index], tgt_res, cv2.INTER_LINEAR)
+                timestamp_data.append(t1s - ts_start)
+                closest_odom = np.argmin(np.abs(odom_ts - t1s)) # min(odom_ts, key=lambda x: abs(x - t1))
+                closest_map = np.argmin(np.abs(map_ts - t1s)) #min(map_ts, key=lambda x: abs(x - t1))
+                closest_control = np.argmin(np.abs(control_ts - t1s)) #min(control_ts, key=lambda x: abs(x - t1))
+
+                state_data = get_state_data(imu_msg, odom_data[closest_odom])
+                state_data[15:] = get_control(control_msg[closest_control])
+                output_state.append(state_data)
+
+                ## TODO paste valid flag/ config in the config file to let the next data pipeline thing know which maps are valid.
+                elev, norm, path, segmt, clr, valid, map_center = grid_map_callback(grid_map_data[closest_map], grid_map_topic_name)
+                elev = cv2.resize(elev, tgt_res, cv2.INTER_LINEAR)
+                segmt = cv2.resize(segmt, tgt_res, cv2.INTER_LINEAR)
+                clr = cv2.resize(clr, tgt_res, cv2.INTER_LINEAR)
+                path = cv2.resize(path, tgt_res, cv2.INTER_LINEAR)
+                norm = cv2.resize(norm, tgt_res, cv2.INTER_LINEAR)
                 elev_data.append(elev)
-                segmt_data.append(segmt)
-                color_data.append(color_map)
-                path_data.append(path)
                 normal_data.append(norm)
-                camera_color_data.append(color[camera_index])
-                camera_depth_data.append(depth[camera_index])
+                color_data.append(clr)
+                segmt_data.append(segmt)
+                path_data.append(path)
+                center_data.append(map_center)
 
-                state_index += 1  ## state index
-            reset_data = np.array(reset_data)
+                # optional_extras:
+                # closest_color = min(color_ts, key=lambda x: abs(x - t1))
+                # closest_depth = min(depth_ts, key=lambda x: abs(x - t1))
+                # c = cv_bridge.imgmsg_to_cv2(camera_color_msg[closest_color], desired_encoding="bgr8")
+                # d = cv_bridge.imgmsg_to_cv2(camera_depth_msg[closest_depth], desired_encoding="passthrough")
+                # camera_color_data.append(c)
+                # camera_depth_data.append(d)
+                reset_data.append(False)
+
+            output_state = np.array(output_state)
+
+            b, a = signal.butter(2, 0.1, btype='low', analog=False)
+            for i in range(9,12,1):
+                output_state[:,i] = signal.filtfilt(b,a, output_state[:,i])
+
+            # b, a = signal.butter(2, 0.25, btype='low', analog=False)
+            # for i in range(12,15,1):
+            #     output_state[:,i] = signal.filtfilt(b,a, output_state[:,i])
+
             reset_data[-1] = True
 
             timestamps = update_npy_datafile(
@@ -422,15 +404,17 @@ def main(Config):
             color_data = update_npy_datafile(color_data, output_path / "bev_color.npy")
             segmt_data = update_npy_datafile(segmt_data, output_path / "bev_segmt.npy")
             elev_data = update_npy_datafile(elev_data, output_path / "bev_elev.npy")
+            cent_data = update_npy_datafile(center_data, output_path/ "bev_cent.npy")
             normal_data = update_npy_datafile(
                 normal_data, output_path / "bev_normal.npy"
             )
-            camera_color_data = update_npy_datafile(
-                camera_color_data, output_path / "camera_color.npy"
-            )
-            camera_depth_data = update_npy_datafile(
-                camera_depth_data, output_path / "camera_depth.npy"
-            )
+            ## optional extras:
+            # camera_color_data = update_npy_datafile(
+            #     camera_color_data, output_path / "camera_color.npy"
+            # )
+            # camera_depth_data = update_npy_datafile(
+            #     camera_depth_data, output_path / "camera_depth.npy"
+            # )
 
 
 if __name__ == "__main__":

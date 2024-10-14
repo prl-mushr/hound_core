@@ -34,26 +34,45 @@ print("auto dist:", auto_dist * 1e-3, " km")
 order = 2  # Filter order
 cutoff_freq = 0.04  # 10hz. utoff frequency as a fraction of Nyquist frequency
 b, a = signal.butter(order, cutoff_freq, btype="low", analog=False)
-lat_acc = np.fabs(signal.lfilter(b, a, A[:, 1] - 9))
+lat_acc = np.fabs(signal.lfilter(b, a, A[:, 1]))
 body_vel = np.fabs(signal.lfilter(b, a, V[:, 0]))
-body_vel[np.where(body_vel > speeds)] = 0
+# body_vel[np.where(body_vel > speeds)] = 0 # removing outliers
+# lat_acc[np.where(body_vel > speeds)] = 0 # removing outliers
+auto_lat = lat_acc[auto]
+manl_lat = lat_acc[manl]
+auto_spd = body_vel[auto]
+manl_spd = body_vel[manl]
+indices_auto = np.where(body_vel[auto] < speeds[auto] + 1) ## this is to get rid of glitches where the ardupilot reports very large vels
+indices_manl = np.where(body_vel[manl] < speeds[manl] + 1) ## this is to get rid of glitches where the ardupilot reports very large vels
 
-auto_lat_sort = np.sort(lat_acc[auto])
-manl_lat_sort = np.sort(lat_acc[manl])
-auto_spd_sort = np.sort(body_vel[auto])
-manl_spd_sort = np.sort(body_vel[manl])
+auto_lat = auto_lat[indices_auto]
+manl_lat = manl_lat[indices_manl]
+auto_spd = auto_spd[indices_auto]
+manl_spd = manl_spd[indices_manl]
 
-auto_lat_max = auto_lat_sort[-500]
-manl_lat_max = manl_lat_sort[-500]
-auto_spd_max = auto_spd_sort[-500]
-manl_spd_max = manl_spd_sort[-500]
+# auto_lat_sort = np.sort(lat_acc[auto])
+# manl_lat_sort = np.sort(lat_acc[manl])
+# auto_spd_sort = np.sort(body_vel[auto])
+# manl_spd_sort = np.sort(body_vel[manl])
+
+# auto_lat_max = auto_lat_sort[-500]
+# manl_lat_max = manl_lat_sort[-500]
+# auto_spd_max = auto_spd_sort[-500]
+# manl_spd_max = manl_spd_sort[-500]
 
 
-print("peak lateral acceleration in auto mode: ", auto_lat_max)
-print("peak lateral acceleration in manual mode: ", manl_lat_max)
-print("peak speed in auto mode: ", auto_spd_max)
-print("peak speed in manual mode: ", manl_spd_max)
-print(
-    "mean/std lateral acceleration: ", np.fabs(A[:, 1]).mean(), np.fabs(A[:, 1]).std()
-)
-print("mean/std speed: ", V[:, 0].mean(), V[:, 0].std())
+# print("peak lateral acceleration in auto mode: ", auto_lat_max)
+# print("peak lateral acceleration in manual mode: ", manl_lat_max)
+# print("peak speed in auto mode: ", auto_spd_max)
+# print("peak speed in manual mode: ", manl_spd_max)
+# print(
+#     "mean/std lateral acceleration: ", np.fabs(A[:, 1]).mean(), np.fabs(A[:, 1]).std()
+# )
+# print("mean/std speed: ", V[:, 0].mean(), V[:, 0].std())
+percentile = 99.9
+print("{} th percentile in lateral acceleration in auto mode: {}".format(percentile, np.percentile(auto_lat, percentile )))
+print("{} th lateral acceleration in manual mode: {}".format(percentile, np.percentile(manl_lat, percentile )))
+print("{} th speed in auto mode: {}".format(percentile, np.percentile(auto_spd, percentile )))
+print("{} th speed in manual mode: {}".format(percentile, np.percentile(manl_spd, percentile )))
+print("length of top {} percentile data corresponds to {} seconds of the dataset".format( 100 - percentile ,0.02*0.01*(100 - percentile)*(len(auto_lat) + len(manl_lat))) )
+print("auto_max_speed: {} m/s, manula_max_speed: {} m/s".format(auto_spd.max(), manl_spd.max()))

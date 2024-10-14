@@ -153,6 +153,8 @@ class BeamNGROS:
         while not rospy.is_shutdown():
             if not self.reset:
                 self.bng_interface.state_poll()
+                if self.bng_interface.state is None:
+                    continue
                 self.publish_state()
                 self.publish_gridmap()
                 self.publish_camera()

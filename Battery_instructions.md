@@ -1,0 +1,1 @@
+[Tutorial](https://youtu.be/fkSFUXZkIVU?si=4x1yKB1FYm833Ymd&t=620) on how to charge the batteries used in MuSHRs.
