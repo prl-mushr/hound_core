@@ -26,7 +26,7 @@ Follow the instructions [here](https://github.com/prl-mushr/hound_hardware) to s
 ### Installing HOUND stack:
 Step 1: Run the following script, your computer will reboot afterwards. 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/prl-mushr/hound_core/main/install_hound_stack.sh -o install_hound_stack.sh && chmod +x install_hound_stack.sh && ./install_hound_stack.sh
+curl -fsSL https://raw.githubusercontent.com/anhle5/hound_core/main/install_hound_stack.sh -o install_hound_stack.sh && chmod +x install_hound_stack.sh && ./install_hound_stack.sh
 ```
 
 Step 2: The following command is used to start the docker. On the first run, this will pull the docker image, which is approximately 20 GB in size, and so can take between 10 minutes and an hour depending on your internet connection speed.
