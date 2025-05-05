@@ -19,37 +19,22 @@ This repository serves as the cornerstone of the HOUND project. Note that as the
 3) BeamNG also has experimental support for running the simulator on an Ubuntu host, however, this at the moment does not support the camera and LiDAR sensors.
 
 ### Environment setup for Running Autonomy stack on Ubuntu x86_64 (Autonomy stack installation not supported on MacOS or Windows. WSL instructions coming soon!):
-Step 1: [Install docker](https://docs.docker.com/desktop/install/debian/#install-docker-desktop)
-
-Step 2: [Install Nvidia Docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#installing-on-ubuntu-and-debian)
 
 ### Environment setup for Jetson:
 Follow the instructions [here](https://github.com/prl-mushr/hound_hardware) to set up your Nvidia Orin NX.
 
 ### Installing HOUND stack:
-Step 1:
+Step 1: Run the following script, your computer will reboot afterwards. 
 ```bash
-mkdir catkin_ws && cd catkin_ws && mkdir src && cd src
-git clone -b noetic-HOUND https://github.com/prl-mushr/mushr
+curl -fsSL https://raw.githubusercontent.com/anhle5/hound_core/main/install_hound_stack.sh -o install_hound_stack.sh && chmod +x install_hound_stack.sh && ./install_hound_stack.sh
 ```
 
-Step 2: Executing the following command will prompt you to answer three questions
-1) "Are you installing on robot and need all the sensor drivers? (y/n) " -- say yes, this should not produce a conflict even if you're on a desktop.
-2) "download HOUND/field-robotics related repositories? (y/n) " -- say yes
-3) "Build from scratch? (Not recommended, takes much longer than pulling ready-made image) (y/n) " -- say no.
-Building the docker from scratch is possible but not recommended for now.
-```bash
-cd ~/catkin_ws/src/mushr/mushr_utils/install/
-./mushr_install.bash
-sudo reboot
-```
-
-Step 3: The following command is used to start the docker. On the first run, this will pull the docker image, which is approximately 20 GB in size, and so can take between 10 minutes and an hour depending on your internet connection speed.
+Step 2: The following command is used to start the docker. On the first run, this will pull the docker image, which is approximately 20 GB in size, and so can take between 10 minutes and an hour depending on your internet connection speed.
 ```bash
 mushr_noetic
 ```
 
-Step 4: Once inside the docker, build the catkin workspace:
+Step 3: Once inside the docker, build the catkin workspace:
 ```bash
 cd ~/catkin_ws/ && catkin build
 ```
