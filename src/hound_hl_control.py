@@ -16,6 +16,7 @@ import yaml
 import time
 import torch
 from Bezier import *
+import threading
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 
@@ -62,6 +63,7 @@ class Hound_HL_Control:
         self.odom_update = False
         self.looping = False
         self.loop_dt = 20
+        self.path_mutex = threading.Lock()
 
         ## initialize the controller:
         self.controller = mppi(Config)
@@ -72,10 +74,11 @@ class Hound_HL_Control:
         )
         self.imu_sub = rospy.Subscriber("/mavros/imu/data_raw", Imu, self.imu_callback)
         self.grid_map_sub = rospy.Subscriber(
-            "/grid_map_occlusion_inpainting/all_grid_map",
+            "/elevation_mapping/elevation_map_cropped_cv2",
             GridMap,
             self.grid_map_callback,
         )
+        
         self.path_sub = rospy.Subscriber(
             "path",
             navPath,
@@ -131,23 +134,8 @@ class Hound_HL_Control:
                 ## generate the control message:
                 now = time.time()
                 self.process_grid_map()
-                speed_limit = np.sqrt(
-                    (self.Dynamics_config["D"] * 9.8)
-                    / self.path_poses[self.current_wp_index, 3]
-                )
-                speed_limit = min(speed_limit, self.speed_limit)
-                lookahead = np.clip(
-                    speed_limit, self.lookahead / 2, self.lookahead
-                )  ## speed dependent lookahead
-                self.goal, terminate, self.current_wp_index = self.update_goal(
-                    self.goal,
-                    np.copy(self.state[:3]),
-                    self.path_poses,
-                    self.current_wp_index,
-                    lookahead,
-                    wp_radius=self.wp_radius,
-                    looping=self.looping,
-                )
+                with self.path_mutex:
+                    terminate, reference_path = self.get_reference_path(self.state, np.copy(self.path_poses))
                 self.controller.set_hard_limit(self.hard_limit)
                 if terminate:
                     self.goal_init = False
@@ -155,12 +143,11 @@ class Hound_HL_Control:
                 else:
                     ctrl = self.controller.update(
                         self.state,
-                        self.goal,
+                        reference_path,
                         self.map_elev * self.elevation_multiplier,
                         self.map_norm,
                         self.map_cost,
                         self.map_cent,
-                        speed_limit,
                     )
                 self.state[15:17] = ctrl
                 self.send_ctrl(ctrl)
@@ -170,6 +157,22 @@ class Hound_HL_Control:
                 if self.debug:
                     print("loop_dt: ", self.loop_dt)
             self.publish_diagnostics()
+
+    def get_reference_path(self, state, controller_path):
+        terminate = False
+        controller_path[:, :2] -= state[:2] # this is the robot-centric path
+        reference_index = np.argmin(np.linalg.norm(controller_path[:, :2], axis=1))
+        if reference_index < len(controller_path) - self.MPPI_config["TIMESTEPS"]:
+            reference_path = controller_path[reference_index:reference_index+self.MPPI_config["TIMESTEPS"], :4]
+        else:
+            reference_path = np.zeros((self.MPPI_config["TIMESTEPS"], 4))
+            available = controller_path[reference_index:, :4]
+            reference_path[:len(available)] = available
+            reference_path[len(available):, :3] = reference_path[len(available)-1, :3]
+            reference_path[len(available):, 3] = 0.0
+            if len(available) < 2:
+                terminate = True
+        return terminate, reference_path
 
     def publish_diagnostics(self):
         diagnostics_array = DiagnosticArray()
@@ -337,7 +340,10 @@ class Hound_HL_Control:
                 self.grid_map.info.length_x, self.map_size
             )
             self.layers = self.grid_map.layers
-            self.index = self.layers.index("comp_grid_map")
+            if "comp_grid_map" in self.layers:
+                self.index = self.layers.index("comp_grid_map")
+            else:
+                self.index = self.layers.index("elevation")
             # self.color_index = self.layers.index("color")
         cent = self.grid_map.info.pose.position
         matrix = self.grid_map.data[self.index]
@@ -365,34 +371,26 @@ class Hound_HL_Control:
         # self.map_color = np.transpose(cv2.flip(np.reshape(matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size,3), order='F'), -1), axes=[1,0,2])
         self.map_norm = self.generate_normal(self.map_elev)
         ## upscaling this AFTER calculating the surface normal.
-        self.map_elev = cv2.resize(
-            self.map_elev, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
-        )
-        self.map_norm = cv2.resize(
-            self.map_norm, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
-        )
+        # self.map_elev = cv2.resize(
+        #     self.map_elev, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
+        # )
+        # self.map_norm = cv2.resize(
+        #     self.map_norm, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
+        # )
         self.map_cent[2] = self.map_elev[self.map_size_px // 2, self.map_size_px // 2]
         self.map_elev -= self.map_cent[2]
         ## generate the cost map:
-        if self.path_poses is not None and self.generate_costmap_from_path == 1:
-            self.map_cost = self.generate_cost(
-                self.map_size_px,
-                self.map_res,
-                self.map_cent,
-                self.path_poses,
-                self.track_width,
-            )
-        elif self.path_poses is not None and self.generate_costmap_from_path == 2:
-            self.map_cost[..., 0] = 1 / self.map_norm[..., 2]
-        elif self.path_poses is not None and self.generate_costmap_from_path == 0:
-            self.map_cost = np.zeros(
-                (self.map_size_px, self.map_size_px, 3), dtype=np.float32
-            )
+        self.map_cost = self.generate_costmap_from_BEVmap(self.normal)
+
+    def generate_costmap_from_BEVmap(self, normal, costmap_cosine_thresh=np.cos(np.radians(30))):
+        dot_product = normal[:, :, 2]
+        costmap = np.where(dot_product >= costmap_cosine_thresh, 255, 0).astype(np.float32)
+        return costmap
 
     def generate_normal(self, elev, k=3):
         # use sobel filter to generate the normal map:
         norm = np.copy(elev)
-        norm = cv2.GaussianBlur(norm, (3, 3), 0)
+        # norm = cv2.GaussianBlur(norm, (3, 3), 0)
         dzdx = -cv2.Sobel(norm, cv2.CV_32F, 1, 0, ksize=k)
         dzdy = -cv2.Sobel(norm, cv2.CV_32F, 0, 1, ksize=k)
         dzdz = np.ones_like(norm)
@@ -428,7 +426,6 @@ class Hound_HL_Control:
         costmap = cv2.blur(costmap, (r, r))
         return costmap
 
-    # path callback:
     def path_callback(self, path):
         """
         we expect the path to have a resolution of 0.2 meters or less.
@@ -459,6 +456,24 @@ class Hound_HL_Control:
             path.poses.append(pose)
         self.interpolated_path_pub.publish(path)
         self.controller.mppi.reset()
+        self.goal_init = True
+
+    def local_path_callback(self, path):
+        with self.path_mutex:
+            self.path_poses = np.zeros((len(path.poses), 4), dtype=np.float32)
+            for i in range(len(path.poses)):
+                self.path_poses[i, 0] = path.poses[i].pose.position.x
+                self.path_poses[i, 1] = path.poses[i].pose.position.y
+                # compute yaw from orientation:
+                quaternion = (
+                    path.poses[i].pose.orientation.x,
+                    path.poses[i].pose.orientation.y,
+                    path.poses[i].pose.orientation.z,
+                    path.poses[i].pose.orientation.w,
+                )
+                rpy = euler_from_quaternion(quaternion)
+                self.path_poses[i, 2] = rpy[2]
+        self.looping = False
         self.goal_init = True
 
     def interpolate_path(self, target_WP):
@@ -498,7 +513,7 @@ class Hound_HL_Control:
 
 if __name__ == "__main__":
     rospy.init_node("hl_controller")
-    config_name = "hound_mppi.yaml"
+    config_name = "hound_mppi_planner.yaml"
     config_path = "/root/catkin_ws/src/hound_core/config/" + config_name
     with open(config_path) as f:
         Config = yaml.safe_load(f)

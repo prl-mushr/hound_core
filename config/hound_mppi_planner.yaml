@@ -1,0 +1,104 @@
+MPPI_config:
+  ROLLOUTS: 1024
+  TIMESTEPS: 16
+  BINS: 1
+  u_per_command: 1  # how many control inputs do we want to use per MPPI optimization loop.
+
+Sampling_config:
+  control_dim: 2
+  noise_0: 1.0
+  noise_1: 0.5
+  scaled_dt: 0.1 ## this is dt * bandwidth of the physical actuators (in what units?)
+  temperature: 0.1 ## the terrain CNN requires a temperature of 0.05 so may have to change this when we run Terrain CNN?
+  max_thr: 0.4 ## max throttle as a fraction between -1,1
+  min_thr: 0.0 ## min throttle as a fraction between -1,1
+
+Dynamics_config:
+  wheelbase: 0.29
+  throttle_to_wheelspeed: 17.0
+  steering_max: 0.488
+  dt: 0.05
+  D: 0.8 ## approx values: tarmac: 1.0, grass: 1.2, loose gravel: 0.6, packed dirt: 0.8
+  B: 6.8 ## for tarmac, grass: 5.0-6.8, loose gravel/dirt: 1.5-2.0
+  C: 1.5 ## for tarmac, grass: 1.5-2.0, loose gravel/dirt: 1.0-1.5
+  lf: 0.15 ## length from car com to front axle
+  lr: 0.15 ## length from car com to rear axle
+  Iz: 0.1 ## mass normalized moment of inertia. could have been calculated using 0.33*(car_length^2 + car_width^2)
+  LPF_tau: 0.5 ## low pass filter tau for simulating spring damper setup
+  LPF_st: 0.5
+  LPF_th: 0.5
+  res_coeff: 0.01 ## resistance coefficient (proportional to speed)
+  drag_coeff: 0.005 # drag coefficient (proportional to speed squared)
+  car_length: 0.33 # front to back distance of car
+  car_width: 0.25 # track width of car. Measured as distance between extremes of the wheel (can be slightly off)
+  cg_height: 0.15 ## height of cg, used for calculating load transfer.
+  type: "slip3d" ## this will be overwritten during evaluation
+
+Planner_config:
+  folder_path: /root/catkin_ws/src/IGHAStar
+  experiment_info_default:
+    resolution: 1.0
+    epsilon: [2.0, 1.0, 0.5, 5.0] # ate, cte, heading, vel
+    tolerance: 0.125
+    max_level: 6
+    division_factor: 2  # Example division factor
+    max_expansions: 500
+    hysteresis: 50
+    node_info:
+      node_type: "kinodynamic"
+      length: 0.3
+      width: 0.25 # actual car width is 1.5
+      map_res: 0.125
+      dt: 0.05
+      timesteps: 10
+      step_size: 1.0
+      steering_list: [-15.0, -5.0, 0.0, 5.0, 15.0] # in degrees.
+      throttle_list: [-5.0, 0, 5.0]
+      del_theta: 45.0 # in degrees
+      del_vel: 1.0
+      RI: &RI 0.8
+      max_vert_acc: &max_vert_acc 5.0
+      min_vel:  0.0
+      max_vel:  5.0
+      max_theta: 30.0 # in degrees
+      gear_switch_time: 5.0
+
+Map_config:
+  map_size: 16
+  map_res: 0.125 ## this results in 256 x 256 pixels
+  map_res_hitl: 0.125
+  elevation_range: 4.0
+  map_name: "small_island"
+  layers:
+    color: 3
+    elevation: 1
+    semantics: 3
+    costmap: 1
+  topic_name: "/elevation_mapping/elevation_map_cropped_cv2"
+
+Cost_config:
+  pos_w: 1.0 ## weight on the terminal goal cost
+  speed_w: 0.1 ## weight with which target speed will be tracked
+  heading_w: 0.1
+  scaling_factor: 1.0
+  critical_RI: *RI
+  critical_vert_acc: *max_vert_acc
+  roll_ditch_w: 50.0
+  lethal_w: 50.0
+  car_bb_length: 0.3
+  car_bb_width: 0.3
+
+wp_radius: 2.0 ## waypoint radius for terminal condition
+debug: True
+
+scenario: "race-0"
+map_name: "small_island"
+vehicle:
+  make: "savage_low_f"
+  model: "flux"
+  max_speed: 23.0
+  max_steer: 0.488
+
+use_speed_ctrl: False
+skip_points: 100
+elevation_multiplier: 1.0

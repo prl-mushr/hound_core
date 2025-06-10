@@ -63,6 +63,7 @@
 /path
 /interpolate_path
 /elevation_mapping/elevation_map_cropped
+/elevation_mapping/elevation_map_cropped_cv2
 /grid_map_occlusion_inpainting/all_grid_map
 /tf_static
 /tf
