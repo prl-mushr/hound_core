@@ -8,6 +8,7 @@ from BeamNGRL.control.UW_mppi.Sampling.Delta_Sampling import Delta_Sampling
 from BeamNGRL.utils.visualisation import costmap_vis
 import yaml
 import cv2
+import time
 
 torch.manual_seed(0)
 
@@ -31,7 +32,7 @@ class mppi:
         dynamics = SimpleCarDynamics(
             self.Dynamics_config, self.Map_config, self.MPPI_config
         )
-        costs = torch.jit.script(SimpleCarCost(self.Cost_config, self.Map_config))
+        costs = SimpleCarCost(self.Cost_config, self.Map_config)
         sampling = Delta_Sampling(self.Sampling_config, self.MPPI_config)
         self.mppi = MPPI(dynamics, costs, sampling, self.MPPI_config)
         self.mppi.reset()
@@ -47,15 +48,16 @@ class mppi:
             self.Sampling_config["max_thr"], device=self.device, dtype=self.dtype
         )
 
-    def update(self, state, reference_path, map_elev, map_norm, map_cost, map_cent):
+    def update(self, state, reference_path, map_elev, map_norm, map_cost, map_cent, mutex_lock, hard_limit):
         ## get robot_centric BEV (not rotated into robot frame)
-        BEV_heght = torch.from_numpy(map_elev).to(device=self.device, dtype=self.dtype)
-        BEV_normal = torch.from_numpy(map_norm).to(device=self.device, dtype=self.dtype)
-        BEV_cost = torch.from_numpy(map_cost).to(device=self.device, dtype=self.dtype)
-
-        self.mppi.Dynamics.set_BEV_numpy(map_elev, map_norm)
+        with mutex_lock:
+            BEV_heght = torch.from_numpy(map_elev).to(device=self.device, dtype=self.dtype)
+            BEV_normal = torch.from_numpy(map_norm).to(device=self.device, dtype=self.dtype)
+            BEV_cost = torch.from_numpy(map_cost).to(device=self.device, dtype=self.dtype)
+            self.mppi.Dynamics.set_BEV(BEV_heght, BEV_normal)
+            self.mppi.Costs.set_BEV(BEV_heght, BEV_normal, BEV_cost)
+        self.set_hard_limit(hard_limit)
         reference_path = torch.from_numpy(reference_path).to(device=self.device, dtype=self.dtype)
-        self.mppi.Costs.set_BEV(BEV_heght, BEV_normal, BEV_cost)
         self.mppi.Costs.set_path(reference_path)  # you can also do this asynchronously
 
         state_to_ctrl = np.copy(state)
@@ -68,6 +70,7 @@ class mppi:
             .numpy(),
             dtype=np.float64,
         )[0]
+
         _, indices = torch.topk(self.mppi.Sampling.cost_total, k=10, largest=False)
         min_cost = torch.min(self.mppi.Sampling.cost_total)
         if self.mppi.Costs.bad_physics:

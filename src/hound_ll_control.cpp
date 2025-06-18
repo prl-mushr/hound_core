@@ -279,11 +279,11 @@ public:
     float Ki_speed_error_dt =  speed_control_ki * speed_error *  delta_t;
 
     speed_proportional = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
-    speed_integral = std::min(std::max(-0.025f, Ki_speed_error_dt + speed_integral), 0.025f); // add to previous value and then constrain
+    speed_integral = std::min(std::max(-0.05f, Ki_speed_error_dt + speed_integral), 0.05f); // add to previous value and then constrain
 
     // speed control kp could be varied in proportion to the rate of change of input -> higher rate = more gain.
     float voltage_gain = nominal_voltage/voltage_input;
-    if(wheelspeed_setpoint < 0.1*wheelspeed_max)
+    if(wheelspeed_setpoint < 0.5)
     {
       speed_integral = 0;
       speed_proportional = 0;

@@ -48,6 +48,7 @@
 /mavros/manual_control/send
 /mavros/param/param_value
 /mavros/rallypoint/waypoints
+/mavros/mission/waypoints
 /mavros/rc/in
 /mavros/rc/out
 /mavros/state
@@ -67,3 +68,5 @@
 /grid_map_occlusion_inpainting/all_grid_map
 /tf_static
 /tf
+/mpc_marker
+/planner_diagnostics

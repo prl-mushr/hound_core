@@ -9,6 +9,7 @@ from sensor_msgs.msg import Imu
 from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
 from ackermann_msgs.msg import AckermannDriveStamped
+from vesc_msgs.msg import VescStateStamped
 from tf.transformations import euler_from_quaternion
 import os
 from pathlib import Path
@@ -36,6 +37,8 @@ class Hound_HL_Control:
         self.throttle_to_wheelspeed = self.Dynamics_config["throttle_to_wheelspeed"]
         self.steering_max = self.Dynamics_config["steering_max"]
         self.imu = None
+        self.wheelspeed = None
+        self.erpm_gain = rospy.get_param('/erpm_gain', default=3166.6)
         ## map variables
         self.map_init = False
         self.map_size_px = int(self.map_size / self.map_res)
@@ -54,35 +57,36 @@ class Hound_HL_Control:
         self.goal = None
         self.goal_init = False
         self.path_poses = None
-        self.track_width = Config["track_width"]  ## 1 meter cross track error limit
         self.wp_radius = Config["wp_radius"]
         self.current_wp_index = 0
-        self.generate_costmap_from_path = Config["generate_costmap_from_path"]
-        self.speed_limit = Config["speed_limit"]
-        self.lookahead = Config["lookahead"]
         self.odom_update = False
         self.looping = False
         self.loop_dt = 20
         self.path_mutex = threading.Lock()
+        self.map_mutex = threading.Lock()
+        self.reference_index = 0
 
         ## initialize the controller:
         self.controller = mppi(Config)
 
         # initialize the odometry and imu subscribers with callbacks
+        self.last_odom_stamp = rospy.Time.now()
         self.odom_sub = rospy.Subscriber(
             "/mavros/local_position/odom", Odometry, self.odom_callback
         )
         self.imu_sub = rospy.Subscriber("/mavros/imu/data_raw", Imu, self.imu_callback)
+        self.wheelspeed_sub = rospy.Subscriber(
+                            "sensors/core", VescStateStamped, self.wheelspeed_callback, queue_size=1
+                            )
         self.grid_map_sub = rospy.Subscriber(
             "/elevation_mapping/elevation_map_cropped_cv2",
             GridMap,
             self.grid_map_callback,
         )
-        
         self.path_sub = rospy.Subscriber(
-            "path",
+            "/path",
             navPath,
-            self.path_callback,
+            self.local_path_callback,
             queue_size=10,
         )
         self.ctrl_limits_sub = rospy.Subscriber(
@@ -98,7 +102,7 @@ class Hound_HL_Control:
         self.control_pub = rospy.Publisher(
             "low_level_controller/hound/control", AckermannDriveStamped, queue_size=1
         )
-        self.marker_pub = rospy.Publisher("marker", MarkerArray, queue_size=1)
+        self.marker_pub = rospy.Publisher("mpc_marker", MarkerArray, queue_size=1)
         self.reset_pub = rospy.Publisher(
             "/simulation_reset", AckermannDriveStamped, queue_size=2
         )
@@ -115,6 +119,10 @@ class Hound_HL_Control:
             "rosservice call /elevation_mapping/clear_map"
         )  ## clear the elevation map.
         time.sleep(1)
+        rospy.Timer(rospy.Duration(0.2), self.publish_diagnostics)
+        self.print_states = None
+        self.diagnostics_lock = threading.Lock()
+        self.control_frequency = Config["control_frequency"]
         ## initialize controller:
         self.main_loop()
 
@@ -124,19 +132,20 @@ class Hound_HL_Control:
     def main_loop(self):
         ## the pycuda-torch lovechild prefers it if you keep it in a single context rather than invoking
         # it in a callback which causes it to create new contexts faster than it can delete the old ones leading to rapid memory growth
+        rate = rospy.Rate(25)
         while not rospy.is_shutdown():
+            odom_failsafe = (rospy.Time.now() - self.last_odom_stamp).to_sec()
             if (
                 self.state_init
                 and self.map_init
                 and self.goal_init
+                and odom_failsafe < 0.5
                 and self.odom_update
             ):
                 ## generate the control message:
                 now = time.time()
-                self.process_grid_map()
                 with self.path_mutex:
                     terminate, reference_path = self.get_reference_path(self.state, np.copy(self.path_poses))
-                self.controller.set_hard_limit(self.hard_limit)
                 if terminate:
                     self.goal_init = False
                     ctrl = np.zeros(2)
@@ -148,33 +157,34 @@ class Hound_HL_Control:
                         self.map_norm,
                         self.map_cost,
                         self.map_cent,
+                        self.map_mutex,
+                        self.hard_limit
                     )
-                self.state[15:17] = ctrl
+                self.state[15] = ctrl[0] # pretend the steering output is what the steering angle is.
                 self.send_ctrl(ctrl)
-                self.publish_markers(self.controller.print_states)
-                self.odom_update = False
                 self.loop_dt = 1e3 * (time.time() - now)
-                if self.debug:
-                    print("loop_dt: ", self.loop_dt)
-            self.publish_diagnostics()
+                with self.diagnostics_lock:
+                    self.print_states = self.controller.print_states
+                rate.sleep()
 
     def get_reference_path(self, state, controller_path):
         terminate = False
         controller_path[:, :2] -= state[:2] # this is the robot-centric path
-        reference_index = np.argmin(np.linalg.norm(controller_path[:, :2], axis=1))
-        if reference_index < len(controller_path) - self.MPPI_config["TIMESTEPS"]:
-            reference_path = controller_path[reference_index:reference_index+self.MPPI_config["TIMESTEPS"], :4]
+        # self.reference_index = max(np.argmin(np.linalg.norm(controller_path[:, :2], axis=1)), self.reference_index)
+        self.reference_index = np.argmin(np.linalg.norm(controller_path[:, :2], axis=1))
+        if self.reference_index < len(controller_path) - self.MPPI_config["TIMESTEPS"]:
+            reference_path = controller_path[self.reference_index:self.reference_index+self.MPPI_config["TIMESTEPS"], :4]
         else:
             reference_path = np.zeros((self.MPPI_config["TIMESTEPS"], 4))
-            available = controller_path[reference_index:, :4]
+            available = controller_path[self.reference_index:, :4]
             reference_path[:len(available)] = available
             reference_path[len(available):, :3] = reference_path[len(available)-1, :3]
             reference_path[len(available):, 3] = 0.0
-            if len(available) < 2:
+            if len(available) < self.MPPI_config["TIMESTEPS"]:
                 terminate = True
         return terminate, reference_path
 
-    def publish_diagnostics(self):
+    def publish_diagnostics(self, event):
         diagnostics_array = DiagnosticArray()
         diagnostics_status = DiagnosticStatus()
         diagnostics_status.name = "HLC"
@@ -194,12 +204,16 @@ class Hound_HL_Control:
         diagnostics_status.values.append(
             KeyValue(key="delta_t", value=str(self.loop_dt))
         )
-        diagnostics_status.values.append(
-            KeyValue(key="all_bad", value=str(self.controller.all_bad))
-        )
 
         diagnostics_array.status.append(diagnostics_status)
         self.diagnostics_pub.publish(diagnostics_array)
+        with self.diagnostics_lock:
+            print_states = np.copy(self.print_states)
+        if print_states is not None:
+            try:
+                self.publish_markers(print_states)
+            except:
+                pass
 
     def publish_markers(self, states):
         marker_array = MarkerArray()
@@ -222,24 +236,6 @@ class Hound_HL_Control:
                 marker.pose.position.y = float(states[0, i, j, 1]) + self.map_cent[1]
                 marker.pose.position.z = float(states[0, i, j, 2]) + self.map_cent[2]
                 marker_array.markers.append(marker)
-        ## goal point marker
-        marker = Marker()
-        marker.header.frame_id = "map"
-        marker.id = i * states.shape[2] + j
-        marker.type = marker.SPHERE
-        marker.action = marker.ADD
-        marker.scale.x = 1.0
-        marker.scale.y = 1.0
-        marker.scale.z = 0.1
-        marker.color.a = 1.0
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.pose.orientation.w = 1.0
-        marker.pose.position.x = self.goal[0]
-        marker.pose.position.y = self.goal[1]
-        marker.pose.position.z = self.goal[2]
-        marker_array.markers.append(marker)
         self.marker_pub.publish(marker_array)
 
     def update_goal(
@@ -252,7 +248,7 @@ class Hound_HL_Control:
         step_size=1,
         wp_radius=2.0,
         looping=False,
-    ):
+):
         if goal is None:
             if current_wp_index == 0:
                 return target_WP[current_wp_index, :2], False, current_wp_index
@@ -316,13 +312,15 @@ class Hound_HL_Control:
         self.state[9] = self.imu.linear_acceleration.x
         self.state[10] = self.imu.linear_acceleration.y
         self.state[11] = self.imu.linear_acceleration.z
-        self.state[12] = self.imu.angular_velocity.x
-        self.state[13] = self.imu.angular_velocity.y
-        self.state[14] = self.imu.angular_velocity.z
+        self.state[12] = odom.twist.twist.angular.x
+        self.state[13] = odom.twist.twist.angular.y
+        self.state[14] = odom.twist.twist.angular.z
+        self.state[16] = self.wheelspeed.state.speed/self.erpm_gain
 
     def odom_callback(self, odom):
-        if self.imu is None:
+        if self.imu is None or self.wheelspeed is None:
             return
+        self.last_odom_stamp = rospy.Time.now()
         self.obtain_state(odom)
         if not self.state_init:
             self.state_init = True
@@ -330,6 +328,9 @@ class Hound_HL_Control:
 
     def imu_callback(self, imu):
         self.imu = imu
+
+    def wheelspeed_callback(self, wheelspeed):
+        self.wheelspeed = wheelspeed
 
     def grid_map_callback(self, grid_map):
         self.grid_map = grid_map
@@ -361,15 +362,16 @@ class Hound_HL_Control:
             self.map_init = False
             print("got nan")
         else:
-            self.map_cent = np.array([cent.x, cent.y, cent.z])
+            map_cent = np.array([cent.x, cent.y, cent.z])
+            self.process_grid_map(map_cent)
             self.map_init = True
 
-    def process_grid_map(self):
-        self.map_elev = np.copy(self.temp_map_elev)
+    def process_grid_map(self, map_cent):
+        map_elev = np.copy(self.temp_map_elev)
         ## template code for how to get color image:
         # matrix = self.grid_map.data[self.color_index]
         # self.map_color = np.transpose(cv2.flip(np.reshape(matrix.data, (matrix.layout.dim[1].size, matrix.layout.dim[0].size,3), order='F'), -1), axes=[1,0,2])
-        self.map_norm = self.generate_normal(self.map_elev)
+        map_norm = self.generate_normal(map_elev)
         ## upscaling this AFTER calculating the surface normal.
         # self.map_elev = cv2.resize(
         #     self.map_elev, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
@@ -377,14 +379,16 @@ class Hound_HL_Control:
         # self.map_norm = cv2.resize(
         #     self.map_norm, (self.map_size_px, self.map_size_px), cv2.INTER_LINEAR
         # )
-        self.map_cent[2] = self.map_elev[self.map_size_px // 2, self.map_size_px // 2]
-        self.map_elev -= self.map_cent[2]
+        map_cent[2] = map_elev[self.map_size_px // 2, self.map_size_px // 2]
+        map_elev -= map_cent[2]
         ## generate the cost map:
-        self.map_cost = self.generate_costmap_from_BEVmap(self.normal)
+        map_cost = self.generate_costmap_from_BEVmap(map_norm)
+        with self.map_mutex:
+            self.map_elev, self.map_norm, self.map_cost, self.map_cent = map_elev, map_norm, map_cost, map_cent
 
-    def generate_costmap_from_BEVmap(self, normal, costmap_cosine_thresh=np.cos(np.radians(30))):
+    def generate_costmap_from_BEVmap(self, normal, costmap_cosine_thresh=np.cos(np.radians(60))):
         dot_product = normal[:, :, 2]
-        costmap = np.where(dot_product >= costmap_cosine_thresh, 255, 0).astype(np.float32)
+        costmap = np.where(dot_product >= costmap_cosine_thresh, 0, 255).astype(np.float32)
         return costmap
 
     def generate_normal(self, elev, k=3):
@@ -399,67 +403,41 @@ class Hound_HL_Control:
         normal = normal / norm
         return normal
 
-    def generate_cost(self, size, res, cent, _poses, track_width):
-        """
-        the idea here is to consider the end point of the path as a "goal"
-        and use the points along the path to construct a "costmap" where we draw circles around the points
-        and then blur them out to give the optimizer some sense of "distance" from the path
-        """
-        r = int(track_width / res)
-        costmap = np.ones((size, size, 3), dtype=np.float32)
-        ## track width is in meters, we need to convert it to pixels:
-        poses = np.copy(_poses[:, :2])
-        poses -= cent[:2]
-        poses *= 1.0 / res
-        poses += size / 2.0
-        poses = poses.astype(np.int32)
-        poses = poses[
-            np.where(
-                (poses[:, 0] >= 0)
-                & (poses[:, 0] < size)
-                & (poses[:, 1] >= 0)
-                & (poses[:, 1] < size)
-            )
-        ]
-        pts = poses[:, :2].reshape((-1, 1, 2))
-        costmap = cv2.polylines(costmap, [pts], False, 0, r)
-        costmap = cv2.blur(costmap, (r, r))
-        return costmap
+    # def path_callback(self, path):
+    #     """
+    #     we expect the path to have a resolution of 0.2 meters or less.
+    #     """
+    #     ## get the poses from the path and store them into a numpy array:
+    #     self.goal_init = False
+    #     self.path_poses = np.zeros((len(path.poses), 4), dtype=np.float32)
+    #     for i in range(len(path.poses)):
+    #         self.path_poses[i, 0] = path.poses[i].pose.position.x
+    #         self.path_poses[i, 1] = path.poses[i].pose.position.y
+    #         self.path_poses[i, 2] = path.poses[i].pose.position.z
+    #     ## calculate curvature:
+    #     self.path_poses, self.looping = self.interpolate_path(self.path_poses[:, :3])
+    #     print("path received")
+    #     self.current_wp_index = 0
+    #     self.goal = self.path_poses[self.current_wp_index, :3]
 
-    def path_callback(self, path):
-        """
-        we expect the path to have a resolution of 0.2 meters or less.
-        """
-        ## get the poses from the path and store them into a numpy array:
-        self.goal_init = False
-        self.path_poses = np.zeros((len(path.poses), 4), dtype=np.float32)
-        for i in range(len(path.poses)):
-            self.path_poses[i, 0] = path.poses[i].pose.position.x
-            self.path_poses[i, 1] = path.poses[i].pose.position.y
-            self.path_poses[i, 2] = path.poses[i].pose.position.z
-        ## calculate curvature:
-        self.path_poses, self.looping = self.interpolate_path(self.path_poses[:, :3])
-        print("path received")
-        self.current_wp_index = 0
-        self.goal = self.path_poses[self.current_wp_index, :3]
-
-        path = navPath()
-        path.header.frame_id = "map"
-        path.header.stamp = rospy.Time.now()
-        for i in range(len(self.path_poses)):
-            pose = PoseStamped()
-            pose.header.frame_id = "map"
-            pose.header.stamp = rospy.Time.now()
-            pose.pose.position.x = self.path_poses[i, 0]
-            pose.pose.position.y = self.path_poses[i, 1]
-            pose.pose.position.z = self.path_poses[i, 2]
-            path.poses.append(pose)
-        self.interpolated_path_pub.publish(path)
-        self.controller.mppi.reset()
-        self.goal_init = True
+    #     path = navPath()
+    #     path.header.frame_id = "map"
+    #     path.header.stamp = rospy.Time.now()
+    #     for i in range(len(self.path_poses)):
+    #         pose = PoseStamped()
+    #         pose.header.frame_id = "map"
+    #         pose.header.stamp = rospy.Time.now()
+    #         pose.pose.position.x = self.path_poses[i, 0]
+    #         pose.pose.position.y = self.path_poses[i, 1]
+    #         pose.pose.position.z = self.path_poses[i, 2]
+    #         path.poses.append(pose)
+    #     self.interpolated_path_pub.publish(path)
+    #     self.goal_init = True
 
     def local_path_callback(self, path):
+        now = time.time()
         with self.path_mutex:
+            self.reference_index = 0
             self.path_poses = np.zeros((len(path.poses), 4), dtype=np.float32)
             for i in range(len(path.poses)):
                 self.path_poses[i, 0] = path.poses[i].pose.position.x
@@ -473,42 +451,45 @@ class Hound_HL_Control:
                 )
                 rpy = euler_from_quaternion(quaternion)
                 self.path_poses[i, 2] = rpy[2]
+                self.path_poses[i, 3] = 2.5 # some average speed that we don't actually care about
         self.looping = False
         self.goal_init = True
+        delta_T = time.time() - now
+        #print(delta_T*1e3)
 
-    def interpolate_path(self, target_WP):
-        target_Vhat = np.zeros_like(target_WP)  # 0 out everything
-        max_index = len(target_WP) - 1
+    # def interpolate_path(self, target_WP):
+    #     target_Vhat = np.zeros_like(target_WP)  # 0 out everything
+    #     max_index = len(target_WP) - 1
 
-        for i in range(1, len(target_WP) - 1):  # all points except first and last
-            V_prev = target_WP[i] - target_WP[i - 1]
-            V_next = target_WP[i + 1] - target_WP[i]
-            target_Vhat[i] = (V_next + V_prev) / np.linalg.norm(V_next + V_prev)
-        target_Vhat[0] = target_WP[1] - target_WP[0]
-        target_Vhat[0] /= np.linalg.norm(target_Vhat[0])
-        target_Vhat[-1] = target_WP[-1] - target_WP[-2]
-        target_Vhat[-1] /= np.linalg.norm(target_Vhat[-1])
+    #     for i in range(1, len(target_WP) - 1):  # all points except first and last
+    #         V_prev = target_WP[i] - target_WP[i - 1]
+    #         V_next = target_WP[i + 1] - target_WP[i]
+    #         target_Vhat[i] = (V_next + V_prev) / np.linalg.norm(V_next + V_prev)
+    #     target_Vhat[0] = target_WP[1] - target_WP[0]
+    #     target_Vhat[0] /= np.linalg.norm(target_Vhat[0])
+    #     target_Vhat[-1] = target_WP[-1] - target_WP[-2]
+    #     target_Vhat[-1] /= np.linalg.norm(target_Vhat[-1])
 
-        looping = False
-        if np.linalg.norm(target_WP[0] - target_WP[-1]) < 2:
-            looping = True  ## this is to cause the system to reset wp index to 0 if loop is detected
-            print("looping")
-        N = 40
-        wp_list = []
-        for i in range(len(target_WP) - 1):
-            P0 = target_WP[i]
-            P3 = target_WP[i + 1]
-            P1, P2 = get_Intermediate_Points_generic(
-                P0, P3, target_Vhat[i], target_Vhat[i + 1], 2.0, compliment=False
-            )
-            bx, by, bz = get_bezier(P0, P1, P2, P3, float(N))
-            for j in range(N):
-                Curvature, Direction, Normal = get_CTN(
-                    P0, P1, P2, P3, float(j) / float(N)
-                )
-                wp_list.append(np.array([bx[j], by[j], bz[j], Curvature]))
+    #     looping = False
+    #     if np.linalg.norm(target_WP[0] - target_WP[-1]) < 2:
+    #         looping = True  ## this is to cause the system to reset wp index to 0 if loop is detected
+    #         print("looping")
+    #     N = 40
+    #     wp_list = []
+    #     for i in range(len(target_WP) - 1):
+    #         P0 = target_WP[i]
+    #         P3 = target_WP[i + 1]
+    #         P1, P2 = get_Intermediate_Points_generic(
+    #             P0, P3, target_Vhat[i], target_Vhat[i + 1], 2.0, compliment=False
+    #         )
+    #         bx, by, bz = get_bezier(P0, P1, P2, P3, float(N))
+    #         for j in range(N):
+    #             Curvature, Direction, Normal = get_CTN(
+    #                 P0, P1, P2, P3, float(j) / float(N)
+    #             )
+    #             wp_list.append(np.array([bx[j], by[j], bz[j], Curvature]))
 
-        return np.array(wp_list), looping
+    #     return np.array(wp_list), looping
 
 
 if __name__ == "__main__":

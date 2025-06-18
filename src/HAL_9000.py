@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Import ROS libraries and messages
 import os
-
+import time
+time.sleep(1)
 os.system('usbreset "ChibiOS/RT Virtual COM Port"')  ## this gets executed with 0 delay
 import rospy
 import time
@@ -16,7 +17,6 @@ from sensor_msgs.msg import PointCloud2, LaserScan
 import laser_geometry.laser_geometry as lg
 import tf
 import numpy as np
-import time
 import platform
 
 
@@ -307,9 +307,10 @@ class hal:
                 ):
                     self.mavros_init = True
                     self.publish_notification("low level ready")
-                if mavros_freq < 0.8 * self.mavros_config["fps"]:
+                if mavros_freq < 0.5 * self.mavros_config["fps"]:
                     self.mavros_init = False
                     os.system(self.mavros_config["failure_action"])
+                    print("frequency drop")
                 camera_freq = self.camera_hz.get_hz()
                 camera_freq = camera_freq[0]
                 if (

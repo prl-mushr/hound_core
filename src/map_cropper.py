@@ -58,9 +58,11 @@ def grid_map_callback(msg):
 
     nan_mask = np.isnan(map_elev).astype('uint8')
     map_elev = np.nan_to_num(map_elev, nan=0) * 255.0  # Convert NaN to 0 for now
+    map_elev = cv2.medianBlur(map_elev, 3)
     map_elev = cv2.inpaint(map_elev, nan_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
     map_elev = map_elev / 255.0
 
+    
     dt = time.time() - start_time
 
     matrix = cv2.flip(map_elev.T, -1)

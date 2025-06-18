@@ -1,0 +1,31 @@
+<launch>
+  <!-- Launch arguments -->
+  <arg name="prefix" default=""/>
+  <arg name="map_prefix" default="/elevation_mapping"/>
+
+  <!-- hound_planner node -->
+  <node pkg="hound_core" type="hound_planner.py" name="hound_planner" output="screen">
+    <remap from="/elevation_mapping/elevation_map_cropped_cv2" to="$(arg map_prefix)/elevation_map_cropped_cv2" />
+    <remap from="/planner_diagnostics" to="/$(arg prefix)/planner_diagnostics" />
+    <remap from="/path" to="/$(arg prefix)/path" />
+    <remap from="/marker" to="/$(arg prefix)/marker" />
+  </node>
+
+  <!-- hound_hl_control node -->
+  <node pkg="hound_core" type="hound_hl_control.py" name="hound_hl_control" output="screen">
+    <remap from="/elevation_mapping/elevation_map_cropped_cv2" to="$(arg map_prefix)/elevation_map_cropped_cv2" />
+    <remap from="low_level_controller/hound/control" to="/$(arg prefix)/low_level_controller/hound/control" />
+    <remap from="/path" to="/$(arg prefix)/path" />
+    <remap from="/high_level_diagnostics" to="/$(arg prefix)/high_level_diagnostics" />
+    <remap from="/mpc_marker" to="/$(arg prefix)/mpc_marker" />
+  </node>
+
+  <!-- <node pkg="hound_core" type="planner_stats.py" name="planner_stats" output="screen">
+    <remap from="/elevation_mapping/elevation_map_cropped_cv2" to="$(arg map_prefix)/elevation_map_cropped_cv2" />
+    <remap from="/planner_diagnostics" to="/$(arg prefix)/planner_diagnostics" />
+    <remap from="/path" to="/$(arg prefix)/path" />
+    <remap from="/marker" to="/$(arg prefix)/marker" />
+  </node> -->
+
+
+</launch>
