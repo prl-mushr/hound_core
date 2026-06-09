@@ -1,0 +1,127 @@
+# =============================================================================
+# SINGLE SOURCE OF TRUTH (SSoT) for D455 + Isaac ROS Visual SLAM bring-up.
+#
+# Everything that you would normally tweak lives here. robot.launch.py reads
+# this file at launch time, so editing values here does NOT require a rebuild
+# (the launch file prefers the copy in src/ via $ROS_WORKSPACE, falling back to
+# the installed share copy).
+# =============================================================================
+
+camera:
+  # Master switch for the D455 driver. If false, no camera is launched (and
+  # VSLAM is skipped too, since it has no image source).
+  enabled: true
+
+  # Logical name. Becomes the ROS namespace/prefix for topics & TF frames
+  # (e.g. <camera_name>/infra1/image_rect_raw, <camera_name>_link, ...).
+  camera_name: camera
+
+  # Hardware id of the specific D455 to open. Keep it QUOTED so the all-digit
+  # serial is treated as a string. Find it with: rs-enumerate-devices -s
+  serial_number: "030422250301"
+
+  # Stereo infrared streams used by VSLAM. The D455 supports 60 fps at
+  # 848x480 / 640x480 / 640x360 (1280x720 IR is 30 fps only).
+  infra_width: 848
+  infra_height: 480
+  fps: 60
+
+  # IR projector. Keep OFF (0) for VSLAM: the dot pattern corrupts the
+  # feature-tracking images. Set to 1 only for active depth use cases.
+  emitter_enabled: 0
+
+  # Color (RGB) stream. Separate sensor from the depth/IR module, so it runs at
+  # its own rate independent of the 60 fps IR. Needed for segmentation (CLIPSeg
+  # runs on color); auto-enabled when the segmentation subsystem is on.
+  enable_color: false
+  color_width: 640
+  color_height: 480
+  color_fps: 30
+
+  # IMU streams (drive the VIO fusion in the SLAM node).
+  # NOTE: VIO is NOT available on this unit. The kernel (6.8.12-xxxx-tegra) ships
+  # no hid-sensor IIO modules (hid-sensor-accel-3d / hid-sensor-gyro-3d / -hub),
+  # so the D455 IMU never enumerates as /dev/iio:deviceN and librealsense reports
+  # "No HID info provided, IMU is disabled". librealsense has no UVC fallback for
+  # the D4xx IMU. Enabling VIO would require building those kernel modules from the
+  # tegra kernel source. Until then keep this false + tracking_mode: 0 (stereo).
+  enable_imu: false
+  gyro_fps: 200
+  accel_fps: 200   # use 250 for a D435i
+
+vslam:
+  # Master switch for Isaac ROS Visual SLAM. Even if true, VSLAM is only
+  # launched when the camera is also enabled (it needs the image streams).
+  enabled: true
+
+  # Tracking mode: 0 = multicamera (stereo, no IMU), 1 = VIO (IMU fusion),
+  # 2 = RGBD. IMU is disabled on this unit, so use 0 for stereo-only.
+  tracking_mode: 0
+
+  rectified_images: true
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 22.00
+
+  # Visualization (markers/landmarks on /visual_slam/vis/*). Open rviz2
+  # separately to view them.
+  enable_slam_visualization: true
+  enable_landmarks_view: true
+  enable_observations_view: true
+
+  # IMU noise model + calibration rate. Defaults match NVIDIA's RealSense
+  # reference; adjust per your unit's datasheet if needed.
+  calibration_frequency: 200.0
+  gyro_noise_density: 0.000244
+  gyro_random_walk: 0.000019393
+  accel_noise_density: 0.001862
+  accel_random_walk: 0.003
+
+mavros:
+  # Master switch for the ArduPilot/MAVROS bring-up (wraps mavros' apm.launch).
+  enabled: false
+
+  # Connection to the flight controller. serial "device:baud", or udp://, tcp://.
+  fcu_url: "/dev/ttyACM0:115200"
+
+  # Optional GCS bridge (e.g. "udp://@<gcs-ip>"). Leave empty to not bridge a GCS.
+  gcs_url: ""
+
+  # ROS node name of the MAVROS param plugin (target for fcu_params load).
+  param_node: "/mavros/param"
+
+  # --- MAVROS ROS-node parameters (applied to the mavros nodes) --------------
+  # Authored as standard ROS 2 params-file content (node-name -> ros__parameters).
+  # The launch writes this to a temp file and passes it to apm.launch. This is
+  # where the GCS-bridge rate-control (our router patch) lives.
+  node_params:
+    mavros_router:
+      ros__parameters:
+        gcs_block_stream_requests: false
+        gcs_throttle_hz: 0.0
+        # gcs_throttle_msgids: [30, 27, 33, 32, 65, 36, 74]
+
+  # --- ArduPilot (flight-controller) parameters ------------------------------
+  # Flat name: value map written to the FCU after MAVROS connects (force-pull
+  # then param load). Leave empty ({}) to not push any FCU params.
+  fcu_params: {}
+    # SR0_EXTRA1: 200     # ATTITUDE stream (USB/SERIAL0), Hz
+    # SR0_RAW_SENS: 200   # RAW_IMU stream, Hz
+
+segmentation:
+  # Master switch for the CLIPSeg people/dynamic mask node. When enabled, the
+  # camera's color stream is auto-enabled (CLIPSeg runs on RGB).
+  enabled: false
+
+  # HuggingFace model id. rd16 is the light/fast variant (good on Orin NX).
+  model: "CIDAS/clipseg-rd16"
+
+  # Text prompts; all are run batched and OR'd into one mask.
+  prompts: ["a person", "people", "pedestrian"]
+
+  input_res: 224          # 224 (fast) or 352 (CLIPSeg native, sharper)
+  rate_hz: 5.0            # run on every Nth color frame; 2-10 Hz is plenty
+  threshold: 0.3          # sigmoid threshold for the binary mask
+  compile_mode: "reduce-overhead"   # "reduce-overhead" | "default" | "none"
+
+  color_topic: "/camera/color/image_raw"
+  mask_topic: "/segmentation/people_mask"
