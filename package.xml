@@ -19,6 +19,7 @@
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>mavros</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <!-- CLIPSeg node also needs python3 torch + transformers, installed via pip -->
   <exec_depend>python3-numpy</exec_depend>

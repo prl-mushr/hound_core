@@ -100,12 +100,29 @@ def _build_camera_node(cam: dict, force_color: bool = False) -> Node:
     )
 
 
-def _build_segmentation_node(seg: dict) -> Node:
-    """CLIPSeg people/dynamic mask node (runs on the camera color stream)."""
+def _flatten_prompts(prompts):
+    """Turn the SSoT prompts into 3 parallel arrays the node can take as ROS
+    params: flat sub-prompts, group names, and a group id per sub-prompt.
+    Accepts a grouped dict {group: [subprompts]} or a flat list (each its own group)."""
+    if isinstance(prompts, dict):
+        names = list(prompts.keys())
+        flat, gids = [], []
+        for gi, name in enumerate(names):
+            for s in (prompts[name] or []):
+                flat.append(str(s))
+                gids.append(gi)
+        return flat, names, gids
+    flat = [str(p) for p in (prompts or ["a person"])]
+    return flat, flat, list(range(len(flat)))
+
+
+def _build_segmentation_node(seg: dict, force_boxes: bool = False) -> Node:
+    """CLIPSeg segmentation node: publishes a label map (+ boxes + overlay)."""
+    _prompts_flat, _group_names, _group_ids = _flatten_prompts(seg.get("prompts", ["a person"]))
     print(
         f"[hound_core] segmentation ENABLED: model={seg.get('model', 'CIDAS/clipseg-rd16')} "
         f"res={seg.get('input_res', 224)} rate={seg.get('rate_hz', 5.0)}Hz "
-        f"prompts={seg.get('prompts', [])}"
+        f"groups={_group_names} ({len(_prompts_flat)} sub-prompts)"
     )
     return Node(
         package="hound_core",
@@ -114,13 +131,66 @@ def _build_segmentation_node(seg: dict) -> Node:
         output="screen",
         parameters=[{
             "model_name": str(seg.get("model", "CIDAS/clipseg-rd16")),
-            "prompts": [str(p) for p in seg.get("prompts", ["a person"])],
+            "prompts": _prompts_flat,
+            "group_names": _group_names,
+            "group_ids": _group_ids,
+            "suppress_prompts": [str(x) for x in seg.get("suppress_prompts", [""])] or [""],
+            "aggregate": str(seg.get("aggregate", "max")),
             "input_res": int(seg.get("input_res", 224)),
             "rate_hz": float(seg.get("rate_hz", 5.0)),
             "threshold": float(seg.get("threshold", 0.3)),
             "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
             "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
-            "mask_topic": str(seg.get("mask_topic", "/segmentation/people_mask")),
+            "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
+            "viz_overlay": bool(seg.get("viz_overlay", True)),
+            "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
+            "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
+            "sam_min_area": float(seg.get("sam_min_area", 0.002)),
+            "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
+            "profile": bool(seg.get("profile", False)),
+            "profile_every": int(seg.get("profile_every", 30)),
+            "publish_boxes": bool(seg.get("publish_boxes", False)) or force_boxes,
+            "boxes_topic": str(seg.get("boxes_topic", "/segmentation/boxes")),
+        }],
+    )
+
+
+def _build_sam_refine_node(seg: dict) -> Node:
+    """Standalone SAM refinement node: refines CLIPSeg boxes into a traversability
+    RGB (G=traversable, R=non-traversable, B=none) + a separate people mask."""
+    # Box class ids are CLIPSeg group indices; resolve which map to each output.
+    _, names, _ = _flatten_prompts(seg.get("prompts", ["a person"]))
+    pos_names = [str(x) for x in seg.get("positive_groups", [])]
+    neg_names = [str(x) for x in seg.get("negative_groups", [])]
+    pos_idx = [i for i, n in enumerate(names) if n in pos_names]
+    neg_idx = [i for i, n in enumerate(names) if n in neg_names]
+    people_idx = [i for i, n in enumerate(names) if n not in pos_names and n not in neg_names]
+    print(
+        f"[hound_core] sam_refine_node ENABLED: variant={seg.get('sam_variant', 'l0')} "
+        f"rate={seg.get('sam_rate_hz', 15.0)}Hz "
+        f"(traversable={pos_idx} non_traversable={neg_idx} people={people_idx})"
+    )
+    return Node(
+        package="hound_core",
+        executable="sam_refine_node",
+        name="sam_refine_node",
+        output="screen",
+        parameters=[{
+            "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
+            "boxes_topic": str(seg.get("boxes_topic", "/segmentation/boxes")),
+            "traversability_topic": str(seg.get("sam_traversability_topic", "/segmentation/refined_traversability")),
+            "people_mask_topic": str(seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")),
+            "overlay_topic": str(seg.get("sam_overlay_topic", "/segmentation/refined_overlay")),
+            "publish_overlay": bool(seg.get("sam_overlay", False)),
+            "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
+            "rate_hz": float(seg.get("sam_rate_hz", 15.0)),
+            "positive_groups": pos_idx or [0],
+            "negative_groups": neg_idx or [1],
+            "people_groups": people_idx or [2],
+            "sam_variant": str(seg.get("sam_variant", "l0")),
+            "sam_ckpt": str(seg.get("sam_ckpt", "/root/colcon_ws/efficientvit_sam_l0.pt")),
+            "sam_compile": bool(seg.get("sam_compile", True)),
+            "sam_compile_mode": str(seg.get("sam_compile_mode", "reduce-overhead")),
         }],
     )
 
@@ -298,14 +368,26 @@ def generate_launch_description():
     else:
         print("[hound_core] mavros DISABLED")
 
-    # ---- Segmentation (CLIPSeg) — requires the camera for color input --------
+    # ---- Segmentation (CLIPSeg) ----------------------------------------------
+    # Normally needs the camera for color input, but replay_mode lets it run
+    # standalone against an externally-published color topic (e.g. bag_replay).
     if seg_enabled:
-        if camera_enabled:
-            actions.append(_build_segmentation_node(seg))
+        replay_mode = bool(seg.get("replay_mode", False))
+        sam_node = bool(seg.get("sam_node", False))
+        if camera_enabled or replay_mode:
+            if replay_mode and not camera_enabled:
+                print(
+                    "[hound_core] segmentation REPLAY MODE: camera off, consuming "
+                    f"external color topic '{seg.get('color_topic', '/camera/color/image_raw')}'"
+                )
+            # In split mode the CLIPSeg node publishes boxes and the SAM node refines.
+            actions.append(_build_segmentation_node(seg, force_boxes=sam_node))
+            if sam_node:
+                actions.append(_build_sam_refine_node(seg))
         else:
             print(
-                "[hound_core] segmentation requested but camera is DISABLED -> "
-                "skipping (no color source)"
+                "[hound_core] segmentation requested but camera is DISABLED and "
+                "replay_mode is false -> skipping (no color source)"
             )
     else:
         print("[hound_core] segmentation DISABLED")

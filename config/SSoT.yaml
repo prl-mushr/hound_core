@@ -10,7 +10,7 @@
 camera:
   # Master switch for the D455 driver. If false, no camera is launched (and
   # VSLAM is skipped too, since it has no image source).
-  enabled: true
+  enabled: false
 
   # Logical name. Becomes the ROS namespace/prefix for topics & TF frames
   # (e.g. <camera_name>/infra1/image_rect_raw, <camera_name>_link, ...).
@@ -110,18 +110,92 @@ mavros:
 segmentation:
   # Master switch for the CLIPSeg people/dynamic mask node. When enabled, the
   # camera's color stream is auto-enabled (CLIPSeg runs on RGB).
-  enabled: false
+  enabled: true
+
+  # Offline-eval mode: run segmentation even when the camera is DISABLED, so it
+  # consumes a color stream from elsewhere (e.g. `ros2 run hound_core bag_replay`
+  # publishing /camera/color/image_raw). Leave false for live operation.
+  replay_mode: true
 
   # HuggingFace model id. rd16 is the light/fast variant (good on Orin NX).
   model: "CIDAS/clipseg-rd16"
 
-  # Text prompts; all are run batched and OR'd into one mask.
-  prompts: ["a person", "people", "pedestrian"]
+  # Prompts grouped into navigation categories. CLIPSeg runs EVERY sub-prompt,
+  # then their maps are aggregated within each group, and each pixel is labeled
+  # with its argmax group. The label map (mono8) encodes everything:
+  #   0 = none/unknown, then group_index + 1 in the order below, i.e.
+  #   1 = traversable, 2 = non_traversable, 3 = people.
+  # Overlay colors follow PALETTE (1->green, 2->red, 3->blue). Semantic, not
+  # geometric, traversability -- the planner fuses it with geometry.
+  # (A flat list still works too: each prompt becomes its own group.)
+  prompts:
+    traversable: ["dirt", "hill", "road", "grass", "gravel", "tarmac", "path"]
+    non_traversable: ["tree", "wall", "pebbles", "fence", "building", "vehicle"]
+    people: ["person", "animal"]
+
+  # Suppress prompts: their probability is subtracted from EVERY group (clamped at
+  # 0), so these regions get no mask / class (e.g. sky shouldn't be traversable,
+  # non-traversable, or a person). Leave empty ([]) to disable.
+  suppress_prompts: ["sky"]
+
+  # How to combine the sub-prompt maps within a group, before the argmax label:
+  #   max      -> per-group OR; SATURATES and is list-size invariant (recommended)
+  #   noisy_or -> 1 - prod(1 - p) (grows with list size)
+  #   mean     -> count-weighted, but dilutes a lone strong match
+  #   sum      -> grows with list size (clamped)
+  aggregate: "max"
 
   input_res: 224          # 224 (fast) or 352 (CLIPSeg native, sharper)
-  rate_hz: 5.0            # run on every Nth color frame; 2-10 Hz is plenty
-  threshold: 0.3          # sigmoid threshold for the binary mask
+  rate_hz: 10.0           # run on every Nth color frame; 2-10 Hz is plenty
+  threshold: 0.3          # below this a pixel is label 0 (none/unknown)
+  # NOTE: max-autotune's GEMM autotuning is disabled on Orin NX (too few SMs), so
+  # it gives ~no gain over reduce-overhead but costs much longer startup.
   compile_mode: "reduce-overhead"   # "reduce-overhead" | "default" | "none"
 
   color_topic: "/camera/color/image_raw"
-  mask_topic: "/segmentation/people_mask"
+  labels_topic: "/segmentation/labels"        # mono8 category map (the product)
+
+  # Debug overlay: category colors blended on the image (toggleable). Blend
+  # strength: 0 = original only, 1 = seg colors only (further weighted per-pixel
+  # by confidence so background stays clear).
+  viz_overlay: false
+  overlay_topic: "/segmentation/overlay"
+  overlay_alpha: 0.5
+
+  # SAM refinement runs in the separate sam_refine_node (see below). The CLIPSeg
+  # node turns its blobs into box prompts for that node:
+  #   sam_min_area: ignore blobs smaller than this (frac of image)
+  #   sam_max_boxes: cap boxes/frame to bound SAM latency
+  sam_min_area: 0.002
+  sam_max_boxes: 6
+  # EfficientViT-SAM settings (used by sam_refine_node).
+  sam_variant: "l0"
+  sam_ckpt: "/root/colcon_ws/efficientvit_sam_l0.pt"
+  # torch.compile the SAM image encoder (fixed 512x512 input -> compile-friendly).
+  sam_compile: true
+  sam_compile_mode: "reduce-overhead"   # max-autotune GEMM is unsupported on Orin NX
+
+  # Per-stage timing. Logs averaged ms/frame for clipseg / publish every
+  # profile_every frames. Use to find the bottleneck, then off.
+  profile: True
+  profile_every: 30
+
+  # --- SAM refinement node (separate process) --------------------------------
+  # When sam_node is true, the CLIPSeg node publishes box prompts and a standalone
+  # sam_refine_node consumes color + boxes, refines them with EfficientViT-SAM,
+  # and publishes a REFINED label map (same encoding as labels_topic) at its own
+  # rate. Decouples the fast coarse labels from the heavier SAM refinement.
+  # The SAM node publishes a refined traversability RGB (G=traversable,
+  # R=non-traversable, B=none) + a separate people mask. positive_groups /
+  # negative_groups name which prompt groups map to traversable / non-traversable;
+  # any remaining group (e.g. people) becomes the separate people mask.
+  sam_node: true
+  boxes_topic: "/segmentation/boxes"
+  sam_rate_hz: 10.0
+  positive_groups: ["traversable"]
+  negative_groups: ["non_traversable"]
+  sam_traversability_topic: "/segmentation/refined_traversability"
+  sam_people_mask_topic: "/segmentation/refined_people_mask"
+  # Optional debug overlay (traversability colors blended on the image).
+  sam_overlay: false
+  sam_overlay_topic: "/segmentation/refined_overlay"

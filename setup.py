@@ -26,6 +26,7 @@ setup(
     entry_points={
         "console_scripts": [
             "clipseg_mask_node = hound_core.clipseg_mask_node:main",
+            "sam_refine_node = hound_core.sam_refine_node:main",
             "bag_replay = hound_core.bag_replay:main",
         ],
     },

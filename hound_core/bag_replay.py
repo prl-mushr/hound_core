@@ -7,21 +7,19 @@ realistic stream for offline evaluation.
 
 Requires (pip, install inside your container):  pip install rosbags
 
-Examples
---------
+Examples (paths are inside the container, i.e. /root/colcon_ws/...)
+------------------------------------------------------------------
 # Inspect what's in the bag (topics, types, counts, duration):
-ros2 run hound_core bag_replay /home/hound/colcon_ws/bags/hound_25.bag --info
+ros2 run hound_core bag_replay /root/colcon_ws/bags/hound_25.bag --info
 
 # Replay everything at real-time:
-ros2 run hound_core bag_replay /home/hound/colcon_ws/bags/hound_25.bag
+ros2 run hound_core bag_replay /root/colcon_ws/bags/hound_25.bag
 
-# Replay only the color stream, remapped to what clipseg expects, looping:
-ros2 run hound_core bag_replay <bag> \
-    --topics /camera/color/image_raw \
-    --remap /camera/color/image_raw:=/camera/color/image_raw \
-    --loop
+# Replay only the color stream (already on the topic clipseg wants), looping:
+ros2 run hound_core bag_replay /root/colcon_ws/bags/hound_25.bag \
+    --topics /camera/color/image_raw --loop
 
-# If the bag only has compressed color, decode it to a raw Image:
+# If a bag only has compressed color, decode it to a raw Image:
 ros2 run hound_core bag_replay <bag> --decode-compressed
 """
 
