@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>hound_core — Agent Handoff</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4f;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --code-bg: #161b22;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+    h1 { font-size: 1.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h2 { font-size: 1.25rem; margin-top: 2rem; color: var(--accent); }
+    h3 { font-size: 1rem; margin-top: 1.25rem; color: var(--muted); }
+    p, li { color: var(--text); }
+    .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
+    .callout {
+      background: var(--surface);
+      border-left: 4px solid var(--yellow);
+      padding: 1rem 1.25rem;
+      margin: 1rem 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .callout.critical { border-left-color: var(--red); }
+    .callout.ok { border-left-color: var(--green); }
+    code, pre {
+      font-family: "SF Mono", Consolas, monospace;
+      font-size: 0.85rem;
+    }
+    code {
+      background: var(--code-bg);
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 1rem;
+      overflow-x: auto;
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+    th { background: var(--surface); color: var(--accent); }
+    ul { padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    .tag {
+      display: inline-block;
+      font-size: 0.75rem;
+      padding: 0.15em 0.5em;
+      border-radius: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      margin-right: 0.35rem;
+    }
+    .tag.done { border-color: var(--green); color: var(--green); }
+    .tag.pending { border-color: var(--yellow); color: var(--yellow); }
+    .tag.blocked { border-color: var(--red); color: var(--red); }
+    a { color: var(--accent); }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  </style>
+</head>
+<body>
+
+<h1>hound_core — Agent Handoff Document</h1>
+<p class="meta">
+  Generated: 2026-06-10 &nbsp;|&nbsp;
+  Workspace (host): <code>/home/hound/colcon_ws/src</code> &nbsp;|&nbsp;
+  Container workspace: <code>/root/colcon_ws</code> &nbsp;|&nbsp;
+  Transcript: <code>agent-transcripts/21c7fdc1-42aa-472a-a3e9-857adceccb6c.jsonl</code>
+</p>
+
+<div class="callout critical">
+  <strong>Environment constraint:</strong> The user runs on a <strong>Jetson Orin NX</strong> inside a <strong>Docker container</strong> (accessed via SSH from host). The agent edits files on the host mount (<code>/home/hound/colcon_ws</code>) but commands run <em>inside the container</em> at <code>/root/colcon_ws</code>. <strong>Never pip/apt install anything without telling the user first.</strong> Use <code>mushr_jazzy</code> or equivalent to enter the container.
+</div>
+
+<!-- ============================================================ -->
+<h2>1. Primary Goal</h2>
+<p>
+  ROS 2 Jazzy package <code>hound_core</code> that brings up a <strong>Intel RealSense D455</strong>
+  (by hardware serial), <strong>NVIDIA Isaac ROS Visual SLAM (cuVSLAM)</strong>, optional
+  <strong>ArduPilot MAVROS</strong>, and a <strong>semantic segmentation pipeline</strong> for
+  navigation / dynamic obstacle handling.
+</p>
+<p>
+  Architecture follows the <code>bimanual</code> package pattern: all tunables live in
+  <code>config/SSoT.yaml</code>; <code>launch/robot.launch.py</code> reads it at launch time
+  (no rebuild needed for config edits when using symlink install).
+</p>
+
+<!-- ============================================================ -->
+<h2>2. Current System State</h2>
+
+<h3>2.1 Subsystems (SSoT toggles)</h3>
+<table>
+  <tr><th>Subsystem</th><th>SSoT key</th><th>Current default</th><th>Status</th></tr>
+  <tr>
+    <td>D455 camera</td>
+    <td><code>camera.enabled</code></td>
+    <td><code>true</code></td>
+    <td><span class="tag done">working</span> Stereo IR @ 60fps, serial <code>030422250301</code></td>
+  </tr>
+  <tr>
+    <td>Isaac ROS VSLAM</td>
+    <td><code>vslam.enabled</code></td>
+    <td><code>true</code></td>
+    <td><span class="tag done">working</span> Stereo-only (<code>tracking_mode: 0</code>)</td>
+  </tr>
+  <tr>
+    <td>MAVROS / ArduPilot</td>
+    <td><code>mavros.enabled</code></td>
+    <td><code>false</code></td>
+    <td><span class="tag done">implemented</span> Custom GCS rate-limit patch exists</td>
+  </tr>
+  <tr>
+    <td>CLIPSeg segmentation</td>
+    <td><code>segmentation.enabled</code></td>
+    <td><code>false</code></td>
+    <td><span class="tag done">working</span> Use <code>replay_mode: true</code> for bag eval</td>
+  </tr>
+  <tr>
+    <td>SAM refinement</td>
+    <td><code>segmentation.sam_node</code></td>
+    <td><code>true</code></td>
+    <td><span class="tag done">working</span> Separate process, EfficientViT-SAM-L0</td>
+  </tr>
+  <tr>
+    <td>nvblox integration</td>
+    <td>—</td>
+    <td>—</td>
+    <td><span class="tag pending">not started</span> People mask → dynamic obstacles</td>
+  </tr>
+  <tr>
+    <td>ArduPilot boot orientation seed</td>
+    <td>—</td>
+    <td>—</td>
+    <td><span class="tag pending">discussed</span> Seed cuVSLAM from FCU IMU at boot</td>
+  </tr>
+</table>
+
+<h3>2.2 Segmentation pipeline (final architecture)</h3>
+<pre>
+Color image (/camera/color/image_raw)
+        │
+        ▼
+┌───────────────────────┐
+│  clipseg_mask_node    │  CIDAS/clipseg-rd16, torch.compile
+│  (coarse, ~10 Hz)     │  Grouped prompts → argmax label map
+└───────────┬───────────┘
+            │ publishes:
+            │   /segmentation/labels      (mono8: 0=none, 1=traversable, 2=non_traversable, 3=people)
+            │   /segmentation/boxes       (Float32MultiArray: class_idx + bbox for SAM)
+            │   /segmentation/overlay     (optional debug, viz_overlay=false by default)
+            ▼
+┌───────────────────────┐
+│  sam_refine_node      │  EfficientViT-SAM-L0, torch.compile encoder
+│  (refined, ~10 Hz)    │  Subscribes: color + boxes (matched by stamp)
+└───────────┬───────────┘
+            │ publishes:
+            │   /segmentation/refined_traversability  (rgb8: G=traversable, R=non-traversable, B=none)
+            │   /segmentation/refined_people_mask     (mono8: people/dynamic)
+            │   /segmentation/refined_overlay         (optional debug, sam_overlay=false)
+</pre>
+
+<div class="callout ok">
+  <strong>Design decisions locked in:</strong>
+  <ul>
+    <li>CLIPSeg produces <strong>coarse</strong> mono8 label map + box prompts only (no in-process SAM).</li>
+    <li>SAM runs in a <strong>separate parallel process</strong> to decouple latency.</li>
+    <li>SAM output is <strong>RGB traversability</strong> + <strong>separate people mask</strong> (not mono8 labels).</li>
+    <li>Experimental features <strong>removed</strong>: tiling, MaskCLIP head, DINO.txt, guided filter, in-process SAM.</li>
+    <li><code>torch.compile(mode="reduce-overhead")</code> for both CLIPSeg and SAM (not max-autotune — Orin NX has too few SMs).</li>
+    <li>Prompts grouped by navigation category; <code>aggregate: max</code> within groups; sky suppressed via <code>suppress_prompts</code>.</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>3. Package Layout</h2>
+<pre>
+hound_core/
+├── config/SSoT.yaml              # Single source of truth (edit here, not launch file)
+├── launch/robot.launch.py        # Dynamic launch from SSoT
+├── hound_core/
+│   ├── clipseg_mask_node.py      # CLIPSeg coarse segmentation
+│   ├── sam_refine_node.py        # SAM refinement (separate process)
+│   ├── sam_refiner.py            # SamRefiner class (load/compile/infer)
+│   ├── utils.py                  # Shared: extract_boxes, blend_overlay, to_image, PALETTE, probs_to_labels
+│   └── bag_replay.py             # ROS1 bag → ROS2 topic replay (offline eval)
+├── setup.py                      # Entry points: clipseg_mask_node, sam_refine_node, bag_replay
+└── HANDOFF.html                  # This file
+</pre>
+
+<!-- ============================================================ -->
+<h2>4. Key Configuration (SSoT.yaml)</h2>
+
+<h3>4.1 Camera</h3>
+<ul>
+  <li>Serial: <code>"030422250301"</code> (quoted string)</li>
+  <li>IR: 848×480 @ 60 fps (VSLAM input)</li>
+  <li>Color: 640×480 @ 30 fps (auto-enabled when segmentation on)</li>
+  <li>Depth: disabled; emitter: off (corrupts VSLAM features)</li>
+  <li>IMU: <strong>disabled</strong> — kernel lacks <code>hid-sensor-*</code> modules on tegra 6.8.12</li>
+</ul>
+
+<h3>4.1 Segmentation prompts (current)</h3>
+<pre>
+prompts:
+  traversable: ["dirt", "hill", "road", "grass", "gravel", "tarmac", "path"]
+  non_traversable: ["tree", "wall", "pebbles", "fence", "building", "vehicle"]
+  people: ["person", "animal"]
+suppress_prompts: ["sky"]
+aggregate: "max"
+input_res: 224
+threshold: 0.3
+compile_mode: "reduce-overhead"
+sam_variant: "l0"
+sam_ckpt: "/root/colcon_ws/efficientvit_sam_l0.pt"
+sam_compile: true
+sam_compile_mode: "reduce-overhead"
+</pre>
+<p>User noted hills sometimes marked non-traversable — prompt tuning may be needed. Quality was fine after reverting tiling/MaskCLIP/DINO experiments.</p>
+
+<!-- ============================================================ -->
+<h2>5. How to Run</h2>
+
+<h3>5.1 Build (inside container)</h3>
+<pre>cd /root/colcon_ws
+colcon build --packages-select hound_core --symlink-install
+source install/setup.bash</pre>
+
+<h3>5.2 Live: camera + VSLAM</h3>
+<p>Set in SSoT: <code>camera.enabled: true</code>, <code>vslam.enabled: true</code>, <code>segmentation.enabled: false</code></p>
+<pre>ros2 launch hound_core robot.launch.py</pre>
+
+<h3>5.3 Offline eval: bag replay + segmentation</h3>
+<p>Set in SSoT:</p>
+<pre>camera:
+  enabled: false
+segmentation:
+  enabled: true
+  replay_mode: true
+  viz_overlay: false   # or true for debug
+  sam_overlay: false</pre>
+
+<p><strong>Terminal A</strong> — launch stack (CLIPSeg + SAM, no camera):</p>
+<pre>cd /root/colcon_ws && source install/setup.bash
+export HF_HUB_OFFLINE=1
+ros2 launch hound_core robot.launch.py</pre>
+<p>Wait for <code>CLIPSeg warmup/compile complete.</code> and <code>SAM warmup/compile complete.</code> (~30–60s each).</p>
+
+<p><strong>Terminal B</strong> — replay bag color stream:</p>
+<pre>cd /root/colcon_ws && source install/setup.bash
+ros2 run hound_core bag_replay /root/colcon_ws/bags/hound_25.bag \
+    --topics /camera/color/image_raw --loop</pre>
+
+<p><strong>Terminal C</strong> — visualize:</p>
+<pre>ros2 run rqt_image_view rqt_image_view</pre>
+<p>Topics to inspect:</p>
+<ul>
+  <li><code>/segmentation/labels</code> — coarse mono8 (CLIPSeg)</li>
+  <li><code>/segmentation/refined_traversability</code> — SAM RGB (G/R/B)</li>
+  <li><code>/segmentation/refined_people_mask</code> — SAM people mono8</li>
+  <li><code>/segmentation/overlay</code> — coarse debug (if viz_overlay=true)</li>
+</ul>
+
+<h3>5.4 Bag inspect</h3>
+<pre>ros2 run hound_core bag_replay /root/colcon_ws/bags/hound_25.bag --info</pre>
+
+<!-- ============================================================ -->
+<h2>6. Dependencies (user installs inside container)</h2>
+<table>
+  <tr><th>Package</th><th>Install command</th><th>Notes</th></tr>
+  <tr>
+    <td>rosbags</td>
+    <td><code>pip install rosbags</code></td>
+    <td>For bag_replay.py</td>
+  </tr>
+  <tr>
+    <td>transformers + torch</td>
+    <td>Already in container</td>
+    <td>CLIPSeg via HuggingFace; set <code>HF_HUB_OFFLINE=1</code> if cached</td>
+  </tr>
+  <tr>
+    <td>efficientvit</td>
+    <td><code>pip install --no-deps git+https://github.com/mit-han-lab/efficientvit.git</code></td>
+    <td>Do NOT install full dep tree (scipy build fails)</td>
+  </tr>
+  <tr>
+    <td>onnx</td>
+    <td><code>pip install onnx</code></td>
+    <td>Required by efficientvit import even for inference</td>
+  </tr>
+  <tr>
+    <td>SAM weights</td>
+    <td><code>wget -O /root/colcon_ws/efficientvit_sam_l0.pt https://huggingface.co/mit-han-lab/efficientvit-sam/resolve/main/efficientvit_sam_l0.pt</code></td>
+    <td>Local path in SSoT</td>
+  </tr>
+  <tr>
+    <td>Isaac ROS VSLAM</td>
+    <td><code>sudo apt install ros-jazzy-isaac-ros-visual-slam</code></td>
+    <td>Already installed; libcuvslam rebuilt from source (see §7)</td>
+  </tr>
+  <tr>
+    <td>MAVROS</td>
+    <td><code>sudo apt install ros-jazzy-mavros ros-jazzy-mavros-extras</code></td>
+    <td>Use apt binaries; COLCON_IGNORE source tree in workspace</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>7. Critical Issues &amp; Fixes Applied</h2>
+
+<h3>7.1 cuVSLAM SIGILL (SVE2 mismatch)</h3>
+<p><strong>Problem:</strong> Apt <code>libcuvslam.so</code> contained SVE2 instructions incompatible with Orin ARMv8.2 → SIGILL on load.</p>
+<p><strong>Fix:</strong> Rebuilt <code>libcuvslam.so</code> from cuVSLAM v15.0.0 source natively on Orin with <code>-march=native</code>. VSLAM now runs (confirmed: cuVSLAM 15.0.0, Multicamera mode).</p>
+
+<h3>7.2 D455 IMU unavailable</h3>
+<p><strong>Problem:</strong> Kernel 6.8.12-tegra lacks <code>hid-sensor-accel-3d</code> / <code>hid-sensor-gyro-3d</code> modules. Librealsense reports "No HID info provided, IMU is disabled."</p>
+<p><strong>Fix:</strong> Not software-fixable. Keep <code>enable_imu: false</code>, <code>tracking_mode: 0</code> (stereo-only). VIO would need kernel module build from tegra source.</p>
+
+<h3>7.3 MAVROS build failures</h3>
+<p><strong>Problem:</strong> Stale MAVROS source in workspace; GeographicLib 1.x vs 2.x; <code>tf2_eigen.h</code> vs <code>.hpp</code> on Jazzy.</p>
+<p><strong>Fix:</strong> Install Jazzy MAVROS via apt; COLCON_IGNORE the source tree. Custom GCS throttle patch was implemented for separate USB vs WiFi stream rates.</p>
+
+<h3>7.4 torch.compile on Orin NX</h3>
+<ul>
+  <li>Use <code>mode="reduce-overhead"</code>, <code>dynamic=False</code> for CLIPSeg and SAM encoder.</li>
+  <li><code>max-autotune</code> warns "Not enough SMs" — no benefit, longer startup.</li>
+  <li>SAM warmup: 10 iterations needed for CUDA graph capture to settle.</li>
+</ul>
+
+<h3>7.5 Experiments rejected</h3>
+<table>
+  <tr><th>Experiment</th><th>Outcome</th></tr>
+  <tr><td>MaskCLIP dot-product head</td><td>Removed — softmax outputs too low, no visible segmentation</td></tr>
+  <tr><td>DINO.txt (dinov2 + text)</td><td>Rejected — ~66ms, poor quality; bench script deleted</td></tr>
+  <tr><td>Tiled inference</td><td>Reverted — added compute, user undid changes</td></tr>
+  <tr><td>TensorRT PeopleSemSegNet</td><td>SM 87 not supported in TRT 10.13.3</td></tr>
+  <tr><td>MobileSAM</td><td>Benchmarked; EfficientViT-SAM-L0 chosen for quality/speed balance</td></tr>
+  <tr><td>In-process SAM / guided filter</td><td>Removed — separate SAM node is the architecture</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>8. Performance Reference (Orin NX)</h2>
+<table>
+  <tr><th>Stage</th><th>Latency (approx)</th><th>Notes</th></tr>
+  <tr><td>CLIPSeg rd16 @ 224</td><td>~15–25 ms</td><td>With torch.compile reduce-overhead</td></tr>
+  <tr><td>EfficientViT-SAM-L0 encoder</td><td>~23–31 ms</td><td>Compiled; 10 warmup iters</td></tr>
+  <tr><td>EfficientViT-SAM-L0 decoder</td><td>~5–10 ms/box</td><td>Not compiled; batched per frame</td></tr>
+  <tr><td>SAM total @ 6 boxes</td><td>~50–80 ms</td><td>Separate process at sam_rate_hz: 10</td></tr>
+</table>
+<p>User asked about faster than L0 — MobileSAM is faster but lower quality; switching is config + checkpoint download.</p>
+
+<!-- ============================================================ -->
+<h2>9. ROS Topics Reference</h2>
+<table>
+  <tr><th>Topic</th><th>Type</th><th>Publisher</th><th>Encoding / Meaning</th></tr>
+  <tr><td><code>/camera/color/image_raw</code></td><td>sensor_msgs/Image</td><td>realsense2 / bag_replay</td><td>RGB input</td></tr>
+  <tr><td><code>/segmentation/labels</code></td><td>sensor_msgs/Image</td><td>clipseg_mask_node</td><td>mono8: 0=none, 1=traversable, 2=non_traversable, 3=people</td></tr>
+  <tr><td><code>/segmentation/boxes</code></td><td>std_msgs/Float32MultiArray</td><td>clipseg_mask_node</td><td>[class_idx, x0, y0, x1, y1, ...] per box</td></tr>
+  <tr><td><code>/segmentation/overlay</code></td><td>sensor_msgs/Image</td><td>clipseg_mask_node</td><td>rgb8 debug (optional)</td></tr>
+  <tr><td><code>/segmentation/refined_traversability</code></td><td>sensor_msgs/Image</td><td>sam_refine_node</td><td>rgb8: R=non-traversable, G=traversable, B=none</td></tr>
+  <tr><td><code>/segmentation/refined_people_mask</code></td><td>sensor_msgs/Image</td><td>sam_refine_node</td><td>mono8: 255=person/animal</td></tr>
+  <tr><td><code>/segmentation/refined_overlay</code></td><td>sensor_msgs/Image</td><td>sam_refine_node</td><td>rgb8 debug (optional)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>10. Pending Work</h2>
+<ol>
+  <li>
+    <strong>nvblox dynamic obstacle integration</strong> — Wire
+    <code>/segmentation/refined_people_mask</code> into nvblox so people are excluded from the static map.
+    User originally wanted this for dynamic obstacle detection at ~60fps (people appear static enough).
+  </li>
+  <li>
+    <strong>ArduPilot boot-time orientation seed</strong> — Initialize cuVSLAM orientation from ArduPilot IMU
+    at startup. Discussed but not implemented. ArduPilot has working IMU; D455 IMU does not.
+  </li>
+  <li>
+    <strong>MAVROS enable + FCU params</strong> — MAVROS launch is implemented but disabled. User may want
+    to enable and load <code>fcu_params</code> from SSoT when ready for field testing.
+  </li>
+  <li>
+    <strong>Prompt tuning</strong> — User saw hills sometimes classified as non-traversable. May need prompt
+    adjustments or threshold tuning.
+  </li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>11. User Preferences &amp; Rules</h2>
+<ul>
+  <li><strong>Lean code:</strong> No dormant features, no unnecessary publishers, minimal abstractions.</li>
+  <li><strong>SSoT-driven:</strong> Params in <code>SSoT.yaml</code>, not scattered in launch file.</li>
+  <li><strong>No auto-install:</strong> Tell user what to pip/apt install; do not install in container yourself.</li>
+  <li><strong>No README spam:</strong> Don't write docs unless asked.</li>
+  <li><strong>Delete bench scripts</strong> when done (<code>sam_bench.py</code>, <code>dinotxt_bench.py</code> already deleted).</li>
+  <li><strong>Semantic ≠ geometric traversability:</strong> Segmentation is semantic; planner handles geometry.</li>
+  <li><strong>SAM is for objects, not terrain:</strong> Dirt/ground via SAM is expected to be poor; user accepted current quality.</li>
+  <li><strong>Commits/PRs:</strong> Only when explicitly requested.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>12. MAVROS GCS Rate Limiting (custom patch)</h2>
+<p>
+  User needed different stream rates for USB (FCU) vs WiFi (GCS). A patch was implemented on MAVROS router:
+</p>
+<pre>mavros_router:
+  ros__parameters:
+    gcs_block_stream_requests: false
+    gcs_throttle_hz: 0.0
+    # gcs_throttle_msgids: [30, 27, 33, 32, 65, 36, 74]</pre>
+<p>Configured via <code>mavros.node_params</code> in SSoT. Set <code>gcs_throttle_hz</code> to desired GCS cap (e.g. 4.0).</p>
+
+<!-- ============================================================ -->
+<h2>13. Label / Color Encoding</h2>
+<h3>CLIPSeg coarse labels (mono8)</h3>
+<pre>PALETTE in utils.py:
+  label 1 (traversable)     → green  (0, 200, 0)
+  label 2 (non_traversable) → red    (220, 0, 0)
+  label 3 (people)          → blue   (0, 80, 255)
+  label 0                   → black  (none/unknown)</pre>
+
+<h3>SAM refined traversability (rgb8)</h3>
+<pre>Channel R = non-traversable probability
+Channel G = traversable probability
+Channel B = none (neither traversable nor non-traversable)</pre>
+
+<h3>Group → SAM output mapping</h3>
+<p>Derived in <code>robot.launch.py</code> from SSoT:</p>
+<pre>positive_groups: ["traversable"]   → green channel
+negative_groups: ["non_traversable"] → red channel
+everything else (e.g. people)      → separate people mask</pre>
+
+<!-- ============================================================ -->
+<h2>14. Recent User Messages (chronological tail)</h2>
+<ul>
+  <li>Reverted tiling — quality degraded; couldn't restore git checkpoint from IDE.</li>
+  <li>Hills sometimes marked non-traversable — suspected prompt issue at SSoT lines 132–134; "works fine for now."</li>
+  <li>Asked if anything faster than EfficientViT-SAM-L0 — MobileSAM is faster, lower quality.</li>
+  <li>Asked if model switch is just config + download — yes (<code>sam_variant</code>, <code>sam_ckpt</code>).</li>
+  <li>Asked for bag replay + launch commands again.</li>
+  <li>Requested this handoff summary.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>15. Quick Agent Checklist</h2>
+<ol>
+  <li>Read <code>config/SSoT.yaml</code> first — it drives everything.</li>
+  <li>Edits on host (<code>/home/hound/...</code>) = same files in container (<code>/root/...</code>).</li>
+  <li>With symlink install, Python/YAML changes are live without rebuild.</li>
+  <li>Launch file changes need <code>colcon build --packages-select hound_core</code>.</li>
+  <li>For segmentation eval: <code>camera.enabled: false</code>, <code>segmentation.enabled: true</code>, <code>replay_mode: true</code>.</li>
+  <li>Set <code>export HF_HUB_OFFLINE=1</code> to suppress HuggingFace auth warnings if model is cached.</li>
+  <li>Do not re-add MaskCLIP, DINO.txt, tiling, or in-process SAM — user explicitly removed these.</li>
+  <li>SAM node outputs RGB traversability + mono8 people mask — do not change back to mono8 label map without user asking.</li>
+</ol>
+
+<hr>
+<p class="meta">End of handoff. For full conversation detail, search transcript <code>21c7fdc1-42aa-472a-a3e9-857adceccb6c.jsonl</code> by keyword.</p>
+
+</body>
+</html>

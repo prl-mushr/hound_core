@@ -2,9 +2,8 @@
 
 Runs text-prompted CLIPSeg on a color stream, aggregates grouped prompts into
 navigation categories (e.g. traversable / non_traversable / people), and
-publishes a single label map (pixel = category id), box prompts for
-sam_refine_node, and an optional debug overlay. All tunables are ROS params,
-set from hound_core's SSoT via robot.launch.py.
+publishes a single label map (pixel = category id) and an optional debug overlay.
+All tunables are ROS params, set from hound_core's SSoT via robot.launch.py.
 
 Label map (mono8): 0 = none/unknown, otherwise group_index + 1 (so the SSoT
 prompt-group order defines the ids, e.g. 1=traversable, 2=non_traversable,
@@ -18,7 +17,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int64MultiArray
 from cv_bridge import CvBridge
 
 import torch
@@ -27,7 +25,7 @@ import torch.nn.functional as F
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
 from hound_core.utils import (
-    blend_overlay, extract_boxes, labels_to_color, probs_to_labels, to_image,
+    blend_overlay, labels_to_color, probs_to_labels, to_image,
 )
 
 # CLIP normalization constants (CLIPSeg uses the CLIP image stats).
@@ -82,13 +80,8 @@ class ClipSegMaskNode(Node):
         self.declare_parameter("viz_overlay", True)
         self.declare_parameter("overlay_topic", "/segmentation/overlay")
         self.declare_parameter("overlay_alpha", 0.5)
-        # Blob -> box extraction for the boxes published to sam_refine_node.
-        self.declare_parameter("sam_min_area", 0.002)
-        self.declare_parameter("sam_max_boxes", 6)
         self.declare_parameter("profile", False)
         self.declare_parameter("profile_every", 30)
-        self.declare_parameter("publish_boxes", False)
-        self.declare_parameter("boxes_topic", "/segmentation/boxes")
 
         g = self.get_parameter
         model_name = g("model_name").value
@@ -117,12 +110,8 @@ class ClipSegMaskNode(Node):
         self.viz_overlay = bool(g("viz_overlay").value)
         overlay_topic = str(g("overlay_topic").value)
         self.overlay_alpha = float(g("overlay_alpha").value)
-        self.sam_min_area = float(g("sam_min_area").value)
-        self.sam_max_boxes = int(g("sam_max_boxes").value)
         self.profile = bool(g("profile").value)
         self.profile_every = int(g("profile_every").value)
-        self.publish_boxes = bool(g("publish_boxes").value)
-        boxes_topic = str(g("boxes_topic").value)
         self._prof = {}
         self._prof_n = 0
 
@@ -168,17 +157,13 @@ class ClipSegMaskNode(Node):
             self.create_publisher(Image, overlay_topic, qos_profile_sensor_data)
             if self.viz_overlay else None
         )
-        self.box_pub = (
-            self.create_publisher(Int64MultiArray, boxes_topic, 10)
-            if self.publish_boxes else None
-        )
 
         self.sub = self.create_subscription(Image, color_topic, self._on_image, qos_profile_sensor_data)
         period = 1.0 / self.rate_hz if self.rate_hz > 0 else 0.1
         self.timer = self.create_timer(period, self._on_timer)
         self.get_logger().info(
             f"clipseg_mask_node up: {color_topic} -> {labels_topic} @ {self.rate_hz} Hz "
-            f"(res={self.res}, boxes={self.publish_boxes})"
+            f"(res={self.res})"
         )
 
     # ------------------------------------------------------------------ inference
@@ -229,11 +214,6 @@ class ClipSegMaskNode(Node):
                 out[gi] = s.amax(dim=0)
         return out
 
-    def _coarse_boxes(self, probs: torch.Tensor):
-        n, h, w = probs.shape
-        binary = (probs >= self.threshold).to(torch.uint8).cpu().numpy()
-        return extract_boxes(binary, self.sam_min_area * h * w, self.sam_max_boxes)
-
     # ------------------------------------------------------------------- profiling
     def _tic(self, sync=True):
         if not self.profile:
@@ -257,14 +237,6 @@ class ClipSegMaskNode(Node):
             parts = " ".join(f"{k}={v / self._prof_n:5.1f}" for k, v in sorted(self._prof.items()))
             self.get_logger().info(f"[profile ms/frame over {self._prof_n}] {parts}")
             self._prof, self._prof_n = {}, 0
-
-    def _publish_boxes(self, cands, header):
-        data = [int(header.stamp.sec), int(header.stamp.nanosec), len(cands)]
-        for cls, _area, (x0, y0, x1, y1) in cands:
-            data += [int(cls), int(x0), int(y0), int(x1), int(y1)]
-        m = Int64MultiArray()
-        m.data = data
-        self.box_pub.publish(m)
 
     # ---------------------------------------------------------------------- loop
     def _on_image(self, msg: Image):
@@ -294,9 +266,6 @@ class ClipSegMaskNode(Node):
             groups.unsqueeze(0), size=(h, w), mode="bilinear", align_corners=False
         )[0].clamp_(0.0, 1.0)                                    # [n_groups,h,w]
         self._toc("clipseg", tcs)
-
-        if self.box_pub is not None:
-            self._publish_boxes(self._coarse_boxes(probs), hdr)
 
         tpub = self._tic(sync=False)
         labels_np, conf_np = probs_to_labels(probs, self.threshold)

@@ -29,6 +29,15 @@ def extract_boxes(binary_np: np.ndarray, min_area: float, max_boxes: int):
     return cands[:max_boxes]
 
 
+def labels_to_boxes(labels: np.ndarray, n_groups: int, min_area_frac: float, max_boxes: int):
+    """Label map [H,W] (0=none, i=group i-1) -> box prompts for SAM refinement."""
+    h, w = labels.shape
+    binary = np.zeros((n_groups, h, w), dtype=np.uint8)
+    for i in range(n_groups):
+        binary[i] = (labels == (i + 1)).astype(np.uint8)
+    return extract_boxes(binary, min_area_frac * h * w, max_boxes)
+
+
 def blend_overlay(base_rgb: np.ndarray, color_rgb: np.ndarray,
                   conf: np.ndarray, alpha: float) -> np.ndarray:
     """Blend color_rgb over base_rgb, weighted per-pixel by conf*alpha so flat /

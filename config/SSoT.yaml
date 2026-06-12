@@ -129,8 +129,8 @@ segmentation:
   # geometric, traversability -- the planner fuses it with geometry.
   # (A flat list still works too: each prompt becomes its own group.)
   prompts:
-    traversable: ["dirt", "hill", "road", "grass", "gravel", "tarmac", "path"]
-    non_traversable: ["tree", "wall", "pebbles", "fence", "building", "vehicle"]
+    traversable: ["dirt", "hill", "road", "grass", "gravel", "path"]
+    non_traversable: ["tree", "wall", "pebbles", "fence", "vehicle"]
     people: ["person", "animal"]
 
   # Suppress prompts: their probability is subtracted from EVERY group (clamped at
@@ -162,13 +162,17 @@ segmentation:
   overlay_topic: "/segmentation/overlay"
   overlay_alpha: 0.5
 
-  # SAM refinement runs in the separate sam_refine_node (see below). The CLIPSeg
-  # node turns its blobs into box prompts for that node:
+  # SAM refinement runs in the separate sam_refine_node (see below), which
+  # extracts coarse box prompts from the label map:
   #   sam_min_area: ignore blobs smaller than this (frac of image)
   #   sam_max_boxes: cap boxes/frame to bound SAM latency
   sam_min_area: 0.002
   sam_max_boxes: 6
-  # EfficientViT-SAM settings (used by sam_refine_node).
+  # SAM backend: "nanosam" (TensorRT engines) or "efficientvit" (PyTorch ckpt).
+  sam_backend: "nanosam"
+  sam_image_encoder: "/root/colcon_ws/src/nanosam/data/resnet18_image_encoder.engine"
+  sam_mask_decoder: "/root/colcon_ws/src/nanosam/data/mobile_sam_mask_decoder.engine"
+  # EfficientViT-SAM settings (only used when sam_backend: "efficientvit").
   sam_variant: "l0"
   sam_ckpt: "/root/colcon_ws/efficientvit_sam_l0.pt"
   # torch.compile the SAM image encoder (fixed 512x512 input -> compile-friendly).
@@ -181,16 +185,15 @@ segmentation:
   profile_every: 30
 
   # --- SAM refinement node (separate process) --------------------------------
-  # When sam_node is true, the CLIPSeg node publishes box prompts and a standalone
-  # sam_refine_node consumes color + boxes, refines them with EfficientViT-SAM,
-  # and publishes a REFINED label map (same encoding as labels_topic) at its own
+  # When sam_node is true, a standalone sam_refine_node consumes color + labels,
+  # extracts box prompts locally, refines them with NanoSAM / EfficientViT-SAM, and
+  # publishes a REFINED label map (same encoding as labels_topic) at its own
   # rate. Decouples the fast coarse labels from the heavier SAM refinement.
   # The SAM node publishes a refined traversability RGB (G=traversable,
   # R=non-traversable, B=none) + a separate people mask. positive_groups /
   # negative_groups name which prompt groups map to traversable / non-traversable;
   # any remaining group (e.g. people) becomes the separate people mask.
   sam_node: true
-  boxes_topic: "/segmentation/boxes"
   sam_rate_hz: 10.0
   positive_groups: ["traversable"]
   negative_groups: ["non_traversable"]

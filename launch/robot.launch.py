@@ -116,8 +116,8 @@ def _flatten_prompts(prompts):
     return flat, flat, list(range(len(flat)))
 
 
-def _build_segmentation_node(seg: dict, force_boxes: bool = False) -> Node:
-    """CLIPSeg segmentation node: publishes a label map (+ boxes + overlay)."""
+def _build_segmentation_node(seg: dict) -> Node:
+    """CLIPSeg segmentation node: publishes a label map (+ optional overlay)."""
     _prompts_flat, _group_names, _group_ids = _flatten_prompts(seg.get("prompts", ["a person"]))
     print(
         f"[hound_core] segmentation ENABLED: model={seg.get('model', 'CIDAS/clipseg-rd16')} "
@@ -145,12 +145,8 @@ def _build_segmentation_node(seg: dict, force_boxes: bool = False) -> Node:
             "viz_overlay": bool(seg.get("viz_overlay", True)),
             "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
             "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
-            "sam_min_area": float(seg.get("sam_min_area", 0.002)),
-            "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
             "profile": bool(seg.get("profile", False)),
             "profile_every": int(seg.get("profile_every", 30)),
-            "publish_boxes": bool(seg.get("publish_boxes", False)) or force_boxes,
-            "boxes_topic": str(seg.get("boxes_topic", "/segmentation/boxes")),
         }],
     )
 
@@ -166,7 +162,7 @@ def _build_sam_refine_node(seg: dict) -> Node:
     neg_idx = [i for i, n in enumerate(names) if n in neg_names]
     people_idx = [i for i, n in enumerate(names) if n not in pos_names and n not in neg_names]
     print(
-        f"[hound_core] sam_refine_node ENABLED: variant={seg.get('sam_variant', 'l0')} "
+        f"[hound_core] sam_refine_node ENABLED: backend={seg.get('sam_backend', 'nanosam')} "
         f"rate={seg.get('sam_rate_hz', 15.0)}Hz "
         f"(traversable={pos_idx} non_traversable={neg_idx} people={people_idx})"
     )
@@ -177,16 +173,31 @@ def _build_sam_refine_node(seg: dict) -> Node:
         output="screen",
         parameters=[{
             "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
-            "boxes_topic": str(seg.get("boxes_topic", "/segmentation/boxes")),
+            "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
             "traversability_topic": str(seg.get("sam_traversability_topic", "/segmentation/refined_traversability")),
             "people_mask_topic": str(seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")),
             "overlay_topic": str(seg.get("sam_overlay_topic", "/segmentation/refined_overlay")),
             "publish_overlay": bool(seg.get("sam_overlay", False)),
             "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
             "rate_hz": float(seg.get("sam_rate_hz", 15.0)),
+            "sam_min_area": float(seg.get("sam_min_area", 0.002)),
+            "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
             "positive_groups": pos_idx or [0],
             "negative_groups": neg_idx or [1],
             "people_groups": people_idx or [2],
+            "sam_backend": str(seg.get("sam_backend", "nanosam")),
+            "sam_image_encoder": str(
+                seg.get(
+                    "sam_image_encoder",
+                    "/root/colcon_ws/src/nanosam/data/resnet18_image_encoder.engine",
+                )
+            ),
+            "sam_mask_decoder": str(
+                seg.get(
+                    "sam_mask_decoder",
+                    "/root/colcon_ws/src/nanosam/data/mobile_sam_mask_decoder.engine",
+                )
+            ),
             "sam_variant": str(seg.get("sam_variant", "l0")),
             "sam_ckpt": str(seg.get("sam_ckpt", "/root/colcon_ws/efficientvit_sam_l0.pt")),
             "sam_compile": bool(seg.get("sam_compile", True)),
@@ -380,8 +391,8 @@ def generate_launch_description():
                     "[hound_core] segmentation REPLAY MODE: camera off, consuming "
                     f"external color topic '{seg.get('color_topic', '/camera/color/image_raw')}'"
                 )
-            # In split mode the CLIPSeg node publishes boxes and the SAM node refines.
-            actions.append(_build_segmentation_node(seg, force_boxes=sam_node))
+            # In split mode sam_refine_node consumes color + labels and refines locally.
+            actions.append(_build_segmentation_node(seg))
             if sam_node:
                 actions.append(_build_sam_refine_node(seg))
         else:
