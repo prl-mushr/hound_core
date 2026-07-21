@@ -1,0 +1,71 @@
+# nvblox for HOUND: RealSense depth+color + SAM people mask → ESDF for Nav2.
+# Remappings are applied in launch (hound topics ≠ Isaac /camera0/... layout).
+#
+# Traversability RGB (/segmentation/refined_traversability) is NOT an nvblox
+# input — fuse it in the planner / Nav2 costmap separately.
+
+/**:
+  ros__parameters:
+    cuda_stream_type: 1
+    voxel_size: 0.05
+    num_cameras: 1
+    use_tf_transforms: true
+    mapping_type: "human_with_static_tsdf"
+    use_segmentation: true
+    use_depth: true
+    use_color: true
+    use_lidar: false
+
+    tick_period_ms: 10
+    integrate_depth_rate_hz: 20.0
+    integrate_color_rate_hz: 5.0
+    update_mesh_rate_hz: 5.0
+    update_esdf_rate_hz: 10.0
+    publish_layer_rate_hz: 5.0
+    decay_tsdf_rate_hz: 5.0
+    decay_dynamic_occupancy_rate_hz: 10.0
+    clear_map_outside_radius_rate_hz: 1.0
+
+    esdf_mode: "2d"
+    publish_esdf_distance_slice: true
+
+    maximum_input_queue_length: 10
+    map_clearing_radius_m: 7.0
+    # Must exist in TF (cuVSLAM odom→camera_link or robot base).
+    map_clearing_frame_id: "camera_link"
+    global_frame: "odom"
+
+    input_qos: "SENSOR_DATA"
+
+    esdf_slice_bounds_visualization_attachment_frame_id: "camera_link"
+    esdf_slice_bounds_visualization_side_length: 10.0
+
+    multi_mapper:
+      connected_mask_component_size_threshold: 2000
+      remove_small_connected_components: true
+
+    static_mapper:
+      do_depth_preprocessing: false
+      projective_integrator_max_integration_distance_m: 5.0
+      projective_integrator_truncation_distance_vox: 4.0
+      projective_integrator_max_weight: 5.0
+      esdf_integrator_min_weight: 0.1
+      esdf_integrator_max_distance_m: 2.0
+      # Tune to camera mount height (meters in map_clearing / camera frame).
+      esdf_slice_height: 0.0
+      esdf_slice_min_height: -0.1
+      esdf_slice_max_height: 0.3
+
+    dynamic_mapper:
+      projective_integrator_max_integration_distance_m: 5.0
+      free_region_occupancy_probability: 0.3
+      occupied_region_occupancy_probability: 0.9
+      unobserved_region_occupancy_probability: 0.35
+      occupied_region_half_width_m: 0.2
+      esdf_integrator_min_weight: 2.0
+      esdf_integrator_max_distance_m: 2.0
+      free_region_decay_probability: 0.55
+      occupied_region_decay_probability: 0.30
+      esdf_slice_height: 0.0
+      esdf_slice_min_height: -0.1
+      esdf_slice_max_height: 0.3

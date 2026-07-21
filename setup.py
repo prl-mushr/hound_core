@@ -1,6 +1,3 @@
-import os
-from glob import glob
-
 from setuptools import find_packages, setup
 
 package_name = "hound_core"
@@ -13,8 +10,6 @@ setup(
         ("share/ament_index/resource_index/packages",
             ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
-        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -28,6 +23,8 @@ setup(
             "clipseg_mask_node = hound_core.clipseg_mask_node:main",
             "sam_refine_node = hound_core.sam_refine_node:main",
             "bag_replay = hound_core.bag_replay:main",
+            "wheel_odom_node = hound_core.wheel_odom_node:main",
+            "hal_monitor_node = hound_core.hal_monitor_node:main",
         ],
     },
 )

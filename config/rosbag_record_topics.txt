@@ -1,0 +1,26 @@
+# Topics recorded when HAL starts a bag from RC (ros2 bag record).
+/camera/color/camera_info
+/camera/color/image_raw
+/camera/infra1/camera_info
+/camera/infra1/image_rect_raw
+/camera/infra2/camera_info
+/camera/infra2/image_rect_raw
+/control_limits
+/low_level_controller/hound/control
+/low_level_diagnostics
+/mavros/battery
+/mavros/global_position/raw/fix
+/mavros/global_position/raw/satellites
+/mavros/imu/data
+/mavros/imu/data_raw
+/mavros/local_position/odom
+/mavros/local_position/pose
+/mavros/manual_control/send
+/mavros/rc/in
+/mavros/rc/out
+/mavros/state
+/mavros/vision_pose/vis_odom
+/sensors/core
+/SOC_diagnostics
+/tf
+/tf_static

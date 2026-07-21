@@ -1,0 +1,33 @@
+# ZED parameters for use as a cuVSLAM + EKF sensor front-end only.
+# Loaded via ros_params_override_path when camera.backend is zed.
+/**:
+  ros__parameters:
+    general:
+      grab_resolution: 'VGA'       # 672x376 per eye (ZED2i)
+      grab_frame_rate: 60
+      pub_resolution: 'NATIVE'
+      pub_frame_rate: 60.0
+      grab_compute_capping_fps: 60.0
+    video:
+      publish_gray: true
+      # cuVSLAM requires mono8; use gray L/R only (color topics may be advertised
+      # with publish_left_right but are not retrieved unless subscribed).
+      publish_left_right: true
+      publish_rgb: false
+      publish_raw: false
+      publish_stereo: false
+    depth:
+      depth_mode: 'NONE'
+      publish_depth_map: false
+      publish_point_cloud: false
+    pos_tracking:
+      pos_tracking_enabled: false
+      publish_odom_pose: false
+    sensors:
+      publish_imu: true
+      publish_baro: true
+      publish_mag: true
+      sensors_pub_rate: 200.0
+    debug:
+      # Required for NITROS path (sensors.launch.py + hound_core.launch.py).
+      disable_nitros: false

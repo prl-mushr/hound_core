@@ -1,87 +1,139 @@
 # =============================================================================
-# SINGLE SOURCE OF TRUTH (SSoT) for D455 + Isaac ROS Visual SLAM bring-up.
+# SINGLE SOURCE OF TRUTH (SSoT) for HOUND perception + control bring-up.
 #
-# Everything that you would normally tweak lives here. robot.launch.py reads
-# this file at launch time, so editing values here does NOT require a rebuild
-# (the launch file prefers the copy in src/ via $ROS_WORKSPACE, falling back to
-# the installed share copy).
+# camera.backend selects the stereo + IMU source:
+#   realsense — Intel D455 (infra stereo; IMU unavailable on this Jetson kernel)
+#   zed       — Stereolabs ZED (gray stereo + IMU → cuVSLAM + nav_filter EKF)
 # =============================================================================
 
 camera:
-  # Master switch for the D455 driver. If false, no camera is launched (and
-  # VSLAM is skipped too, since it has no image source).
-  enabled: false
-
-  # Logical name. Becomes the ROS namespace/prefix for topics & TF frames
-  # (e.g. <camera_name>/infra1/image_rect_raw, <camera_name>_link, ...).
-  camera_name: camera
-
-  # Hardware id of the specific D455 to open. Keep it QUOTED so the all-digit
-  # serial is treated as a string. Find it with: rs-enumerate-devices -s
-  serial_number: "030422250301"
-
-  # Stereo infrared streams used by VSLAM. The D455 supports 60 fps at
-  # 848x480 / 640x480 / 640x360 (1280x720 IR is 30 fps only).
-  infra_width: 848
-  infra_height: 480
-  fps: 60
-
-  # IR projector. Keep OFF (0) for VSLAM: the dot pattern corrupts the
-  # feature-tracking images. Set to 1 only for active depth use cases.
-  emitter_enabled: 0
-
-  # Color (RGB) stream. Separate sensor from the depth/IR module, so it runs at
-  # its own rate independent of the 60 fps IR. Needed for segmentation (CLIPSeg
-  # runs on color); auto-enabled when the segmentation subsystem is on.
-  enable_color: false
-  color_width: 640
-  color_height: 480
-  color_fps: 30
-
-  # IMU streams (drive the VIO fusion in the SLAM node).
-  # NOTE: VIO is NOT available on this unit. The kernel (6.8.12-xxxx-tegra) ships
-  # no hid-sensor IIO modules (hid-sensor-accel-3d / hid-sensor-gyro-3d / -hub),
-  # so the D455 IMU never enumerates as /dev/iio:deviceN and librealsense reports
-  # "No HID info provided, IMU is disabled". librealsense has no UVC fallback for
-  # the D4xx IMU. Enabling VIO would require building those kernel modules from the
-  # tegra kernel source. Until then keep this false + tracking_mode: 0 (stereo).
-  enable_imu: false
-  gyro_fps: 200
-  accel_fps: 200   # use 250 for a D435i
-
-vslam:
-  # Master switch for Isaac ROS Visual SLAM. Even if true, VSLAM is only
-  # launched when the camera is also enabled (it needs the image streams).
   enabled: true
 
-  # Tracking mode: 0 = multicamera (stereo, no IMU), 1 = VIO (IMU fusion),
-  # 2 = RGBD. IMU is disabled on this unit, so use 0 for stereo-only.
+  # Sensor driver: realsense | zed
+  backend: realsense
+
+  # --- RealSense (when backend: realsense) -----------------------------------
+  camera_name: camera
+  serial_number: "030422250301"
+  infra_width: 640
+  infra_height: 360
+  fps: 60
+  emitter_enabled: 0
+  enable_color: true
+  enable_sync: false
+  color_width: 640
+  color_height: 360
+  color_fps: 30
+  enable_imu: false
+  gyro_fps: 200
+  accel_fps: 200
+  # Depth for nvblox (aligned to color so people mask matches depth).
+  # Launch also forces these when nvblox.enabled. Emitter 0 favors IR VSLAM;
+  # set emitter_enabled: 1 if depth quality is poor for mapping.
+  enable_depth: true
+  align_depth: true
+  depth_width: 640
+  depth_height: 360
+  depth_fps: 30
+
+zed:
+  # --- ZED (when backend: zed) -----------------------------------------------
+  # Set camera_model to match your unit (zed2, zed2i, zedx, ...). Use
+  # ZED_Explorer -a to find serial_number.
+  camera_model: zed2i
+  camera_name: zed
+  node_name: zed_node
+  serial_number: 32430362
+  enable_imu: true
+
+vslam:
+  enabled: true
+  # Defer cuVSLAM load until ZED gray stream is stable (avoids twist spikes at startup).
+  wait_for_camera_ready: true
+  camera_min_fps: 24.0
+  camera_stable_s: 5.0
+  camera_wait_timeout_s: 120.0
+  start_delay_s: 0.0
+  publish_map_to_odom_tf: false
+  # Required for nvblox (odom → camera_link). Launch forces true if nvblox on.
+  publish_odom_to_base_tf: true
+  # 0 = stereo-only, 1 = VIO (needs IMU). Use 1 with ZED; 0 for D455 on this unit.
   tracking_mode: 0
 
   rectified_images: true
   enable_image_denoising: false
-  image_jitter_threshold_ms: 22.00
+  # Nominal 30 Hz period ≈ 33 ms. cuVSLAM often sees ~66 ms (every other
+  # stereo pair) under load — allow one skipped frame before warning.
+  image_jitter_threshold_ms: 75.0
 
-  # Visualization (markers/landmarks on /visual_slam/vis/*). Open rviz2
-  # separately to view them.
-  enable_slam_visualization: true
-  enable_landmarks_view: true
-  enable_observations_view: true
+  # Viz is expensive; leave off if you care about frame timing.
+  enable_slam_visualization: false
+  enable_landmarks_view: false
+  enable_observations_view: false
 
-  # IMU noise model + calibration rate. Defaults match NVIDIA's RealSense
-  # reference; adjust per your unit's datasheet if needed.
+  # Must match RealSense infra*_qos (BEST_EFFORT). Isaac default is SENSOR_DATA.
+  image_qos: SENSOR_DATA
+  imu_qos: SENSOR_DATA
+
   calibration_frequency: 200.0
   gyro_noise_density: 0.000244
   gyro_random_walk: 0.000019393
   accel_noise_density: 0.001862
   accel_random_walk: 0.003
 
+# Always-on sensor tier (hound_core/launch/sensors.launch.py).
+sensors:
+  container_name: sensors_container
+
+# Mission tier (hound_core/launch/hound_core.launch.py).
+launch:
+  # When true, hound_core.launch.py skips camera/HAL and loads cuVSLAM into the
+  # running sensors_container (NITROS zero-copy). Start sensors.launch.py first.
+  # RealSense: must be false (sensors.launch.py is ZED-only).
+  assume_sensors_running: false
+  # Seconds between enabled bring-up stages (HAL → … → nvblox). Disabled stages
+  # are skipped and do not consume delay.
+  stage_delay_s: 5.0
+
+# NITROS zero-copy only applies to ZED+cuVSLAM in the same sensors_container.
+# RealSense: ManagedNitros is inside cuVSLAM (no separate process); camera and
+# VSLAM launch as separate stages with SENSOR_DATA QoS.
+perception:
+  use_nitros: false
+
+ekf:
+  # nav_filter EKF: MAVROS IMU + cuVSLAM pose (realsense_vslam preset).
+  enabled: false
+  preset: realsense_vslam
+  extnav_earth_align:
+    # ZED-only (imu_ahrs + earth->local TF). Ignored for realsense backend.
+    enabled: false
+
+# Geometric map for navigation (ESDF / costmap). People mask excludes dynamics
+# from the static TSDF. Traversability RGB is NOT consumed here — use in Nav2.
+nvblox:
+  enabled: true
+  # Map resolution: 0.05 = 5 cm, 0.10 = 10 cm.
+  voxel_size: 0.05
+  use_people_mask: true
+  people_mask_topic: "/segmentation/refined_people_mask"
+  global_frame: odom
+  map_clearing_frame_id: camera_link
+  # ESDF 2D slice heights relative to map_clearing_frame (tune to mount).
+  esdf_slice_height: 0.0
+  esdf_slice_min_height: -0.1
+  esdf_slice_max_height: 0.3
+
 mavros:
   # Master switch for the ArduPilot/MAVROS bring-up (wraps mavros' apm.launch).
+  # Required for realsense_vslam EKF (IMU from /mavros/imu/data).
   enabled: false
 
-  # Connection to the flight controller. serial "device:baud", or udp://, tcp://.
-  fcu_url: "/dev/ttyACM0:115200"
+  # Connection to the flight controller.
+  # Form: /dev/ttyACMx:baud  (or serial:///dev/ttyACMx:baud).
+  # ArduPilot USB usually enumerates as ttyACM1/ACM2 on this machine.
+  # Note: libmavconn must allow baud > 65535 (patched) for 921600.
+  fcu_url: "/dev/ttyACM1:921600"
 
   # Optional GCS bridge (e.g. "udp://@<gcs-ip>"). Leave empty to not bridge a GCS.
   gcs_url: ""
@@ -103,9 +155,117 @@ mavros:
   # --- ArduPilot (flight-controller) parameters ------------------------------
   # Flat name: value map written to the FCU after MAVROS connects (force-pull
   # then param load). Leave empty ({}) to not push any FCU params.
-  fcu_params: {}
-    # SR0_EXTRA1: 200     # ATTITUDE stream (USB/SERIAL0), Hz
-    # SR0_RAW_SENS: 200   # RAW_IMU stream, Hz
+  # SR0_* rates on USB/SERIAL0 so /mavros/imu/data can reach ~200 Hz.
+  fcu_params:
+    SR0_EXTRA1: 200     # ATTITUDE stream (USB/SERIAL0), Hz
+    SR0_RAW_SENS: 200   # RAW_IMU stream, Hz
+
+vesc:
+  # Telemetry-only: vesc_driver polls the VESC and publishes /sensors/core.
+  # HOUND does not command the VESC over ROS (actuation goes through MAVROS/FCU).
+  # Master switch for the VESC serial driver (vesc_ros2).
+  enabled: false
+
+  # Delay before starting VESC nodes (seconds). The old stack used timed launch
+  # (~50s) to avoid USB enumeration races with MAVROS / other peripherals.
+  start_delay_s: 0.0
+
+  # Serial device for the VESC. On HOUND the FCU is often a different port
+  # (see mavros.fcu_url, e.g. /dev/ttyACM0) — avoid sharing one tty with VESC.
+  port: /dev/ttyACM0
+  respawn: true
+
+  wheel_odom:
+    # Feed wheel-speed measurements to mavlink (legacy vesc_to_odom.py behavior).
+    enabled: false
+    erpm_gain: 3166.6
+    output_topic: /mavros/vision_pose/vis_odom
+    min_publish_interval_s: 0.1
+
+low_level_control:
+  # Master switch for the HOUND low-level controller (speed loop + rollover
+  # prevention + RC/autonomy multiplexing). Requires MAVROS and VESC telemetry.
+  enabled: false
+
+  # MultiThreadedExecutor worker count for the low-level control node.
+  executor_threads: 8
+
+  # Vehicle / controller tuning. Values match config/low_level_control.yaml;
+  # override here to avoid editing two files.
+  erpm_gain: 3166.6
+  steering_max: 0.488
+  wheelbase: 0.29
+  cg_height: 0.125
+  track_width: 0.25
+  wheelspeed_max: 17.0
+  nominal_voltage: 14.8
+  motor_kv: 3930.0
+  speed_control_kp: 1.0
+  speed_control_ki: 1.0
+  safe_mode: true
+  accel_gain: 1.0
+  roll_gain: 0.33
+  steer_slack: 0.2
+  LPF_tau: 0.5
+  throttle_delta: 0.02
+  liftoff_oversteer: true
+  control_dt: 0.02
+
+hal_monitor:
+  # Background monitor (HAL_9000): camera health, TF, tunes, rosbag RC control,
+  # battery/GPS alerts, and Jetson SOC diagnostics. Launched from sensors.launch.py.
+  enabled: false
+
+  diagnostics_topic: /SOC_diagnostics
+  startup_delay_s: 15.0
+  # Do not USB-reset the ArduPilot (ChibiOS) port while mavros holds it open.
+  usb_reset_on_start: false
+  usb_reset_device: "ChibiOS/RT Virtual COM Port"
+
+  bagdir: /root/colcon_ws/bags/
+  record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
+  record_split_duration_min: 5
+  record_rc_channel: 3
+  record_on_threshold: 1900
+  record_off_threshold: 1100
+
+  battery_voltage_threshold: 14.0
+  gps_min_satellites: 16
+  gps_max_h_acc_mm: 1000
+
+  mavros:
+    monitor_enabled: true
+    monitor_topic: /mavros/imu/data_raw
+    expected_fps: 200.0
+    failure_action: "ros2 run mavros mav sys rate --all 200"
+    pose_topic: /mavros/local_position/pose
+    state_topic: /mavros/state
+    gps_topic: /mavros/gpsstatus/gps1/raw
+    notification_topic: /mavros/play_tune
+    channel_topic: /mavros/rc/in
+    base_frame: base_link
+
+  camera:
+    monitor_enabled: true
+    # RealSense infra (D455). Override when switching camera.backend to zed.
+    monitor_topic: /camera/infra1/image_rect_raw
+    expected_fps: 30.0
+    pos: [0.15, 0.047, 0.04]
+    rot: [0.0, 0.0, 0.0, 1.0]
+    depth_frame: camera_link
+    depth_optical_frame: camera_infra1_optical_frame
+
+  vesc:
+    topic: /sensors/core
+
+  elevation_map_clear:
+    enabled: false
+    service: /elevation_mapping/clear_map
+    min_interval_s: 1.0
+
+  jetson_diagnostics:
+    enabled: true
+    gpu_freq_path: ""
 
 segmentation:
   # Master switch for the CLIPSeg people/dynamic mask node. When enabled, the
@@ -128,10 +288,14 @@ segmentation:
   # Overlay colors follow PALETTE (1->green, 2->red, 3->blue). Semantic, not
   # geometric, traversability -- the planner fuses it with geometry.
   # (A flat list still works too: each prompt becomes its own group.)
+  # prompts:
+  #   traversable: ["dirt", "hill", "road", "grass", "gravel", "path"]
+  #   non_traversable: ["tree", "wall", "pebbles", "fence", "vehicle"]
+  #   people: ["person", "animal"]
   prompts:
-    traversable: ["dirt", "hill", "road", "grass", "gravel", "path"]
-    non_traversable: ["tree", "wall", "pebbles", "fence", "vehicle"]
-    people: ["person", "animal"]
+    traversable: ["floor", "carpet", "concrete"]
+    non_traversable: ["furniture", "wall", "pillar"]
+    people: ["person", "car"]
 
   # Suppress prompts: their probability is subtracted from EVERY group (clamped at
   # 0), so these regions get no mask / class (e.g. sky shouldn't be traversable,
@@ -181,7 +345,7 @@ segmentation:
 
   # Per-stage timing. Logs averaged ms/frame for clipseg / publish every
   # profile_every frames. Use to find the bottleneck, then off.
-  profile: True
+  profile: False
   profile_every: 30
 
   # --- SAM refinement node (separate process) --------------------------------
@@ -200,5 +364,5 @@ segmentation:
   sam_traversability_topic: "/segmentation/refined_traversability"
   sam_people_mask_topic: "/segmentation/refined_people_mask"
   # Optional debug overlay (traversability colors blended on the image).
-  sam_overlay: false
+  sam_overlay: true
   sam_overlay_topic: "/segmentation/refined_overlay"

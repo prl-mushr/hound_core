@@ -1,0 +1,5 @@
+# Optional standalone params for vesc_driver (not loaded by robot.launch.py).
+# HOUND uses telemetry-only mode: port is set from SSoT.yaml at launch time.
+vesc_driver:
+  ros__parameters:
+    port: /dev/ttyACM0

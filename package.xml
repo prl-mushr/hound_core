@@ -3,11 +3,20 @@
 <package format="3">
   <name>hound_core</name>
   <version>0.0.0</version>
-  <description>Bring-up package that launches an Intel RealSense D455 (selected by serial number, 60 fps stereo IR + IMU) together with NVIDIA Isaac ROS Visual SLAM from a single source-of-truth config.</description>
+  <description>HOUND bring-up: RealSense D455, Isaac ROS Visual SLAM, MAVROS, segmentation, and low-level vehicle control from a single source-of-truth config.</description>
   <maintainer email="hound@todo.todo">hound</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>mavros_msgs</depend>
+  <depend>vesc_msgs</depend>
+  <depend>ackermann_msgs</depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
@@ -15,21 +24,29 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>zed_wrapper</exec_depend>
   <exec_depend>isaac_ros_visual_slam</exec_depend>
+  <exec_depend>nvblox_ros</exec_depend>
+  <exec_depend>inertial_nav_ros2</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>mavros</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>vesc_driver</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>mavros_extras</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <!-- CLIPSeg node also needs python3 torch + transformers, installed via pip -->
   <exec_depend>python3-numpy</exec_depend>
 
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

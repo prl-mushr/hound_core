@@ -1,0 +1,49 @@
+# HAL monitor defaults (also available under hal_monitor in SSoT.yaml).
+diagnostics_topic: /SOC_diagnostics
+startup_delay_s: 15.0
+usb_reset_on_start: true
+usb_reset_device: "ChibiOS/RT Virtual COM Port"
+
+bagdir: /root/colcon_ws/bags/
+record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
+record_split_duration_min: 5
+record_rc_channel: 3
+record_on_threshold: 1900
+record_off_threshold: 1100
+
+battery_voltage_threshold: 14.0
+gps_min_satellites: 16
+gps_max_h_acc_mm: 1000
+
+mavros:
+  monitor_topic: /mavros/imu/data_raw
+  expected_fps: 50.0
+  failure_action: "ros2 run mavros mav sys rate --all 50"
+  pose_topic: /mavros/local_position/pose
+  state_topic: /mavros/state
+  gps_topic: /mavros/gpsstatus/gps1/raw
+  notification_topic: /mavros/play_tune
+  channel_topic: /mavros/rc/in
+  base_frame: base_link
+
+camera:
+  monitor_enabled: true
+  monitor_topic: /camera/infra1/image_rect_raw
+  expected_fps: 60.0
+  pos: [0.15, 0.047, 0.04]
+  rot: [0.0, 0.0, 0.0, 1.0]
+  depth_frame: camera_link
+  depth_optical_frame: camera_infra1_optical_frame
+
+vesc:
+  topic: /sensors/core
+
+elevation_map_clear:
+  enabled: false
+  service: /elevation_mapping/clear_map
+  min_interval_s: 1.0
+
+jetson_diagnostics:
+  enabled: true
+  # Leave empty to auto-detect GPU devfreq (cur_freq preferred). Override if needed.
+  gpu_freq_path: ""
