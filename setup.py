@@ -25,6 +25,7 @@ setup(
             "bag_replay = hound_core.bag_replay:main",
             "wheel_odom_node = hound_core.wheel_odom_node:main",
             "hal_monitor_node = hound_core.hal_monitor_node:main",
+            "realsense_cuvslam_stereo = hound_core.realsense_cuvslam_stereo:main",
         ],
     },
 )

@@ -1,8 +1,9 @@
-# nvblox for HOUND: RealSense depth+color + SAM people mask → ESDF for Nav2.
-# Remappings are applied in launch (hound topics ≠ Isaac /camera0/... layout).
+# nvblox for HOUND:
+#   Geometry: depth and/or lidar. Color paints the mesh (camera RGB or SAM).
+#   People mask applies to the depth path only.
+#   SSoT overrides use_depth / use_lidar / use_color (RGB+lidar without depth is supported).
 #
-# Traversability RGB (/segmentation/refined_traversability) is NOT an nvblox
-# input — fuse it in the planner / Nav2 costmap separately.
+# Remappings are applied in launch (hound topics ≠ Isaac /camera0/... layout).
 
 /**:
   ros__parameters:
@@ -10,11 +11,21 @@
     voxel_size: 0.05
     num_cameras: 1
     use_tf_transforms: true
-    mapping_type: "human_with_static_tsdf"
-    use_segmentation: true
-    use_depth: true
+    mapping_type: "static_tsdf"
+    use_segmentation: false
+    use_depth: false
     use_color: true
-    use_lidar: false
+    use_lidar: true
+
+    # Lidar model (overridden from SSoT). Must match organizer + pass FoV check.
+    lidar_width: 360
+    lidar_height: 90
+    lidar_vertical_fov_rad: 2.094395
+    lidar_min_valid_range_m: 0.1
+    use_non_equal_vertical_fov_lidar_params: false
+    use_lidar_motion_compensation: false
+    pointcloud2_timestamps_are_relative: false
+    integrate_lidar_rate_hz: 10.0
 
     tick_period_ms: 10
     integrate_depth_rate_hz: 20.0
@@ -30,10 +41,15 @@
     publish_esdf_distance_slice: true
 
     maximum_input_queue_length: 10
-    map_clearing_radius_m: 7.0
+    map_clearing_radius_m: 25.0  # overridden from SSoT; < 0 disables
     # Must exist in TF (cuVSLAM odom→camera_link or robot base).
     map_clearing_frame_id: "camera_link"
     global_frame: "odom"
+
+    # Published mesh/layers only — does NOT limit TSDF integration (defaults were 5 m).
+    layer_visualization_exclusion_radius_m: 25.0
+    layer_visualization_exclusion_height_m: 3.0
+    max_back_projection_distance: 25.0
 
     input_qos: "SENSOR_DATA"
 
@@ -46,9 +62,14 @@
 
     static_mapper:
       do_depth_preprocessing: false
-      projective_integrator_max_integration_distance_m: 5.0
+      # Depth/color projective max. Also raise when lidar-only — some builds
+      # effectively share caps; keep in sync with lidar_* below.
+      projective_integrator_max_integration_distance_m: 15.0
+      lidar_projective_integrator_max_integration_distance_m: 15.0
       projective_integrator_truncation_distance_vox: 4.0
       projective_integrator_max_weight: 5.0
+      # Full weight on/in front of surface; linear taper behind within truncation band.
+      projective_integrator_weighting_mode: "constant_dropoff"
       esdf_integrator_min_weight: 0.1
       esdf_integrator_max_distance_m: 2.0
       # Tune to camera mount height (meters in map_clearing / camera frame).
@@ -57,7 +78,8 @@
       esdf_slice_max_height: 0.3
 
     dynamic_mapper:
-      projective_integrator_max_integration_distance_m: 5.0
+      projective_integrator_max_integration_distance_m: 15.0
+      lidar_projective_integrator_max_integration_distance_m: 15.0
       free_region_occupancy_probability: 0.3
       occupied_region_occupancy_probability: 0.9
       unobserved_region_occupancy_probability: 0.35

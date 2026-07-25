@@ -1,25 +1,33 @@
 # =============================================================================
 # SINGLE SOURCE OF TRUTH (SSoT) for HOUND perception + control bring-up.
 #
-# camera.backend selects the stereo + IMU source:
-#   realsense — Intel D455 (infra stereo; IMU unavailable on this Jetson kernel)
-#   zed       — Stereolabs ZED (gray stereo + IMU → cuVSLAM + nav_filter EKF)
+# Camera: Intel RealSense D455
+# Prefer realsense_cuvslam (in-process IR+cuVSLAM + optional color/depth) over
+# stock realsense2_camera + isaac_ros_visual_slam when realsense_cuvslam.enabled.
 # =============================================================================
 
 camera:
-  enabled: true
-
-  # Sensor driver: realsense | zed
-  backend: realsense
-
-  # --- RealSense (when backend: realsense) -----------------------------------
+  enabled: false
   camera_name: camera
   serial_number: "030422250301"
+  # D455 (rs400) depth_module.visual_preset — applied by stock realsense2_camera
+  # and realsense_cuvslam_node (stereo depth algo; set before emitter/clip):
+  #   0 custom
+  #   1 default
+  #   2 hand
+  #   3 high_accuracy
+  #   4 high_density
+  #   5 medium_density
+  #   6 remove_ir_pattern
+  visual_preset: 3      # high_accuracy
+  clip_distance: 6.0    # meters
+  # IR + depth share the D455 depth module: same WxH and FPS required.
   infra_width: 640
   infra_height: 360
-  fps: 60
+  fps: 30
   emitter_enabled: 0
   enable_color: true
+  # Keep false when color_fps != depth/infra fps (sync would stall / drop).
   enable_sync: false
   color_width: 640
   color_height: 360
@@ -27,37 +35,88 @@ camera:
   enable_imu: false
   gyro_fps: 200
   accel_fps: 200
-  # Depth for nvblox (aligned to color so people mask matches depth).
-  # Launch also forces these when nvblox.enabled. Emitter 0 favors IR VSLAM;
-  # set emitter_enabled: 1 if depth quality is poor for mapping.
-  enable_depth: true
-  align_depth: true
+  # Depth for nvblox (aligned to color so people mask matches depth pixels).
+  enable_depth: false
+  align_depth: false
   depth_width: 640
   depth_height: 360
   depth_fps: 30
 
-zed:
-  # --- ZED (when backend: zed) -----------------------------------------------
-  # Set camera_model to match your unit (zed2, zed2i, zedx, ...). Use
-  # ZED_Explorer -a to find serial_number.
-  camera_model: zed2i
-  camera_name: zed
-  node_name: zed_node
-  serial_number: 32430362
-  enable_imu: true
+# In-process RealSense + cuVSLAM (exclusive USB owner). Replaces camera + vslam.
+# IR (stereo module) and color (RGB sensor) use separate queues — color FPS no
+# longer gates Track. Keep color_fps at a supported RGB rate (often 30).
+realsense_cuvslam:
+  enabled: true
+  # IR stereo drives Track (odom/TF). Color/depth optional at lower publish FPS.
+  infra_fps: 60
+  color_fps: 30
+  enable_color: true
+  color_publish_fps: 15.0
+  enable_depth: true
+  visual_preset: 3      # high_accuracy
+  clip_distance: 6.0    # meters
+  # false → /camera/depth/image_rect_raw (+ depth CameraInfo / optical frame)
+  # true  → /camera/aligned_depth_to_color/* (color CameraInfo; needed for people mask)
+  align_depth: false
+  # When enable_depth: node forces depth WxH/FPS to match infra (shared module).
+  depth_publish_fps: 15.0
+  odom_topic: /visual_slam/tracking/odometry
+  odom_frame: odom
+  base_frame: camera_link
+  async_sba: true
+  slam_sync_mode: false
+  warmup_frames: 60
+
+# Unitree UniLidar (serial). Staggered after camera in hound_core.launch.py.
+lidar:
+  enabled: true
+  backend: unitree
+  port: /dev/ttyUSB0
+  rotate_yaw_bias: 0.0
+  range_scale: 0.001
+  range_bias: 0.0
+  range_max: 50.0
+  # Drop points closer than this in the published cloud (meters). This is what
+  # RViz / topic echo see. nvblox.lidar_min_valid_range_m does NOT filter the topic.
+  range_min: 0.4
+  cloud_scan_num: 18
+  # nvblox range-image model (must match nvblox.lidar_* below).
+  # Organizer bins by azimuth×elevation and drops out-of-FoV points so nvblox's
+  # checkLidarPointcloud succeeds (L1 is ~90° vertical; margin for z-bias).
+  organize_cloud: true
+  lidar_width: 360          # azimuth bins (even)
+  lidar_height: 90          # elevation bins
+  lidar_vertical_fov_rad: 2.094395   # ~120 deg
+  cloud_frame: unilidar_lidar
+  cloud_topic: /unilidar/cloud
+  imu_frame: unilidar_imu
+  imu_topic: /unilidar/imu
+  # Still parsed from the serial stream; set false to skip ROS IMU publish + TF.
+  enable_imu: false
+  # Extrinsics: parent_frame → cloud_frame (tune to mount).
+  # xyz in meters; rpy / imu_rpy in degrees (converted to rad at launch).
+  publish_static_tf: true
+  parent_frame: camera_link
+  xyz: [0.0, 0.0, 0.1]
+  rpy: [180.0, -15.0, 0.0]
+  # IMU relative to lidar (only used when enable_imu + publish_static_tf).
+  imu_xyz: [0.0, 0.0, 0.0]
+  imu_rpy: [0.0, 0.0, 0.0]
+  deskewer:
+    enabled: false
+    input_topic: /unilidar/cloud
+    output_topic: /unilidar/cloud_deskewed
+    target_frame: unilidar_lidar
+    timestamp_field: time
+    timestamp_unit: seconds
 
 vslam:
-  enabled: true
-  # Defer cuVSLAM load until ZED gray stream is stable (avoids twist spikes at startup).
-  wait_for_camera_ready: true
-  camera_min_fps: 24.0
-  camera_stable_s: 5.0
-  camera_wait_timeout_s: 120.0
-  start_delay_s: 0.0
+  # Disabled when realsense_cuvslam.enabled (in-process Tracker replaces Isaac node).
+  enabled: false
   publish_map_to_odom_tf: false
   # Required for nvblox (odom → camera_link). Launch forces true if nvblox on.
   publish_odom_to_base_tf: true
-  # 0 = stereo-only, 1 = VIO (needs IMU). Use 1 with ZED; 0 for D455 on this unit.
+  # 0 = stereo-only, 1 = VIO (needs IMU). D455 IMU unavailable on this Jetson → 0.
   tracking_mode: 0
 
   rectified_images: true
@@ -81,48 +140,77 @@ vslam:
   accel_noise_density: 0.001862
   accel_random_walk: 0.003
 
-# Always-on sensor tier (hound_core/launch/sensors.launch.py).
-sensors:
-  container_name: sensors_container
-
-# Mission tier (hound_core/launch/hound_core.launch.py).
+# Mission bring-up (hound_core/launch/hound_core.launch.py).
 launch:
-  # When true, hound_core.launch.py skips camera/HAL and loads cuVSLAM into the
-  # running sensors_container (NITROS zero-copy). Start sensors.launch.py first.
-  # RealSense: must be false (sensors.launch.py is ZED-only).
-  assume_sensors_running: false
   # Seconds between enabled bring-up stages (HAL → … → nvblox). Disabled stages
   # are skipped and do not consume delay.
   stage_delay_s: 5.0
-
-# NITROS zero-copy only applies to ZED+cuVSLAM in the same sensors_container.
-# RealSense: ManagedNitros is inside cuVSLAM (no separate process); camera and
-# VSLAM launch as separate stages with SENSOR_DATA QoS.
-perception:
-  use_nitros: false
 
 ekf:
   # nav_filter EKF: MAVROS IMU + cuVSLAM pose (realsense_vslam preset).
   enabled: false
   preset: realsense_vslam
-  extnav_earth_align:
-    # ZED-only (imu_ahrs + earth->local TF). Ignored for realsense backend.
-    enabled: false
 
-# Geometric map for navigation (ESDF / costmap). People mask excludes dynamics
-# from the static TSDF. Traversability RGB is NOT consumed here — use in Nav2.
+# Geometric map for navigation (ESDF / costmap).
+# Geometry from depth and/or lidar; color paints the mesh. RGB+lidar (no depth) is OK.
+# People mask applies to the camera/depth path only (not lidar points).
 nvblox:
   enabled: true
+  use_depth: true
+  use_color: true
+  use_lidar: true
+  # Lidar PointCloud2 for nvblox (organized width×height required).
+  # Defaults to lidar.cloud_topic; use deskewed topic if deskewer.enabled.
+  lidar_topic: "/unilidar/cloud"
+  # Must match lidar.lidar_width/height/vertical_fov (organizer + nvblox model).
+  lidar_width: 360
+  lidar_height: 90
+  lidar_vertical_fov_rad: 2.094395   # ~120 deg (L1 ~90° + margin)
+  # Integration-only gate (ignore near hits when updating TSDF). Does not change
+  # /unilidar/cloud — set lidar.range_min to filter the published cloud.
+  lidar_min_valid_range_m: 0.3
+  # Max ray range into TSDF. Wired to BOTH:
+  #   static_mapper.lidar_projective_integrator_max_integration_distance_m
+  #   static_mapper.projective_integrator_max_integration_distance_m
+  # (depth/color share the latter; keep equal so lidar-only is not stuck at 5 m).
+  lidar_projective_integrator_max_integration_distance_m: 15.0
+  projective_integrator_max_integration_distance_m: 15.0
+  use_lidar_motion_compensation: false
+  pointcloud2_timestamps_are_relative: false
   # Map resolution: 0.05 = 5 cm, 0.10 = 10 cm.
   voxel_size: 0.05
-  use_people_mask: true
+  use_people_mask: false
   people_mask_topic: "/segmentation/refined_people_mask"
+  # Color layer for the mesh. Empty = camera RGB. Prefer SAM traversability
+  # (rgb8: G=traversable, R=non-traversable, B=none) for semantic coloring.
+  # color_topic: "/segmentation/refined_traversability"
+  color_topic: "/camera/color/image_raw"
   global_frame: odom
   map_clearing_frame_id: camera_link
+  # Drop blocks farther than this from map_clearing_frame (Hz below).
+  # < 0 disables. Was 7 m in yaml — looked like a hard range limit vs raw lidar.
+  map_clearing_radius_m: 32.0
+  # RViz mesh/layer stream: voxels farther than this from the robot are NOT
+  # published (default was 5 m — looked like a hard map range). Keep ≥ integrate max.
+  layer_visualization_exclusion_radius_m: 32.0
+  layer_visualization_exclusion_height_m: 3.0
+  # Debug back-projected lidar/depth cloud viz only (not TSDF integrate).
+  max_back_projection_distance: 32.0
   # ESDF 2D slice heights relative to map_clearing_frame (tune to mount).
   esdf_slice_height: 0.0
   esdf_slice_min_height: -0.1
   esdf_slice_max_height: 0.3
+  # Rate limits (sensors can be faster; nvblox throttles work).
+  # Depth arrives ~60 Hz but is integrated at integrate_depth_rate_hz.
+  # ESDF / mesh / color are separate throttles — raise carefully (GPU load).
+  integrate_depth_rate_hz: 20.0
+  integrate_lidar_rate_hz: 10.0
+  integrate_color_rate_hz: 20.0
+  update_esdf_rate_hz: 20.0
+  update_mesh_rate_hz: 10.0
+  publish_layer_rate_hz: 10.0
+  # View-based decay needs a depth camera view; leave 0 for lidar-only geometry.
+  decay_tsdf_rate_hz: 0.0
 
 mavros:
   # Master switch for the ArduPilot/MAVROS bring-up (wraps mavros' apm.launch).
@@ -213,7 +301,7 @@ low_level_control:
 
 hal_monitor:
   # Background monitor (HAL_9000): camera health, TF, tunes, rosbag RC control,
-  # battery/GPS alerts, and Jetson SOC diagnostics. Launched from sensors.launch.py.
+  # battery/GPS alerts, and Jetson SOC diagnostics.
   enabled: false
 
   diagnostics_topic: /SOC_diagnostics
@@ -247,7 +335,7 @@ hal_monitor:
 
   camera:
     monitor_enabled: true
-    # RealSense infra (D455). Override when switching camera.backend to zed.
+    # RealSense infra (D455).
     monitor_topic: /camera/infra1/image_rect_raw
     expected_fps: 30.0
     pos: [0.15, 0.047, 0.04]
@@ -270,12 +358,13 @@ hal_monitor:
 segmentation:
   # Master switch for the CLIPSeg people/dynamic mask node. When enabled, the
   # camera's color stream is auto-enabled (CLIPSeg runs on RGB).
-  enabled: true
+  # Required for stock nvblox people masking (refined_people_mask).
+  enabled: false
 
   # Offline-eval mode: run segmentation even when the camera is DISABLED, so it
   # consumes a color stream from elsewhere (e.g. `ros2 run hound_core bag_replay`
   # publishing /camera/color/image_raw). Leave false for live operation.
-  replay_mode: true
+  replay_mode: false
 
   # HuggingFace model id. rd16 is the light/fast variant (good on Orin NX).
   model: "CIDAS/clipseg-rd16"
@@ -357,12 +446,12 @@ segmentation:
   # R=non-traversable, B=none) + a separate people mask. positive_groups /
   # negative_groups name which prompt groups map to traversable / non-traversable;
   # any remaining group (e.g. people) becomes the separate people mask.
-  sam_node: true
+  sam_node: false
   sam_rate_hz: 10.0
   positive_groups: ["traversable"]
   negative_groups: ["non_traversable"]
   sam_traversability_topic: "/segmentation/refined_traversability"
   sam_people_mask_topic: "/segmentation/refined_people_mask"
   # Optional debug overlay (traversability colors blended on the image).
-  sam_overlay: true
+  sam_overlay: false
   sam_overlay_topic: "/segmentation/refined_overlay"

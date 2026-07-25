@@ -10,10 +10,14 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)
 find_package(vesc_msgs REQUIRED)
 find_package(ackermann_msgs REQUIRED)
+find_package(realsense2 REQUIRED)
 
 include_directories(include)
 
@@ -32,7 +36,33 @@ ament_target_dependencies(hound_ll_control_node
 )
 target_compile_features(hound_ll_control_node PUBLIC cxx_std_17)
 
-install(TARGETS hound_ll_control_node
+# In-process RealSense + cuVSLAM (same libcuvslam.so as Isaac ROS).
+set(CUVSLAM_INCLUDE_DIR "/opt/ros/jazzy/share/isaac_ros_nitros/cuvslam/include")
+set(CUVSLAM_LIB "/opt/ros/jazzy/lib/libcuvslam.so")
+
+add_executable(realsense_cuvslam_node
+  src/realsense_cuvslam_node.cpp
+)
+target_include_directories(realsense_cuvslam_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${CUVSLAM_INCLUDE_DIR}
+  ${realsense2_INCLUDE_DIR}
+)
+ament_target_dependencies(realsense_cuvslam_node
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_ros
+)
+target_link_libraries(realsense_cuvslam_node
+  ${realsense2_LIBRARY}
+  ${CUVSLAM_LIB}
+)
+target_compile_features(realsense_cuvslam_node PUBLIC cxx_std_17)
+
+install(TARGETS hound_ll_control_node realsense_cuvslam_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -57,6 +87,7 @@ install(PROGRAMS
   scripts/wheel_odom_node
   scripts/hal_monitor_node
   scripts/wait_for_topic_hz.py
+  scripts/realsense_cuvslam_stereo
   DESTINATION lib/${PROJECT_NAME}
 )
 

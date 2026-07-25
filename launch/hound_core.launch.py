@@ -1,61 +1,45 @@
 """Mission / algorithm tier for HOUND (cuVSLAM, EKF, MAVROS, control, segmentation).
 
 Bring-up is staggered (launch.stage_delay_s, default 5s between enabled stages):
-  HAL → ManagedNitros → mavros → vesc → camera → lidar → segmentation →
+  HAL → mavros → vesc → camera|realsense_cuvslam → lidar → segmentation →
   vslam → ekf → nvblox
 
-When launch.assume_sensors_running is true, start sensors.launch.py first
-(ZED NITROS container + HAL). RealSense uses assume_sensors_running: false.
-
-ManagedNitros note: for RealSense there is no separate ManagedNitros process
-(stock Intel driver is not a NITROS publisher; cuVSLAM's ManagedNitrosSubscriber
-converts sensor_msgs). For ZED + perception.use_nitros, this stage starts the
-sensors_container.
+When realsense_cuvslam.enabled, the C++ node owns the D455 (IR+cuVSLAM in-process;
+optional color/depth). Stock realsense2_camera and isaac_ros_visual_slam stages
+are skipped so only one process holds the USB camera.
 
 Usage:
   ros2 launch hound_core hound_core.launch.py
 """
 
-import os
 import sys
 from pathlib import Path
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
-    RegisterEventHandler,
     TimerAction,
 )
-from launch.event_handlers import OnProcessExit
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
-from launch_ros.actions import LoadComposableNodes, Node
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hound_launch_common import (  # noqa: E402
     build_ekf_node,
-    build_extnav_earth_align_node,
     build_hal_monitor_node,
     build_nvblox_node,
-    build_vslam_composable,
+    build_unitree_lidar_actions,
     build_vslam_container,
-    build_zed_sensors_container,
-    build_zed_state_publisher,
     dump_temp_yaml,
     find_ssot,
     realsense_camera_params,
-    sensors_container_target,
-    zed_share_paths,
-    zed_topic_prefix,
+    realsense_streams_for_stack,
 )
-
-PACKAGE_NAME = "hound_core"
 
 
 def _schedule_stages(stages: list, delay_s: float) -> list:
@@ -94,14 +78,21 @@ def _flatten_prompts(prompts):
     return flat, flat, list(range(len(flat)))
 
 
-def _build_camera_node(cam: dict, force_color: bool = False) -> Node:
+def _build_camera_node(
+    cam: dict,
+    *,
+    force_color: bool = False,
+    streams: dict | None = None,
+) -> Node:
     camera_name = cam.get("camera_name", "camera")
-    params = realsense_camera_params(cam, force_color=force_color)
+    params = realsense_camera_params(cam, force_color=force_color, streams=streams)
     print(
         f"[hound_core] camera ENABLED: serial={params['serial_no']} "
-        f"infra_profile={params['depth_module.infra_profile']} "
-        f"imu={'on' if params['enable_gyro'] else 'off'} "
-        f"color={'on' if params['enable_color'] else 'off'} qos=SENSOR_DATA"
+        f"infra={'on' if params['enable_infra1'] else 'off'} "
+        f"profile={params['depth_module.infra_profile']} "
+        f"depth={'on' if params['enable_depth'] else 'off'} "
+        f"color={'on' if params['enable_color'] else 'off'} "
+        f"sync={params.get('enable_sync', False)} qos=SENSOR_DATA"
     )
     return Node(
         name=camera_name,
@@ -113,36 +104,80 @@ def _build_camera_node(cam: dict, force_color: bool = False) -> Node:
     )
 
 
-def _build_zed_launch(zed: dict) -> IncludeLaunchDescription:
-    camera_model = str(zed.get("camera_model", "zed2i"))
-    camera_name = str(zed.get("camera_name", "zed"))
-    serial_number = str(zed.get("serial_number", "0"))
-    override = os.path.join(
-        get_package_share_directory(PACKAGE_NAME),
-        "config",
-        "zed_vslam_sensor.yaml",
-    )
+def _build_realsense_cuvslam_node(
+    cam: dict,
+    rsc: dict,
+    *,
+    need_color: bool,
+    need_depth: bool,
+) -> Node:
+    """In-process RealSense + cuVSLAM (exclusive camera owner).
+
+    Stream enable flags come from SSoT (``realsense_cuvslam`` / ``camera``).
+    Launch does not override an explicit ``enable_depth: false``.
+    """
+    camera_name = cam.get("camera_name", "camera")
+    enable_color = bool(rsc.get("enable_color", cam.get("enable_color", True))) or need_color
+    enable_depth = bool(rsc.get("enable_depth", cam.get("enable_depth", False)))
+    align_depth = bool(rsc.get("align_depth", cam.get("align_depth", False)))
+    if need_depth and not enable_depth:
+        print(
+            "[hound_core] nvblox/stack wants depth but "
+            "realsense_cuvslam.enable_depth=false — not publishing depth"
+        )
+    if enable_depth and align_depth:
+        enable_color = True
+    params = {
+        "serial_number": str(cam.get("serial_number", "")),
+        "camera_name": str(camera_name),
+        "infra_width": int(cam.get("infra_width", 640)),
+        "infra_height": int(cam.get("infra_height", 360)),
+        "infra_fps": int(rsc.get("infra_fps", cam.get("fps", 60))),
+        "enable_color": enable_color,
+        "color_width": int(cam.get("color_width", 640)),
+        "color_height": int(cam.get("color_height", 360)),
+        "color_fps": int(rsc.get("color_fps", cam.get("color_fps", 30))),
+        "color_publish_fps": float(rsc.get("color_publish_fps", 15.0)),
+        "enable_depth": enable_depth,
+        "align_depth": align_depth,
+        "depth_width": int(cam.get("depth_width", cam.get("infra_width", 640))),
+        "depth_height": int(cam.get("depth_height", cam.get("infra_height", 360))),
+        # Depth module shares FPS with infra when both are enabled.
+        "depth_fps": int(
+            rsc.get("infra_fps", cam.get("fps", 30))
+            if enable_depth
+            else cam.get("depth_fps", cam.get("fps", 30))
+        ),
+        "depth_publish_fps": float(rsc.get("depth_publish_fps", 15.0)),
+        "emitter_enabled": int(cam.get("emitter_enabled", 0)),
+        # rsc override optional; else camera.visual_preset (rs400 enum).
+        "visual_preset": int(rsc.get("visual_preset", cam.get("visual_preset", 3))),
+        "clip_distance": float(rsc.get("clip_distance", cam.get("clip_distance", 0.0))),
+        "odom_topic": str(rsc.get("odom_topic", "/visual_slam/tracking/odometry")),
+        "odom_frame": str(rsc.get("odom_frame", "odom")),
+        "base_frame": str(rsc.get("base_frame", "camera_link")),
+        "async_sba": bool(rsc.get("async_sba", True)),
+        "slam_sync_mode": bool(rsc.get("slam_sync_mode", False)),
+        "warmup_frames": int(rsc.get("warmup_frames", 60)),
+    }
+    # People-mask path may have set cam["align_depth"]=True; honor when depth is on.
+    if enable_depth:
+        params["align_depth"] = bool(cam.get("align_depth", params["align_depth"]))
     print(
-        f"[hound_core] zed ENABLED (standalone): model={camera_model} "
-        f"name={camera_name} serial={serial_number}"
+        f"[hound_core] realsense_cuvslam ENABLED: serial={params['serial_number']} "
+        f"IR {params['infra_width']}x{params['infra_height']}@{params['infra_fps']} "
+        f"color={params['enable_color']}@{params['color_fps']}Hz pub={params['color_publish_fps']}Hz "
+        f"depth={params['enable_depth']}@{params['depth_publish_fps']}Hz "
+        f"align_depth={params['align_depth']} "
+        f"visual_preset={params['visual_preset']} "
+        f"odom={params['odom_topic']}"
     )
-    return IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare("zed_wrapper"),
-                "launch",
-                "zed_camera.launch.py",
-            ])
-        ]),
-        launch_arguments={
-            "camera_model": camera_model,
-            "camera_name": camera_name,
-            "serial_number": serial_number,
-            "ros_params_override_path": override,
-            "publish_tf": "false",
-            "publish_map_tf": "false",
-            "publish_imu_tf": "true",
-        }.items(),
+    return Node(
+        package="hound_core",
+        executable="realsense_cuvslam_node",
+        name="realsense_cuvslam_node",
+        output="screen",
+        parameters=[params],
     )
 
 
@@ -345,101 +380,12 @@ def _build_mavros_actions(mav: dict) -> list:
     return actions
 
 
-def _build_vslam_actions(
-    cam: dict,
-    vslam: dict,
-    zed: dict,
-    ssot: dict,
-    *,
-    nitros_container_running: bool,
-    force_color: bool = False,
-) -> list:
-    backend = str(cam.get("backend", "realsense")).lower()
-    use_nitros = str(
-        ssot.get("perception", {}).get("use_nitros", True)
-    ).lower() not in ("false", "0", "no")
-
-    if backend == "realsense":
-        # Camera is a prior stagger stage; VSLAM is its own process/container.
-        print(
-            "[hound_core] RealSense cuVSLAM in visual_slam_launch_container "
-            "(camera already staged separately; SENSOR_DATA QoS)"
-        )
-        return [build_vslam_container(cam, vslam, zed=None)]
-
-    if backend == "zed" and use_nitros:
-        if not nitros_container_running:
-            raise RuntimeError(
-                "ZED + NITROS cuVSLAM requires sensors_container running. "
-                "Start sensors.launch.py first, or set launch.assume_sensors_running: "
-                "false to co-launch ZED + cuVSLAM in one shot."
-            )
-        target = sensors_container_target(ssot)
-        vslam_node = build_vslam_composable(cam, vslam, zed, use_nitros=True)
-        print(
-            f"[hound_core] Loading cuVSLAM into {target} (NITROS zero-copy to ZED)"
-        )
-        load_action = LoadComposableNodes(
-            target_container=target,
-            composable_node_descriptions=[vslam_node],
-        )
-        start_delay_s = float(vslam.get("start_delay_s", 0.0))
-        if start_delay_s > 0.0:
-            load_action = TimerAction(period=start_delay_s, actions=[load_action])
-
-        wait_script = os.path.join(
-            get_package_share_directory(PACKAGE_NAME),
-            "..",
-            "..",
-            "lib",
-            PACKAGE_NAME,
-            "wait_for_topic_hz.py",
-        )
-        wait_script = os.path.normpath(wait_script)
-        if not os.path.isfile(wait_script):
-            wait_script = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "scripts",
-                "wait_for_topic_hz.py",
-            )
-
-        if bool(vslam.get("wait_for_camera_ready", True)):
-            prefix = zed_topic_prefix(zed)
-            topic = f"{prefix}/left/gray/rect/image"
-            min_hz = float(vslam.get("camera_min_fps", 24.0))
-            stable_s = float(vslam.get("camera_stable_s", 5.0))
-            timeout_s = float(vslam.get("camera_wait_timeout_s", 120.0))
-            print(
-                f"[hound_core] cuVSLAM gated on stable camera: {topic} "
-                f">= {min_hz} Hz for {stable_s}s"
-            )
-            wait_process = ExecuteProcess(
-                cmd=[
-                    "python3",
-                    wait_script,
-                    topic,
-                    "--min-hz",
-                    str(min_hz),
-                    "--stable-s",
-                    str(stable_s),
-                    "--timeout-s",
-                    str(timeout_s),
-                ],
-                output="screen",
-            )
-            return [
-                wait_process,
-                RegisterEventHandler(
-                    OnProcessExit(
-                        target_action=wait_process,
-                        on_exit=[load_action],
-                    )
-                ),
-            ]
-
-        return [load_action]
-
-    return [build_vslam_container(cam, vslam, zed=zed if backend == "zed" else None)]
+def _build_vslam_actions(cam: dict, vslam: dict) -> list:
+    print(
+        "[hound_core] RealSense cuVSLAM in visual_slam_launch_container "
+        "(camera already staged separately; SENSOR_DATA QoS)"
+    )
+    return [build_vslam_container(cam, vslam)]
 
 
 def generate_launch_description():
@@ -449,7 +395,7 @@ def generate_launch_description():
         ssot = yaml.safe_load(handle)
 
     cam = ssot.get("camera", {})
-    zed = ssot.get("zed", {})
+    rsc = ssot.get("realsense_cuvslam", {})
     vslam = ssot.get("vslam", {})
     ekf = ssot.get("ekf", {})
     nvblox = ssot.get("nvblox", {})
@@ -461,9 +407,8 @@ def generate_launch_description():
     launch_cfg = ssot.get("launch", {})
     lidar = ssot.get("lidar", {})
 
-    camera_backend = str(cam.get("backend", "realsense")).lower()
+    rsc_enabled = bool(rsc.get("enabled", False))
     camera_enabled = bool(cam.get("enabled", True))
-    assume_sensors_running = bool(launch_cfg.get("assume_sensors_running", True))
     stage_delay_s = float(launch_cfg.get("stage_delay_s", 5.0))
     vslam_enabled = bool(vslam.get("enabled", True))
     ekf_enabled = bool(ekf.get("enabled", False))
@@ -475,11 +420,40 @@ def generate_launch_description():
     seg_enabled = bool(seg.get("enabled", False))
     lidar_enabled = bool(lidar.get("enabled", False))
 
-    # nvblox needs color (+ depth); people mask needs SAM.
+    # C++ node owns USB exclusively — never also start stock camera / Isaac VSLAM.
+    if rsc_enabled:
+        if camera_enabled:
+            print(
+                "[hound_core] realsense_cuvslam.enabled: forcing camera.enabled=false "
+                "(exclusive USB ownership)"
+            )
+            camera_enabled = False
+        if vslam_enabled:
+            print(
+                "[hound_core] realsense_cuvslam.enabled: forcing vslam.enabled=false "
+                "(in-process Tracker)"
+            )
+            vslam_enabled = False
+
+    # nvblox: enable depth on stock RealSense path only. realsense_cuvslam
+    # streams are controlled exclusively by realsense_cuvslam.* in SSoT.
     if nvblox_enabled:
         cam = dict(cam)
-        cam["enable_depth"] = True
-        cam.setdefault("align_depth", True)
+        if not rsc_enabled:
+            cam["enable_depth"] = True
+        if bool(nvblox.get("use_people_mask", True)):
+            # Mask is in color pixels — depth must be aligned to color.
+            if not bool(cam.get("align_depth", False)) and not bool(
+                rsc.get("align_depth", False)
+            ):
+                print(
+                    "[hound_core] nvblox use_people_mask=true: forcing "
+                    "align_depth=true (mask/depth must share color frame)"
+                )
+            cam["align_depth"] = True
+            if rsc_enabled:
+                rsc = dict(rsc)
+                rsc["align_depth"] = True
         if bool(nvblox.get("use_people_mask", True)) and not seg_enabled:
             print(
                 "[hound_core] nvblox use_people_mask=true but segmentation DISABLED "
@@ -493,31 +467,31 @@ def generate_launch_description():
                 "(needs odom→camera_link TF)"
             )
 
-    use_nitros = str(
-        ssot.get("perception", {}).get("use_nitros", True)
-    ).lower() not in ("false", "0", "no")
-    # True when ZED NITROS container is already up (sensors.launch) or we start it.
-    nitros_container_running = assume_sensors_running
-    zed_nitros_local = (
-        not assume_sensors_running
-        and camera_enabled
-        and camera_backend == "zed"
-        and use_nitros
+    need_color = seg_enabled or (nvblox_enabled and bool(nvblox.get("use_color", True)))
+    need_depth = nvblox_enabled and bool(nvblox.get("use_depth", False))
+    if need_depth is False and nvblox_enabled and "use_depth" not in nvblox:
+        # Legacy: if use_depth omitted, only require camera depth when no lidar.
+        need_depth = not bool(nvblox.get("use_lidar", False))
+    has_camera_source = camera_enabled or rsc_enabled
+    rs_streams = realsense_streams_for_stack(
+        cam,
+        vslam_enabled=vslam_enabled,
+        nvblox_enabled=nvblox_enabled,
+        seg_enabled=seg_enabled,
     )
-    need_color = seg_enabled or nvblox_enabled
+    if camera_enabled:
+        print(
+            f"[hound_core] RealSense streams: infra={rs_streams['enable_infra1']} "
+            f"depth={rs_streams['enable_depth']} color={rs_streams['enable_color']} "
+            f"(from enabled stack nodes)"
+        )
 
     # --- Stage builders (order matches bring-up sequence) --------------------
     # 1) HAL
     hal_acts = []
-    if assume_sensors_running:
-        print("[hound_core] HAL expected from sensors.launch.py")
-    elif hal_enabled:
+    if hal_enabled:
         if mavros_enabled or not (hal.get("mavros") or {}).get("monitor_enabled", True):
-            hal_acts = [
-                build_hal_monitor_node(
-                    hal, cam, zed if camera_backend == "zed" else None
-                )
-            ]
+            hal_acts = [build_hal_monitor_node(hal, cam)]
         else:
             print(
                 "[hound_core] hal_monitor needs mavros or mavros.monitor_enabled=false"
@@ -525,41 +499,17 @@ def generate_launch_description():
     else:
         print("[hound_core] hal_monitor DISABLED")
 
-    # 2) ManagedNitros / ZED sensors container
-    # RealSense: ManagedNitros lives inside cuVSLAM — no separate process.
-    # ZED + use_nitros: this is the NITROS IPC container (camera driver included).
-    nitros_acts = []
-    if zed_nitros_local:
-        paths = zed_share_paths(str(zed.get("camera_model", "zed2i")))
-        nitros_acts = [
-            build_zed_state_publisher(zed, paths),
-            build_zed_sensors_container(zed),
-        ]
-        nitros_container_running = True
-        print("[hound_core] ManagedNitros: launching ZED sensors_container")
-    elif camera_backend == "realsense":
-        print(
-            "[hound_core] ManagedNitros: no separate launch for RealSense "
-            "(ManagedNitrosSubscriber is inside cuVSLAM)"
-        )
-    elif assume_sensors_running and use_nitros and camera_backend == "zed":
-        print("[hound_core] ManagedNitros: using existing sensors_container")
-    else:
-        print("[hound_core] ManagedNitros: skipped")
-
-    # 3) mavros
+    # 2) mavros
     mav_acts = _build_mavros_actions(mav) if mavros_enabled else []
     if not mavros_enabled:
         print("[hound_core] mavros DISABLED")
 
-    # 4) vesc (+ low-level control once telemetry path exists)
+    # 3) vesc (+ low-level control once telemetry path exists)
     vesc_acts = []
-    if vesc_enabled and not assume_sensors_running:
+    if vesc_enabled:
         vesc_cfg = dict(vesc)
         vesc_cfg["start_delay_s"] = 0.0  # stagger owns timing
         vesc_acts = _build_vesc_actions(vesc_cfg)
-    elif vesc_enabled:
-        print("[hound_core] vesc already expected from sensors.launch.py")
 
     if ll_control_enabled:
         if mavros_enabled and vesc_enabled:
@@ -572,36 +522,35 @@ def generate_launch_description():
                 + " -> skipping"
             )
 
-    # 5) camera (RealSense standalone, or ZED if not already in NITROS stage)
+    # 4) camera source: stock RealSense OR in-process realsense_cuvslam
     cam_acts = []
-    if assume_sensors_running:
-        print("[hound_core] camera expected from sensors.launch.py")
-    elif not camera_enabled:
-        print("[hound_core] camera DISABLED")
-    elif zed_nitros_local:
-        print("[hound_core] camera already in ManagedNitros/ZED container")
-    elif camera_backend == "zed":
-        cam_acts = [_build_zed_launch(zed)]
-    elif camera_backend == "realsense":
-        cam_acts = [_build_camera_node(cam, force_color=need_color)]
+    if rsc_enabled:
+        cam_acts = [
+            _build_realsense_cuvslam_node(
+                cam, rsc, need_color=need_color, need_depth=need_depth
+            )
+        ]
+    elif camera_enabled:
+        cam_acts = [_build_camera_node(cam, force_color=need_color, streams=rs_streams)]
     else:
-        print(f"[hound_core] unknown camera.backend={camera_backend!r}")
+        print("[hound_core] camera DISABLED (no realsense_cuvslam either)")
 
-    # 6) LiDAR (placeholder)
+    # 5) LiDAR (Unitree UniLidar)
     lidar_acts = []
     if lidar_enabled:
-        print(
-            "[hound_core] lidar.enabled=true but no driver wired yet — "
-            "stage is a no-op placeholder"
-        )
+        backend = str(lidar.get("backend", "unitree")).lower()
+        if backend == "unitree":
+            lidar_acts = build_unitree_lidar_actions(lidar)
+        else:
+            print(f"[hound_core] lidar.backend={backend!r} not supported — skipping")
     else:
-        print("[hound_core] lidar DISABLED (placeholder)")
+        print("[hound_core] lidar DISABLED")
 
-    # 7) segmentation
+    # 6) segmentation
     seg_acts = []
     if seg_enabled:
         replay_mode = bool(seg.get("replay_mode", False))
-        if camera_enabled or replay_mode or assume_sensors_running:
+        if has_camera_source or replay_mode:
             seg_acts = [_build_segmentation_node(seg)]
             if bool(seg.get("sam_node", False)):
                 seg_acts.append(_build_sam_refine_node(seg))
@@ -610,44 +559,36 @@ def generate_launch_description():
     else:
         print("[hound_core] segmentation DISABLED")
 
-    # 8) vslam (separate from camera so stagger can settle the stream first)
+    # 7) vslam (skipped when realsense_cuvslam owns tracking)
     vslam_acts = []
     if vslam_enabled:
-        if camera_enabled or assume_sensors_running or nitros_container_running:
-            vslam_acts = _build_vslam_actions(
-                cam,
-                vslam,
-                zed,
-                ssot,
-                nitros_container_running=nitros_container_running,
-                force_color=need_color,
-            )
+        if camera_enabled:
+            vslam_acts = _build_vslam_actions(cam, vslam)
         else:
             print("[hound_core] vslam requested but no camera source -> skipping")
     else:
         print("[hound_core] vslam DISABLED")
 
-    # 9) ekf
+    # 8) ekf (pose from /visual_slam/tracking/odometry — C++ or Isaac)
     ekf_acts = []
     if ekf_enabled:
-        if not vslam_enabled:
-            print("[hound_core] ekf requested but vslam DISABLED -> skipping")
+        if not (vslam_enabled or rsc_enabled):
+            print(
+                "[hound_core] ekf requested but no VSLAM source "
+                "(vslam/realsense_cuvslam) -> skipping"
+            )
         else:
-            if camera_backend == "zed":
-                align_node = build_extnav_earth_align_node(ekf, zed)
-                if align_node is not None:
-                    ekf_acts.append(align_node)
             ekf_acts.append(build_ekf_node(ekf))
     else:
         print("[hound_core] ekf DISABLED")
 
-    # 10) nvblox
+    # 9) nvblox
     nvblox_acts = []
     if nvblox_enabled:
-        if not camera_enabled and not assume_sensors_running:
+        if not has_camera_source:
             print("[hound_core] nvblox requested but no camera -> skipping")
         else:
-            nvblox_acts = [build_nvblox_node(nvblox, cam, seg)]
+            nvblox_acts = [build_nvblox_node(nvblox, cam, seg, lidar)]
     else:
         print("[hound_core] nvblox DISABLED")
 
@@ -657,7 +598,6 @@ def generate_launch_description():
     )
     stages = [
         ("hal", hal_acts),
-        ("managed_nitros", nitros_acts),
         ("mavros", mav_acts),
         ("vesc", vesc_acts),
         ("camera", cam_acts),
