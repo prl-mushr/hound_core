@@ -1,0 +1,15 @@
+# Dora segmentation pipeline deps (install in the robot / Docker env).
+# Design / ops notes: SEGMENTATION.md in this directory.
+#
+# CLI (provides the `dora` binary):
+#   pip install dora-rs-cli
+#
+# Python node API (import name is `dora`):
+#   pip install dora-rs pyarrow
+#
+# Feature handoff: PyTorch CUDA IPC when available; on Jetson/Tegra typically
+# Arrow float16 (see hound_core.cuda_ipc).
+
+dora-rs-cli>=0.3.0
+dora-rs>=0.3.0
+pyarrow

@@ -1,0 +1,27 @@
+# Dora dataflow: CLIPSeg encoder + streamed FiLM∥SAM refine.
+#
+#   clipseg_encoder ──features+rgb──► seg_refine ──► ROS
+#
+# Inside seg_refine, NanoSAM uses two CUDA streams so FiLM decode and SAM image
+# encode can overlap; mask decode runs after both complete.
+#
+# Placeholders: __ENCODER_PY__  __REFINE_PY__  __QUEUE__
+
+nodes:
+  - id: clipseg_encoder
+    path: __ENCODER_PY__
+    inputs:
+      tick: dora/timer/millis/5
+    outputs:
+      - features
+      - rgb
+
+  - id: seg_refine
+    path: __REFINE_PY__
+    inputs:
+      features:
+        source: clipseg_encoder/features
+        queue_size: __QUEUE__
+      rgb:
+        source: clipseg_encoder/rgb
+        queue_size: __QUEUE__

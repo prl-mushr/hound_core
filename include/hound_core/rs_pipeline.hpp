@@ -16,6 +16,17 @@
 
 namespace hound_core {
 
+/** Host system-clock ns when librealsense got the frame; 0 if unsupported. */
+inline int64_t rs_frame_time_of_arrival_ns(const rs2::frame & f)
+{
+  if (!f.supports_frame_metadata(RS2_FRAME_METADATA_TIME_OF_ARRIVAL)) {
+    return 0;
+  }
+  // Metadata unit is milliseconds.
+  return static_cast<int64_t>(
+    f.get_frame_metadata(RS2_FRAME_METADATA_TIME_OF_ARRIVAL)) * 1000000LL;
+}
+
 struct RsStreamProfiles {
   rs2::video_stream_profile infra1;
   rs2::video_stream_profile infra2;
@@ -199,6 +210,7 @@ inline RsSensorStreams open_rs_sensors(
 
   out.stereo.open(stereo_profiles);
   // Feed the syncer so IR1+IR2 become matched framesets for Track.
+  // Callback thread → ir_sync; Track thread dequeues (queue latency ≠ 0).
   out.stereo.start(out.ir_sync);
   out.stereo_started = true;
 

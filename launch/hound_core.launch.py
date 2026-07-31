@@ -78,6 +78,214 @@ def _flatten_prompts(prompts):
     return flat, flat, list(range(len(flat)))
 
 
+def _build_segmentation_dora_actions(seg: dict) -> list:
+    """Start dora segmentation: clipseg_encoder -> seg_refine (CUDA streams).
+
+    Inside seg_refine, NanoSAM runs FiLM decode and SAM encode on two CUDA
+    streams so they can overlap; mask decode follows. Queued hops from encoder.
+    """
+    import json
+    import os
+    import tempfile
+
+    from ament_index_python.packages import get_package_prefix, get_package_share_directory
+
+    prompts_flat, group_names, group_ids = _flatten_prompts(
+        seg.get("prompts", ["a person"])
+    )
+    pos_names = [str(x) for x in seg.get("positive_groups", [])]
+    neg_names = [str(x) for x in seg.get("negative_groups", [])]
+    pos_idx = [i for i, n in enumerate(group_names) if n in pos_names]
+    neg_idx = [i for i, n in enumerate(group_names) if n in neg_names]
+    people_idx = [
+        i for i, n in enumerate(group_names) if n not in pos_names and n not in neg_names
+    ]
+
+    queue_size = max(2, int(seg.get("pipeline_queue_size", 3)))
+    cfg = {
+        "model_name": str(seg.get("model", "CIDAS/clipseg-rd16")),
+        "prompts": prompts_flat,
+        "group_names": group_names,
+        "group_ids": group_ids,
+        "suppress_prompts": [str(x) for x in seg.get("suppress_prompts", []) if str(x)],
+        "aggregate": str(seg.get("aggregate", "max")),
+        "clipseg_vision_engine": str(seg.get("clipseg_vision_engine", "") or ""),
+        "input_res": int(seg.get("input_res", 224)),
+        "threshold": float(seg.get("threshold", 0.3)),
+        "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
+        "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
+        "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
+        "viz_overlay": bool(seg.get("viz_overlay", False)),
+        "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
+        "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
+        "profile": bool(seg.get("profile", False)),
+        "profile_every": int(seg.get("profile_every", 30)),
+        "pipeline_queue_size": queue_size,
+        "use_cuda_streams": bool(seg.get("use_cuda_streams", True)),
+        "publish_coarse_traversability": bool(
+            seg.get("publish_coarse_traversability", True)
+        ),
+        "coarse_traversability_topic": str(
+            seg.get(
+                "coarse_traversability_topic",
+                "/segmentation/coarse_traversability",
+            )
+        ),
+        "coarse_people_mask_topic": str(
+            seg.get(
+                "coarse_people_mask_topic",
+                "/segmentation/coarse_people_mask",
+            )
+        ),
+        "sam_node": bool(seg.get("sam_node", False)),
+        "sam_min_area": float(seg.get("sam_min_area", 0.002)),
+        "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
+        "sam_max_boxes_manip": int(
+            seg.get("sam_max_boxes_manip", seg.get("sam_max_boxes", 6))
+        ),
+        "positive_groups": pos_idx or [0],
+        "negative_groups": neg_idx or [1],
+        "people_groups": people_idx or [2],
+        "sam_image_encoder": str(
+            seg.get(
+                "sam_image_encoder",
+                "/root/colcon_ws/src/perception_models/data/resnet18_image_encoder_512.engine",
+            )
+        ),
+        "sam_mask_decoder": str(
+            seg.get(
+                "sam_mask_decoder",
+                "/root/colcon_ws/src/perception_models/data/mobile_sam_mask_decoder_batched_512.engine",
+            )
+        ),
+        "sam_image_size": int(seg.get("sam_image_size", 512)),
+        "sam_traversability_topic": str(
+            seg.get("sam_traversability_topic", "/segmentation/refined_traversability")
+        ),
+        "sam_people_mask_topic": str(
+            seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")
+        ),
+        "sam_overlay": bool(seg.get("sam_overlay", False)),
+        "sam_overlay_topic": str(
+            seg.get("sam_overlay_topic", "/segmentation/refined_overlay")
+        ),
+        "yolo_owns_people": bool(seg.get("yolo_owns_people", False)),
+        "yolo_detections_topic": str(
+            seg.get("yolo_detections_topic", "/yolo_world/detections")
+        ),
+        "yolo_object_group_idx": seg.get("yolo_object_group_idx", None),
+    }
+
+    # If YOLO owns people and CLIPSeg has no people group, still reserve idx for SAM.
+    if cfg["yolo_owns_people"] and not people_idx:
+        people_idx = [max(len(group_names), 2)]
+        cfg["people_groups"] = people_idx
+
+    cfg_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_seg_", suffix=".json"
+    )
+    json.dump(cfg, cfg_tf, indent=2)
+    cfg_tf.close()
+    cfg_path = cfg_tf.name
+
+    share = get_package_share_directory("hound_core")
+    prefix = get_package_prefix("hound_core")
+    lib = os.path.join(prefix, "lib", "hound_core")
+    template = Path(share) / "dora" / "segmentation_dataflow.yml"
+    text = template.read_text(encoding="utf-8")
+    text = (
+        text.replace("__ENCODER_PY__", os.path.join(lib, "dora_clipseg_encoder"))
+        .replace("__REFINE_PY__", os.path.join(lib, "dora_seg_refine"))
+        .replace("__QUEUE__", str(queue_size))
+    )
+    df_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_seg_df_", suffix=".yml"
+    )
+    df_tf.write(text)
+    df_tf.close()
+    dataflow_path = df_tf.name
+
+    print(
+        f"[hound_core] segmentation ENABLED (dora streams): model={cfg['model_name']} "
+        f"res={cfg['input_res']} "
+        f"vision={'trt' if cfg.get('clipseg_vision_engine') else 'torch'} "
+        f"groups={group_names} "
+        f"({len(prompts_flat)} sub-prompts) sam={cfg['sam_node']} "
+        f"coarse_trav={cfg['publish_coarse_traversability']} "
+        f"streams={cfg['use_cuda_streams']} queue={queue_size}"
+    )
+    return [
+        ExecuteProcess(
+            cmd=["dora", "run", dataflow_path],
+            additional_env={"HOUND_SEG_CONFIG": cfg_path},
+            output="screen",
+            name="hound_seg_dora",
+        )
+    ]
+
+
+def _build_yolo_world_dora_actions(yw: dict) -> list:
+    """Start dora YOLO-World detector (stashed class embeddings + per-frame detect)."""
+    import json
+    import os
+    import tempfile
+
+    from ament_index_python.packages import get_package_prefix, get_package_share_directory
+
+    classes = [str(c) for c in (yw.get("classes") or ["person"])]
+    if bool(yw.get("ensure_person", True)) and "person" not in classes:
+        classes = ["person"] + classes
+
+    cfg = {
+        "model": str(yw.get("model", "yolov8s-world.pt")),
+        "classes": classes,
+        "ensure_person": bool(yw.get("ensure_person", True)),
+        "conf": float(yw.get("conf", 0.25)),
+        "imgsz": int(yw.get("imgsz", 640)),
+        "half": bool(yw.get("half", True)),
+        "device": str(yw.get("device", "cuda:0")),
+        "color_topic": str(yw.get("color_topic", "/camera/color/image_raw")),
+        "detections_topic": str(yw.get("detections_topic", "/yolo_world/detections")),
+        "viz_overlay": bool(yw.get("viz_overlay", False)),
+        "overlay_topic": str(yw.get("overlay_topic", "/yolo_world/overlay")),
+        "yolo_world_engine": str(yw.get("yolo_world_engine", "") or ""),
+        "profile": bool(yw.get("profile", True)),
+        "profile_every": int(yw.get("profile_every", 30)),
+    }
+
+    cfg_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_yolo_", suffix=".json"
+    )
+    json.dump(cfg, cfg_tf, indent=2)
+    cfg_tf.close()
+
+    share = get_package_share_directory("hound_core")
+    prefix = get_package_prefix("hound_core")
+    lib = os.path.join(prefix, "lib", "hound_core")
+    template = Path(share) / "dora" / "yolo_world_dataflow.yml"
+    text = template.read_text(encoding="utf-8").replace(
+        "__YOLO_PY__", os.path.join(lib, "dora_yolo_world")
+    )
+    df_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_yolo_df_", suffix=".yml"
+    )
+    df_tf.write(text)
+    df_tf.close()
+
+    print(
+        f"[hound_core] yolo_world ENABLED (dora): model={cfg['model']} "
+        f"classes={cfg['classes']} imgsz={cfg['imgsz']} half={cfg['half']}"
+    )
+    return [
+        ExecuteProcess(
+            cmd=["dora", "run", df_tf.name],
+            additional_env={"HOUND_YOLO_CONFIG": cfg_tf.name},
+            output="screen",
+            name="hound_yolo_dora",
+        )
+    ]
+
+
 def _build_camera_node(
     cam: dict,
     *,
@@ -115,6 +323,7 @@ def _build_realsense_cuvslam_node(
 
     Stream enable flags come from SSoT (``realsense_cuvslam`` / ``camera``).
     Launch does not override an explicit ``enable_depth: false``.
+    A/B: ``architecture: modular`` → realsense_cuvslam_modular_node.
     """
     camera_name = cam.get("camera_name", "camera")
     enable_color = bool(rsc.get("enable_color", cam.get("enable_color", True))) or need_color
@@ -159,112 +368,33 @@ def _build_realsense_cuvslam_node(
         "async_sba": bool(rsc.get("async_sba", True)),
         "slam_sync_mode": bool(rsc.get("slam_sync_mode", False)),
         "warmup_frames": int(rsc.get("warmup_frames", 60)),
+        "log_cuvslam_timing": bool(rsc.get("log_cuvslam_timing", False)),
+        "profile": bool(rsc.get("profile", False)),
     }
     # People-mask path may have set cam["align_depth"]=True; honor when depth is on.
     if enable_depth:
         params["align_depth"] = bool(cam.get("align_depth", params["align_depth"]))
+    arch = str(rsc.get("architecture", "legacy")).strip().lower()
+    exe = (
+        "realsense_cuvslam_modular_node"
+        if arch == "modular"
+        else "realsense_cuvslam_node"
+    )
     print(
-        f"[hound_core] realsense_cuvslam ENABLED: serial={params['serial_number']} "
+        f"[hound_core] realsense_cuvslam ENABLED ({arch}): serial={params['serial_number']} "
         f"IR {params['infra_width']}x{params['infra_height']}@{params['infra_fps']} "
         f"color={params['enable_color']}@{params['color_fps']}Hz pub={params['color_publish_fps']}Hz "
         f"depth={params['enable_depth']}@{params['depth_publish_fps']}Hz "
         f"align_depth={params['align_depth']} "
         f"visual_preset={params['visual_preset']} "
-        f"odom={params['odom_topic']}"
+        f"odom={params['odom_topic']} exe={exe}"
     )
     return Node(
         package="hound_core",
-        executable="realsense_cuvslam_node",
+        executable=exe,
         name="realsense_cuvslam_node",
         output="screen",
         parameters=[params],
-    )
-
-
-def _build_segmentation_node(seg: dict) -> Node:
-    _prompts_flat, _group_names, _group_ids = _flatten_prompts(
-        seg.get("prompts", ["a person"])
-    )
-    print(
-        f"[hound_core] segmentation ENABLED: model={seg.get('model', 'CIDAS/clipseg-rd16')} "
-        f"res={seg.get('input_res', 224)} rate={seg.get('rate_hz', 5.0)}Hz "
-        f"groups={_group_names} ({len(_prompts_flat)} sub-prompts)"
-    )
-    return Node(
-        package="hound_core",
-        executable="clipseg_mask_node",
-        name="clipseg_mask_node",
-        output="screen",
-        parameters=[{
-            "model_name": str(seg.get("model", "CIDAS/clipseg-rd16")),
-            "prompts": _prompts_flat,
-            "group_names": _group_names,
-            "group_ids": _group_ids,
-            "suppress_prompts": [str(x) for x in seg.get("suppress_prompts", [""])] or [""],
-            "aggregate": str(seg.get("aggregate", "max")),
-            "input_res": int(seg.get("input_res", 224)),
-            "rate_hz": float(seg.get("rate_hz", 5.0)),
-            "threshold": float(seg.get("threshold", 0.3)),
-            "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
-            "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
-            "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
-            "viz_overlay": bool(seg.get("viz_overlay", True)),
-            "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
-            "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
-            "profile": bool(seg.get("profile", False)),
-            "profile_every": int(seg.get("profile_every", 30)),
-        }],
-    )
-
-
-def _build_sam_refine_node(seg: dict) -> Node:
-    _, names, _ = _flatten_prompts(seg.get("prompts", ["a person"]))
-    pos_names = [str(x) for x in seg.get("positive_groups", [])]
-    neg_names = [str(x) for x in seg.get("negative_groups", [])]
-    pos_idx = [i for i, n in enumerate(names) if n in pos_names]
-    neg_idx = [i for i, n in enumerate(names) if n in neg_names]
-    people_idx = [i for i, n in enumerate(names) if n not in pos_names and n not in neg_names]
-    return Node(
-        package="hound_core",
-        executable="sam_refine_node",
-        name="sam_refine_node",
-        output="screen",
-        parameters=[{
-            "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
-            "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
-            "traversability_topic": str(
-                seg.get("sam_traversability_topic", "/segmentation/refined_traversability")
-            ),
-            "people_mask_topic": str(
-                seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")
-            ),
-            "overlay_topic": str(seg.get("sam_overlay_topic", "/segmentation/refined_overlay")),
-            "publish_overlay": bool(seg.get("sam_overlay", False)),
-            "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
-            "rate_hz": float(seg.get("sam_rate_hz", 15.0)),
-            "sam_min_area": float(seg.get("sam_min_area", 0.002)),
-            "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
-            "positive_groups": pos_idx or [0],
-            "negative_groups": neg_idx or [1],
-            "people_groups": people_idx or [2],
-            "sam_backend": str(seg.get("sam_backend", "nanosam")),
-            "sam_image_encoder": str(
-                seg.get(
-                    "sam_image_encoder",
-                    "/root/colcon_ws/src/nanosam/data/resnet18_image_encoder.engine",
-                )
-            ),
-            "sam_mask_decoder": str(
-                seg.get(
-                    "sam_mask_decoder",
-                    "/root/colcon_ws/src/nanosam/data/mobile_sam_mask_decoder.engine",
-                )
-            ),
-            "sam_variant": str(seg.get("sam_variant", "l0")),
-            "sam_ckpt": str(seg.get("sam_ckpt", "/root/colcon_ws/efficientvit_sam_l0.pt")),
-            "sam_compile": bool(seg.get("sam_compile", True)),
-            "sam_compile_mode": str(seg.get("sam_compile_mode", "reduce-overhead")),
-        }],
     )
 
 
@@ -341,6 +471,85 @@ def _build_low_level_control_node(ll: dict) -> Node:
     )
 
 
+def _build_fcu_control_node(fc: dict, ll: dict) -> Node:
+    """In-process MAVLink router + EKF + LL (exclusive FCU tty).
+
+    A/B: ``architecture: modular`` → hound_fcu_control_modular_node.
+    """
+    origin = fc.get("ext_nav_origin") or {}
+    fcu_params = fc.get("fcu_params") or {}
+    ll_cfg = fc.get("ll") or ll or {}
+    params = {
+        "fcu_url": str(fc.get("fcu_url", "/dev/ttyACM1:921600")),
+        "gcs_url": str(fc.get("gcs_url", "")),
+        "ros_publish_hz": float(fc.get("ros_publish_hz", 50.0)),
+        "gcs_block_stream_requests": bool(fc.get("gcs_block_stream_requests", True)),
+        "gcs_throttle_hz": float(fc.get("gcs_throttle_hz", 10.0)),
+        "gcs_throttle_msgids": list(fc.get("gcs_throttle_msgids", [27, 30, 31, 32, 33, 65])),
+        "send_vision_to_fcu": bool(fc.get("send_vision_to_fcu", True)),
+        "enable_ekf": bool(fc.get("enable_ekf", True)),
+        "enable_ll": bool(fc.get("enable_ll", True)),
+        "enable_baro": bool(fc.get("enable_baro", True)),
+        "enable_mag": bool(fc.get("enable_mag", True)),
+        "enable_gps": bool(fc.get("enable_gps", True)),
+        "fuse_gps": bool(fc.get("fuse_gps", False)),
+        "vision_odom_topic": str(
+            fc.get("vision_odom_topic", "/visual_slam/tracking/odometry")
+        ),
+        "ekf_odom_topic": str(fc.get("ekf_odom_topic", "ekf/odometry")),
+        "ekf_odom_hz": int(fc.get("ekf_odom_hz", 50)),
+        "mag_max_hz": float(fc.get("mag_max_hz", 20.0)),
+        "baro_max_hz": float(fc.get("baro_max_hz", 20.0)),
+        "ext_nav_align": str(fc.get("ext_nav_align", "gps_compass")),
+        "icp_origin_topic": str(
+            fc.get("icp_origin_topic", "/localization/icp_origin")
+        ),
+        "ekf_cpu": int(fc.get("ekf_cpu", 2)),
+        "ll_cpu": int(fc.get("ll_cpu", 3)),
+        "system_id": int(fc.get("system_id", 255)),
+        "component_id": int(fc.get("component_id", 191)),
+        "target_system": int(fc.get("target_system", 1)),
+        "target_component": int(fc.get("target_component", 1)),
+        "ext_nav_origin.lat": float(origin.get("lat", 37.8715)),
+        "ext_nav_origin.lon": float(origin.get("lon", -122.2730)),
+        "ext_nav_origin.hgt": float(origin.get("hgt", 0.0)),
+        "fcu_params.SR0_EXTRA1": int(fcu_params.get("SR0_EXTRA1", 200)),
+        "fcu_params.SR0_RAW_SENS": int(fcu_params.get("SR0_RAW_SENS", 200)),
+        "ll.erpm_gain": float(ll_cfg.get("erpm_gain", 3166.6)),
+        "ll.steering_max": float(ll_cfg.get("steering_max", 0.488)),
+        "ll.wheelbase": float(ll_cfg.get("wheelbase", 0.29)),
+        "ll.cg_height": float(ll_cfg.get("cg_height", 0.125)),
+        "ll.track_width": float(ll_cfg.get("track_width", 0.25)),
+        "ll.wheelspeed_max": float(ll_cfg.get("wheelspeed_max", 17.0)),
+        "ll.nominal_voltage": float(ll_cfg.get("nominal_voltage", 14.8)),
+        "ll.motor_kv": float(ll_cfg.get("motor_kv", 3930.0)),
+        "ll.speed_control_kp": float(ll_cfg.get("speed_control_kp", 1.0)),
+        "ll.speed_control_ki": float(ll_cfg.get("speed_control_ki", 1.0)),
+        "ll.safe_mode": bool(ll_cfg.get("safe_mode", True)),
+        "ll.accel_gain": float(ll_cfg.get("accel_gain", 1.0)),
+        "ll.roll_gain": float(ll_cfg.get("roll_gain", 0.33)),
+        "ll.steer_slack": float(ll_cfg.get("steer_slack", 0.4)),
+        "ll.LPF_tau": float(ll_cfg.get("LPF_tau", 0.2)),
+        "ll.throttle_delta": float(ll_cfg.get("throttle_delta", 0.02)),
+        "ll.liftoff_oversteer": bool(ll_cfg.get("liftoff_oversteer", True)),
+        "ll.control_dt": float(ll_cfg.get("control_dt", 0.02)),
+    }
+    arch = str(fc.get("architecture", "legacy")).strip().lower()
+    exe = (
+        "hound_fcu_control_modular_node"
+        if arch == "modular"
+        else "hound_fcu_control_node"
+    )
+    print(f"[hound_core] fcu_control architecture={arch} exe={exe}")
+    return Node(
+        package="hound_core",
+        executable=exe,
+        name="hound_fcu_control",
+        output="screen",
+        parameters=[params],
+    )
+
+
 def _build_mavros_actions(mav: dict) -> list:
     fcu_url = str(mav.get("fcu_url", "/dev/ttyACM0:115200"))
     gcs_url = str(mav.get("gcs_url", ""))
@@ -400,10 +609,12 @@ def generate_launch_description():
     ekf = ssot.get("ekf", {})
     nvblox = ssot.get("nvblox", {})
     mav = ssot.get("mavros", {})
+    fcu = ssot.get("fcu_control", {})
     vesc = ssot.get("vesc", {})
     ll = ssot.get("low_level_control", {})
     hal = ssot.get("hal_monitor", {})
     seg = ssot.get("segmentation", {})
+    yw = ssot.get("yolo_world", {})
     launch_cfg = ssot.get("launch", {})
     lidar = ssot.get("lidar", {})
 
@@ -414,11 +625,34 @@ def generate_launch_description():
     ekf_enabled = bool(ekf.get("enabled", False))
     nvblox_enabled = bool(nvblox.get("enabled", False))
     mavros_enabled = bool(mav.get("enabled", False))
+    fcu_control_enabled = bool(fcu.get("enabled", False))
     vesc_enabled = bool(vesc.get("enabled", False))
     ll_control_enabled = bool(ll.get("enabled", False))
     hal_enabled = bool(hal.get("enabled", False))
     seg_enabled = bool(seg.get("enabled", False))
+    yolo_enabled = bool(yw.get("enabled", False))
     lidar_enabled = bool(lidar.get("enabled", False))
+
+    # In-process FCU owner: exclusive tty — never also start mavros / standalone ekf+ll.
+    if fcu_control_enabled:
+        if mavros_enabled:
+            print(
+                "[hound_core] fcu_control.enabled: forcing mavros.enabled=false "
+                "(exclusive FCU ownership)"
+            )
+            mavros_enabled = False
+        if ekf_enabled and bool(fcu.get("enable_ekf", True)):
+            print(
+                "[hound_core] fcu_control.enabled: forcing ekf.enabled=false "
+                "(in-process EKF)"
+            )
+            ekf_enabled = False
+        if ll_control_enabled and bool(fcu.get("enable_ll", True)):
+            print(
+                "[hound_core] fcu_control.enabled: forcing low_level_control.enabled=false "
+                "(in-process LL)"
+            )
+            ll_control_enabled = False
 
     # C++ node owns USB exclusively — never also start stock camera / Isaac VSLAM.
     if rsc_enabled:
@@ -467,7 +701,11 @@ def generate_launch_description():
                 "(needs odom→camera_link TF)"
             )
 
-    need_color = seg_enabled or (nvblox_enabled and bool(nvblox.get("use_color", True)))
+    need_color = (
+        seg_enabled
+        or yolo_enabled
+        or (nvblox_enabled and bool(nvblox.get("use_color", True)))
+    )
     need_depth = nvblox_enabled and bool(nvblox.get("use_depth", False))
     if need_depth is False and nvblox_enabled and "use_depth" not in nvblox:
         # Legacy: if use_depth omitted, only require camera depth when no lidar.
@@ -477,7 +715,7 @@ def generate_launch_description():
         cam,
         vslam_enabled=vslam_enabled,
         nvblox_enabled=nvblox_enabled,
-        seg_enabled=seg_enabled,
+        seg_enabled=seg_enabled or yolo_enabled,
     )
     if camera_enabled:
         print(
@@ -490,21 +728,32 @@ def generate_launch_description():
     # 1) HAL
     hal_acts = []
     if hal_enabled:
-        if mavros_enabled or not (hal.get("mavros") or {}).get("monitor_enabled", True):
+        if (
+            mavros_enabled
+            or fcu_control_enabled
+            or not (hal.get("mavros") or {}).get("monitor_enabled", True)
+        ):
             hal_acts = [build_hal_monitor_node(hal, cam)]
         else:
             print(
-                "[hound_core] hal_monitor needs mavros or mavros.monitor_enabled=false"
+                "[hound_core] hal_monitor needs mavros/fcu_control or "
+                "mavros.monitor_enabled=false"
             )
     else:
         print("[hound_core] hal_monitor DISABLED")
 
-    # 2) mavros
-    mav_acts = _build_mavros_actions(mav) if mavros_enabled else []
-    if not mavros_enabled:
-        print("[hound_core] mavros DISABLED")
+    # 2) FCU path: in-process fcu_control XOR classic mavros
+    fcu_acts = []
+    mav_acts = []
+    if fcu_control_enabled:
+        fcu_acts = [_build_fcu_control_node(fcu, ll)]
+        print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
+    elif mavros_enabled:
+        mav_acts = _build_mavros_actions(mav)
+    else:
+        print("[hound_core] mavros DISABLED (fcu_control also off)")
 
-    # 3) vesc (+ low-level control once telemetry path exists)
+    # 3) vesc (+ low-level control once telemetry path exists — classic path only)
     vesc_acts = []
     if vesc_enabled:
         vesc_cfg = dict(vesc)
@@ -515,7 +764,11 @@ def generate_launch_description():
         if mavros_enabled and vesc_enabled:
             vesc_acts.append(_build_low_level_control_node(ll))
         else:
-            missing = [n for n, on in (("mavros", mavros_enabled), ("vesc", vesc_enabled)) if not on]
+            missing = [
+                n
+                for n, on in (("mavros", mavros_enabled), ("vesc", vesc_enabled))
+                if not on
+            ]
             print(
                 "[hound_core] low_level_control needs "
                 + " and ".join(missing)
@@ -546,18 +799,45 @@ def generate_launch_description():
     else:
         print("[hound_core] lidar DISABLED")
 
-    # 6) segmentation
+    # 6) segmentation (dora: encoder -> FiLM/SAM refine; ROS topics unchanged)
     seg_acts = []
     if seg_enabled:
         replay_mode = bool(seg.get("replay_mode", False))
         if has_camera_source or replay_mode:
-            seg_acts = [_build_segmentation_node(seg)]
-            if bool(seg.get("sam_node", False)):
-                seg_acts.append(_build_sam_refine_node(seg))
+            seg_for_dora = dict(seg)
+            if yolo_enabled:
+                # YOLO owns people: strip people prompts from CLIPSeg; NanoSAM
+                # gets person boxes from /yolo_world/detections.
+                prompts = dict(seg_for_dora.get("prompts") or {})
+                if isinstance(prompts, dict) and "people" in prompts:
+                    prompts = {k: v for k, v in prompts.items() if k != "people"}
+                    seg_for_dora["prompts"] = prompts
+                seg_for_dora["yolo_owns_people"] = True
+                seg_for_dora["yolo_detections_topic"] = str(
+                    yw.get("detections_topic", "/yolo_world/detections")
+                )
+                # Keep a people SAM channel index even if CLIPSeg has no people group.
+                # After strip: trav=0, nontrav=1 → people_idx=2.
+                print(
+                    "[hound_core] yolo_world.on → CLIPSeg people prompts removed; "
+                    "NanoSAM people from YOLO boxes"
+                )
+            seg_acts = _build_segmentation_dora_actions(seg_for_dora)
         else:
             print("[hound_core] segmentation skipped (no color source)")
     else:
         print("[hound_core] segmentation DISABLED")
+
+    # 6b) YOLO-World instance detector (dora; parallel to CLIPSeg)
+    yolo_acts = []
+    if yolo_enabled:
+        yw_replay = bool(yw.get("replay_mode", False))
+        if has_camera_source or yw_replay:
+            yolo_acts = _build_yolo_world_dora_actions(yw)
+        else:
+            print("[hound_core] yolo_world skipped (no color source)")
+    else:
+        print("[hound_core] yolo_world DISABLED")
 
     # 7) vslam (skipped when realsense_cuvslam owns tracking)
     vslam_acts = []
@@ -598,11 +878,13 @@ def generate_launch_description():
     )
     stages = [
         ("hal", hal_acts),
+        ("fcu_control", fcu_acts),
         ("mavros", mav_acts),
         ("vesc", vesc_acts),
         ("camera", cam_acts),
         ("lidar", lidar_acts),
         ("segmentation", seg_acts),
+        ("yolo_world", yolo_acts),
         ("vslam", vslam_acts),
         ("ekf", ekf_acts),
         ("nvblox", nvblox_acts),

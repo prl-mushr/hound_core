@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from hound_core.clipseg_mask_node import main
+from hound_core.dora_yolo_world import main
 
 if __name__ == "__main__":
     main()

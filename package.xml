@@ -21,6 +21,9 @@
   <depend>vesc_msgs</depend>
   <depend>ackermann_msgs</depend>
   <depend>realsense2</depend>
+  <depend>libmavconn</depend>
+  <depend>mavlink</depend>
+  <depend>tf2_geometry_msgs</depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
@@ -38,7 +41,8 @@
   <exec_depend>mavros_extras</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
-  <!-- CLIPSeg node also needs python3 torch + transformers, installed via pip -->
+  <!-- CLIPSeg / NanoSAM backends: perception_models; dora-rs + pyarrow via pip -->
+  <exec_depend>perception_models</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>

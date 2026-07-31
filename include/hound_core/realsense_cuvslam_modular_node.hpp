@@ -2,7 +2,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -12,7 +11,6 @@
 #include <vector>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
-#include <librealsense2/rs.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
@@ -20,23 +18,22 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 
-#include "cuvslam/cuvslam2.h"
-#include "hound_core/rs_pipeline.hpp"
+#include "hound_core/camera_device.hpp"
+#include "hound_core/realsense_camera_device.hpp"
+#include "hound_core/vslam_backend.hpp"
 
 namespace hound_core {
 
 /**
- * Single-process RealSense D455 owner: IR stereo → cuVSLAM (VO+SLAM),
- * optional color + depth publish at capped FPS. IR never goes to DDS.
- *
- * Stereo (IR ± depth) and RGB use separate sensors/queues so Track is not
- * blocked by color frameset sync. Align (if enabled) runs on the depth worker.
+ * Thin ROS node wiring CameraDevice + VslamBackend.
+ * Same params/topics/workers as legacy RealsenseCuvslamNode; IR never on DDS.
  */
-class RealsenseCuvslamNode : public rclcpp::Node
+class RealsenseCuvslamModularNode : public rclcpp::Node
 {
 public:
-  explicit RealsenseCuvslamNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
-  ~RealsenseCuvslamNode() override;
+  explicit RealsenseCuvslamModularNode(
+    const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  ~RealsenseCuvslamModularNode() override;
 
 private:
   struct LatestSlot {
@@ -47,20 +44,16 @@ private:
 
     bool has_pose{false};
     uint64_t pose_seq{0};
-    // ROS-time stamp for odom/TF (nvblox TF lookups + delay stats).
     rclcpp::Time ros_stamp{0, 0, RCL_ROS_TIME};
-    cuvslam::Pose pose{};
+    PoseOptical pose{};
 
-    // Latest stereo frameset (IR ± depth) for depth worker.
-    bool has_stereo{false};
-    rs2::frameset stereo_fs;
-    rclcpp::Time stereo_stamp{0, 0, RCL_ROS_TIME};
-
-    // Latest color frame (independent sensor); seq bumps only when kept for publish.
     bool has_color{false};
     uint64_t color_seq{0};
-    rs2::frame color_frame;
+    sensor_msgs::msg::Image color_image;
     rclcpp::Time color_stamp{0, 0, RCL_ROS_TIME};
+
+    bool has_stereo_for_depth{false};
+    rclcpp::Time stereo_stamp{0, 0, RCL_ROS_TIME};
   };
 
   void declare_params();
@@ -70,9 +63,9 @@ private:
   void odom_worker();
   void color_worker();
   void depth_worker();
-  void publish_odom_tf(const rclcpp::Time & stamp, const cuvslam::Pose & pose);
+  void publish_odom_tf(const rclcpp::Time & stamp, const PoseOptical & pose);
 
-  // Params (startup-only)
+  // Params (startup-only) — names match legacy realsense_cuvslam_node
   std::string serial_number_;
   std::string camera_name_;
   int infra_width_{640};
@@ -90,7 +83,7 @@ private:
   int depth_fps_{30};
   double depth_publish_fps_{15.0};
   int emitter_enabled_{0};
-  int visual_preset_{3};  // rs400: 3 = high_accuracy
+  int visual_preset_{3};
   double clip_distance_{0.0};
   std::string odom_topic_;
   std::string odom_frame_;
@@ -102,7 +95,6 @@ private:
   /** Off by default: SDK TIME_OF_ARRIVAL → Track + dequeue→Track handoff. */
   bool profile_{false};
 
-  // ROS pubs
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr color_info_pub_;
@@ -116,12 +108,8 @@ private:
   std::string color_optical_frame_;
   std::string depth_optical_frame_;
 
-  // RealSense / cuVSLAM (decoupled sensors)
-  RsSensorStreams rs_{};
-  std::unique_ptr<rs2::align> align_to_color_;
-  rs2::syncer depth_color_sync_{4};
-  std::unique_ptr<cuvslam::Odometry> odometry_;
-  std::unique_ptr<cuvslam::Slam> slam_;
+  std::unique_ptr<RealsenseCameraDevice> camera_;
+  std::unique_ptr<VslamBackend> vslam_;
 
   LatestSlot slot_;
   std::atomic<bool> running_{false};
@@ -130,7 +118,6 @@ private:
   std::thread color_thread_;
   std::thread depth_thread_;
 
-  // Finite-diff twist state (odom worker)
   std::array<double, 3> prev_t_flu_{{0, 0, 0}};
   rclcpp::Time prev_stamp_{0, 0, RCL_ROS_TIME};
 };

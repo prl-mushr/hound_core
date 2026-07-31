@@ -2,7 +2,7 @@
 
 Reads the bag with the pure-python `rosbags` library (no ROS 1 install needed),
 converts each message to its ROS 2 equivalent, and publishes it with the bag's
-original timing so downstream nodes (e.g. clipseg_mask_node, Isaac VSLAM) see a
+original timing so downstream nodes (e.g. dora segmentation, Isaac VSLAM) see a
 realistic stream for offline evaluation.
 
 Requires (pip, install inside your container):  pip install rosbags
@@ -155,11 +155,21 @@ def cmd_info(reader):
 def cmd_replay(reader, node, args):
     remap = {}
     for pair in args.remap or []:
-        if ":=" not in pair:
-            node.get_logger().warn(f"ignoring bad --remap '{pair}' (use old:=new)")
+        # Strip accidental shell quotes from callers that shlex.quote into $VAR.
+        pair = str(pair).strip().strip("'\"")
+        if ":=" in pair:
+            src_t, dst_t = pair.split(":=", 1)
+        elif "->" in pair:
+            src_t, dst_t = pair.split("->", 1)
+        else:
+            node.get_logger().warn(
+                f"ignoring bad --topic-remap '{pair}' (use old:=new or old->new)"
+            )
             continue
-        src_t, dst_t = pair.split(":=", 1)
+        src_t, dst_t = src_t.strip().strip("'\""), dst_t.strip().strip("'\"")
         remap[src_t] = dst_t
+    if remap:
+        node.get_logger().info(f"topic remaps: {remap}")
 
     wanted = set(args.topics) if args.topics else None
     conns = [c for c in reader.connections if wanted is None or c.topic in wanted]
@@ -178,7 +188,8 @@ def cmd_replay(reader, node, args):
             else:
                 qos = qos_profile_sensor_data if _is_sensor(msgtype) else 10
             pubs[topic] = node.create_publisher(cls, topic, qos)
-            node.get_logger().info(f"publishing {msgtype} on {topic}")
+            type_name = getattr(cls, "__name__", str(msgtype))
+            node.get_logger().info(f"publishing {type_name} on {topic}")
         return pubs[topic]
 
     bag_start = reader.start_time
@@ -219,13 +230,23 @@ def cmd_replay(reader, node, args):
             if args.retime and hasattr(ros_msg, "header"):
                 ros_msg.header.stamp = node.get_clock().now().to_msg()
 
+            # Override mislabeled encodings (e.g. CrowdBot color is RGB bytes
+            # but stamped bgr8 — cv_bridge would then swap channels wrongly).
+            force_enc = getattr(args, "force_image_encoding", None) or ""
+            if force_enc and hasattr(ros_msg, "encoding"):
+                if str(ros_msg.encoding) in ("bgr8", "rgb8", "bgra8", "rgba8", "8UC3"):
+                    if str(ros_msg.encoding) != force_enc:
+                        ros_msg.encoding = force_enc
+
             get_pub(out_topic, cls, conn.msgtype).publish(ros_msg)
             n_pub += 1
         return True
 
+    force_enc = getattr(args, "force_image_encoding", None) or ""
     node.get_logger().info(
         f"replaying {len(conns)} topic(s) at {args.rate}x"
         + (" (looping)" if args.loop else "")
+        + (f" force_image_encoding={force_enc}" if force_enc else "")
     )
     try:
         keep_going = run_once()
@@ -242,13 +263,31 @@ def main():
     parser.add_argument("bag", help="path to the .bag file (ROS 1) or bag directory (ROS 2)")
     parser.add_argument("--info", action="store_true", help="list topics/types/counts and exit")
     parser.add_argument("--topics", nargs="+", help="only replay these bag topics")
-    parser.add_argument("--remap", nargs="+", help="topic remaps, e.g. /old:=/new")
+    parser.add_argument(
+        "--topic-remap",
+        action="append",
+        default=[],
+        dest="remap",
+        help="topic remap OLD->NEW (repeatable). Prefer -> so rclpy won't eat :=",
+    )
+    parser.add_argument(
+        "--remap",
+        action="append",
+        default=[],
+        dest="remap_alias",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--rate", type=float, default=1.0, help="playback speed multiplier (default 1.0)")
     parser.add_argument("--loop", action="store_true", help="loop the bag forever")
     parser.add_argument("--start", type=float, default=0.0, help="start offset (s) into the bag")
     parser.add_argument("--duration", type=float, default=0.0, help="stop after this many seconds (0 = full bag)")
     parser.add_argument("--retime", action="store_true", help="stamp messages with current time instead of bag time")
     parser.add_argument("--decode-compressed", action="store_true", help="decode CompressedImage -> raw Image")
+    parser.add_argument(
+        "--force-image-encoding",
+        default="",
+        help="rewrite Image.encoding on publish (e.g. rgb8 when bag bytes are RGB but labeled bgr8)",
+    )
     parser.add_argument("--reliable", action="store_true", help="force RELIABLE QoS on all publishers")
     parser.add_argument("--best-effort", action="store_true", help="force BEST_EFFORT QoS on all publishers")
     args = parser.parse_args()
@@ -276,9 +315,13 @@ def main():
             cmd_info(reader)
             return
 
-        rclpy.init()
+        # Don't let rclpy treat our topic remaps (foo:=bar) as ROS remaps.
+        rclpy.init(args=[])
         node = rclpy.create_node("bag_replay")
         try:
+            # Merge --topic-remap and legacy --remap.
+            remaps = list(args.remap or []) + list(getattr(args, "remap_alias", None) or [])
+            args.remap = remaps or None
             cmd_replay(reader, node, args)
         finally:
             node.destroy_node()

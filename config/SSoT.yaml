@@ -47,6 +47,8 @@ camera:
 # longer gates Track. Keep color_fps at a supported RGB rate (often 30).
 realsense_cuvslam:
   enabled: true
+  # A/B: legacy = realsense_cuvslam_node; modular = realsense_cuvslam_modular_node
+  architecture: modular
   # IR stereo drives Track (odom/TF). Color/depth optional at lower publish FPS.
   infra_fps: 60
   color_fps: 30
@@ -66,10 +68,14 @@ realsense_cuvslam:
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
+  # Periodic Track timing INFO (every 2s). Off by default.
+  log_cuvslam_timing: false
+  # SDK TIME_OF_ARRIVAL → Track + dequeue→Track (every 2s). Off by default.
+  profile: false
 
 # Unitree UniLidar (serial). Staggered after camera in hound_core.launch.py.
 lidar:
-  enabled: true
+  enabled: false
   backend: unitree
   port: /dev/ttyUSB0
   rotate_yaw_bias: 0.0
@@ -155,7 +161,7 @@ ekf:
 # Geometry from depth and/or lidar; color paints the mesh. RGB+lidar (no depth) is OK.
 # People mask applies to the camera/depth path only (not lidar points).
 nvblox:
-  enabled: true
+  enabled: false
   use_depth: true
   use_color: true
   use_lidar: true
@@ -180,11 +186,13 @@ nvblox:
   # Map resolution: 0.05 = 5 cm, 0.10 = 10 cm.
   voxel_size: 0.05
   use_people_mask: false
-  people_mask_topic: "/segmentation/refined_people_mask"
+  # people_mask_topic: "/segmentation/refined_people_mask"
+  people_mask_topic: "/segmentation/coarse_people_mask"
   # Color layer for the mesh. Empty = camera RGB. Prefer SAM traversability
   # (rgb8: G=traversable, R=non-traversable, B=none) for semantic coloring.
   # color_topic: "/segmentation/refined_traversability"
-  color_topic: "/camera/color/image_raw"
+  color_topic: "/segmentation/coarse_traversability"
+  # color_topic: "/camera/color/image_raw"
   global_frame: odom
   map_clearing_frame_id: camera_link
   # Drop blocks farther than this from map_clearing_frame (Hz below).
@@ -213,8 +221,8 @@ nvblox:
   decay_tsdf_rate_hz: 0.0
 
 mavros:
-  # Master switch for the ArduPilot/MAVROS bring-up (wraps mavros' apm.launch).
-  # Required for realsense_vslam EKF (IMU from /mavros/imu/data).
+  # Classic multi-process MAVROS bring-up (apm.launch). Prefer fcu_control
+  # for in-process MAVLink+EKF+LL. Do not enable both (they fight for the tty).
   enabled: false
 
   # Connection to the flight controller.
@@ -247,6 +255,75 @@ mavros:
   fcu_params:
     SR0_EXTRA1: 200     # ATTITUDE stream (USB/SERIAL0), Hz
     SR0_RAW_SENS: 200   # RAW_IMU stream, Hz
+
+# In-process FCU owner: libmavconn + EKF + LL (RealSense-style threads).
+# When enabled, launch skips mavros / standalone ekf / standalone ll_control.
+fcu_control:
+  enabled: false
+  # A/B: legacy = hound_fcu_control_node; modular = hound_fcu_control_modular_node
+  architecture: legacy
+  fcu_url: "/dev/ttyACM1:921600"
+  # libmavconn URL: udp://[bind_host:port]@remote_host:port
+  # Example: listen on all ifaces, send to GCS at 10.18.249.206:14550
+  gcs_url: "udp://@10.18.249.206:14550"
+  ros_publish_hz: 50.0
+  gcs_block_stream_requests: true
+  gcs_throttle_hz: 5.0
+  gcs_throttle_msgids: [27, 30, 31, 32, 33, 65]
+  send_vision_to_fcu: false
+  enable_ekf: true
+  enable_ll: true
+  enable_baro: true
+  enable_mag: true
+  enable_gps: true
+  # Indoor: keep false so a junk 3D fix cannot pull EKF off the hardcoded origin.
+  # Set true outdoors when you want GPS position fusion into the filter.
+  fuse_gps: false
+  vision_odom_topic: /visual_slam/tracking/odometry
+  ekf_odom_topic: ekf/odometry
+  # Publish rate for ekf/odometry (IMU still runs ~200 Hz). One of: 200,100,50,25,10
+  ekf_odom_hz: 50
+  # Mag/baro often stream at IMU rate with stale repeats — accept at most this often.
+  mag_max_hz: 20.0
+  baro_max_hz: 20.0
+  # How map/ext-nav is oriented at boot:
+  #   gps_compass — hardcoded/GPS lat-lon origin + AHRS/mag yaw, then align VSLAM
+  #   lidar_icp  — wait for PoseStamped on icp_origin_topic, then align VSLAM
+  ext_nav_align: gps_compass
+  icp_origin_topic: /localization/icp_origin
+  ekf_cpu: 2
+  ll_cpu: 3
+  system_id: 255
+  component_id: 191
+  target_system: 1
+  target_component: 1
+  ext_nav_origin:
+    lat: 37.8715
+    lon: -122.2730
+    hgt: 0.0
+  fcu_params:
+    SR0_EXTRA1: 200
+    SR0_RAW_SENS: 200
+  # LL tuning mirrored from low_level_control when that node is skipped.
+  ll:
+    erpm_gain: 3166.6
+    steering_max: 0.488
+    wheelbase: 0.29
+    cg_height: 0.125
+    track_width: 0.25
+    wheelspeed_max: 17.0
+    nominal_voltage: 14.8
+    motor_kv: 3930.0
+    speed_control_kp: 1.0
+    speed_control_ki: 1.0
+    safe_mode: true
+    accel_gain: 1.0
+    roll_gain: 0.33
+    steer_slack: 0.4
+    LPF_tau: 0.2
+    throttle_delta: 0.02
+    liftoff_oversteer: true
+    control_dt: 0.02
 
 vesc:
   # Telemetry-only: vesc_driver polls the VESC and publishes /sensors/core.
@@ -356,10 +433,11 @@ hal_monitor:
     gpu_freq_path: ""
 
 segmentation:
-  # Master switch for the CLIPSeg people/dynamic mask node. When enabled, the
-  # camera's color stream is auto-enabled (CLIPSeg runs on RGB).
+  # Master switch for the dora pipeline: clipseg_encoder -> seg_refine.
+  # NanoSAM: FiLM decode ∥ SAM encode on two CUDA streams, then SAM decode.
+  # When enabled, the camera's color stream is auto-enabled (runs on RGB).
   # Required for stock nvblox people masking (refined_people_mask).
-  enabled: false
+  enabled: true
 
   # Offline-eval mode: run segmentation even when the camera is DISABLED, so it
   # consumes a color stream from elsewhere (e.g. `ros2 run hound_core bag_replay`
@@ -382,8 +460,8 @@ segmentation:
   #   non_traversable: ["tree", "wall", "pebbles", "fence", "vehicle"]
   #   people: ["person", "animal"]
   prompts:
-    traversable: ["floor", "carpet", "concrete"]
-    non_traversable: ["furniture", "wall", "pillar"]
+    traversable: ["floor", "carpet", "concrete", "traversable"]
+    non_traversable: ["furniture", "wall", "pillar", "non_traversable"]
     people: ["person", "car"]
 
   # Suppress prompts: their probability is subtracted from EVERY group (clamped at
@@ -398,15 +476,27 @@ segmentation:
   #   sum      -> grows with list size (clamped)
   aggregate: "max"
 
+  # Optional TensorRT vision tower. Empty = torch (+ compile_mode below).
+  # Build: bash ../perception_models/scripts/build_clipseg_vision_engine.sh
+  # Bench:  python3 ../perception_models/scripts/bench_clipseg.py --trt-engine <engine>
+  clipseg_vision_engine: "/root/colcon_ws/src/perception_models/data/clipseg_vision_rd16_224.engine"
+
   input_res: 224          # 224 (fast) or 352 (CLIPSeg native, sharper)
-  rate_hz: 10.0           # run on every Nth color frame; 2-10 Hz is plenty
   threshold: 0.3          # below this a pixel is label 0 (none/unknown)
   # NOTE: max-autotune's GEMM autotuning is disabled on Orin NX (too few SMs), so
   # it gives ~no gain over reduce-overhead but costs much longer startup.
+  # Ignored when clipseg_vision_engine is set.
   compile_mode: "reduce-overhead"   # "reduce-overhead" | "default" | "none"
 
   color_topic: "/camera/color/image_raw"
   labels_topic: "/segmentation/labels"        # mono8 category map (the product)
+
+  # FiLM coarse traversability (always available; works with sam_node false).
+  # rgb8 packing: R=non_traversable, G=traversable, B=neither. Same layout as
+  # refined_traversability so planners can swap topics.
+  publish_coarse_traversability: false
+  coarse_traversability_topic: "/segmentation/coarse_traversability"
+  coarse_people_mask_topic: "/segmentation/coarse_people_mask"
 
   # Debug overlay: category colors blended on the image (toggleable). Blend
   # strength: 0 = original only, 1 = seg colors only (further weighted per-pixel
@@ -415,43 +505,66 @@ segmentation:
   overlay_topic: "/segmentation/overlay"
   overlay_alpha: 0.5
 
-  # SAM refinement runs in the separate sam_refine_node (see below), which
-  # extracts coarse box prompts from the label map:
+  # SAM box extraction / dual decode (one encode, two mask decodes):
   #   sam_min_area: ignore blobs smaller than this (frac of image)
-  #   sam_max_boxes: cap boxes/frame to bound SAM latency
+  #   sam_max_boxes: nav budget (CLIPSeg trav/nontrav CCs)
+  #   sam_max_boxes_manip: manip budget (YOLO person/object boxes); independent
+  #     so people never starve traversability. Keep each <= TRT max_batch (16).
   sam_min_area: 0.002
   sam_max_boxes: 6
-  # SAM backend: "nanosam" (TensorRT engines) or "efficientvit" (PyTorch ckpt).
-  sam_backend: "nanosam"
-  sam_image_encoder: "/root/colcon_ws/src/nanosam/data/resnet18_image_encoder.engine"
-  sam_mask_decoder: "/root/colcon_ws/src/nanosam/data/mobile_sam_mask_decoder.engine"
-  # EfficientViT-SAM settings (only used when sam_backend: "efficientvit").
-  sam_variant: "l0"
-  sam_ckpt: "/root/colcon_ws/efficientvit_sam_l0.pt"
-  # torch.compile the SAM image encoder (fixed 512x512 input -> compile-friendly).
-  sam_compile: true
-  sam_compile_mode: "reduce-overhead"   # max-autotune GEMM is unsupported on Orin NX
+  sam_max_boxes_manip: 8
+  # NanoSAM TensorRT engines (see dora/SEGMENTATION.md). A/B 1024: swap paths + size.
+  sam_image_encoder: "/root/colcon_ws/src/perception_models/data/resnet18_image_encoder_512.engine"
+  sam_mask_decoder: "/root/colcon_ws/src/perception_models/data/mobile_sam_mask_decoder_batched_512.engine"
+  sam_image_size: 512
 
-  # Per-stage timing. Logs averaged ms/frame for clipseg / publish every
-  # profile_every frames. Use to find the bottleneck, then off.
-  profile: False
+  # Per-stage timing when profile=true (adds CUDA syncs; use topic hz for A/B).
+  #   clipseg_encoder: clipseg_encode, feature_xfer
+  #   seg_refine: film_decode, sam_encoder, sam_decoder, stream_wall, stream_overlap
+  pipeline_queue_size: 3
+  use_cuda_streams: true
+  profile: false
   profile_every: 30
 
-  # --- SAM refinement node (separate process) --------------------------------
-  # When sam_node is true, a standalone sam_refine_node consumes color + labels,
-  # extracts box prompts locally, refines them with NanoSAM / EfficientViT-SAM, and
-  # publishes a REFINED label map (same encoding as labels_topic) at its own
-  # rate. Decouples the fast coarse labels from the heavier SAM refinement.
-  # The SAM node publishes a refined traversability RGB (G=traversable,
-  # R=non-traversable, B=none) + a separate people mask. positive_groups /
-  # negative_groups name which prompt groups map to traversable / non-traversable;
-  # any remaining group (e.g. people) becomes the separate people mask.
-  sam_node: false
-  sam_rate_hz: 10.0
+  # --- SAM refinement (in-process on seg_refine; FiLM ∥ SAM-encode streams) -----
+  # positive_groups / negative_groups -> traversable / non-traversable; remaining
+  # groups (e.g. people) become the people mask.
+  # For nav-only: set sam_node false; use coarse_traversability.
+  # Keep true when you need NanoSAM refine for fine motion / manipulation.
+  sam_node: true
   positive_groups: ["traversable"]
   negative_groups: ["non_traversable"]
   sam_traversability_topic: "/segmentation/refined_traversability"
   sam_people_mask_topic: "/segmentation/refined_people_mask"
-  # Optional debug overlay (traversability colors blended on the image).
   sam_overlay: false
   sam_overlay_topic: "/segmentation/refined_overlay"
+
+# YOLO-World instance detector (dora). Same caching idea as CLIPSeg: stash class
+# text embeddings once, run vision/detect every frame. Feeds spencer_port persons
+# Instance detector (CLIPSeg-shaped: stash class text, hot path = detect).
+# When enabled: CLIPSeg people prompts are stripped; NanoSAM people from YOLO
+# boxes; spencer can use --vision yolo_dets on detections_topic.
+# and (later) NanoSAM object boxes. Independent of segmentation: enabled.
+yolo_world:
+  enabled: false
+  # Offline vocabulary (prompt-then-detect). person always kept for spencer_port.
+  # Prefer stashed weights after: export_yolo_world.py --format pt
+  # model: "/root/colcon_ws/src/perception_models/data/yolov8s-world_stashed.pt"
+  model: "yolov8s-world.pt"
+  classes: ["person", "chair", "door", "table", "bag"]
+  ensure_person: true
+  conf: 0.25
+  imgsz: 640
+  half: true
+  device: "cuda:0"
+  color_topic: "/camera/color/image_raw"
+  detections_topic: "/yolo_world/detections"
+  viz_overlay: false
+  overlay_topic: "/yolo_world/overlay"
+  # Empty: ONNX/TRT blocked (adaptive_max_pool2d). Use torch FP16.
+  yolo_world_engine: ""
+  profile: true
+  profile_every: 30
+  # Same camera gate as segmentation (or replay_mode).
+  replay_mode: false
+

@@ -20,8 +20,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "clipseg_mask_node = hound_core.clipseg_mask_node:main",
-            "sam_refine_node = hound_core.sam_refine_node:main",
+            "dora_clipseg_encoder = hound_core.dora_clipseg_encoder:main",
+            "dora_seg_refine = hound_core.dora_seg_refine:main",
             "bag_replay = hound_core.bag_replay:main",
             "wheel_odom_node = hound_core.wheel_odom_node:main",
             "hal_monitor_node = hound_core.hal_monitor_node:main",

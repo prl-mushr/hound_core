@@ -1,0 +1,61 @@
+#pragma once
+
+#include <atomic>
+#include <functional>
+#include <string>
+#include <thread>
+
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/logger.hpp>
+
+#include "hound_core/fcu_slots.hpp"
+
+namespace hound_core
+{
+
+/** IMU-paced estimator_ekf worker (logic copied from HoundFcuControlNode::ekf_worker). */
+class EkfRunner
+{
+public:
+  struct Config
+  {
+    bool enable_baro{true};
+    bool enable_mag{true};
+    bool enable_gps{true};
+    bool fuse_gps{false};
+    int ekf_odom_hz{50};
+    double mag_max_hz{20.0};
+    double baro_max_hz{20.0};
+    /** gps_compass | lidar_icp */
+    std::string ext_nav_align{"gps_compass"};
+    /** Used only for wait-for-ICP log messages. */
+    std::string icp_origin_topic{"/localization/icp_origin"};
+    double ext_nav_origin_lat{0.0};
+    double ext_nav_origin_lon{0.0};
+    double ext_nav_origin_hgt{0.0};
+    int ekf_cpu{2};
+  };
+
+  using OdomCallback = std::function<void (const nav_msgs::msg::Odometry &)>;
+
+  explicit EkfRunner(rclcpp::Logger logger);
+  ~EkfRunner();
+
+  EkfRunner(const EkfRunner &) = delete;
+  EkfRunner & operator=(const EkfRunner &) = delete;
+
+  void start(FcuBus & bus, const Config & config, OdomCallback odom_cb);
+  void stop();
+
+private:
+  void worker();
+
+  rclcpp::Logger logger_;
+  FcuBus * bus_{nullptr};
+  Config cfg_;
+  OdomCallback odom_cb_;
+  std::atomic<bool> running_{false};
+  std::thread thread_;
+};
+
+}  // namespace hound_core

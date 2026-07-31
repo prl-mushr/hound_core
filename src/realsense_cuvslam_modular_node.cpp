@@ -1,13 +1,14 @@
-#include "hound_core/realsense_cuvslam_node.hpp"
+#include "hound_core/realsense_cuvslam_modular_node.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <optional>
 
 #include <rclcpp/qos.hpp>
 
-#include "hound_core/camera_info_utils.hpp"
-#include "hound_core/cuvslam_tracker.hpp"
+#include "hound_core/cuvslam_backend.hpp"
 #include "hound_core/frame_conventions.hpp"
 
 namespace hound_core {
@@ -18,9 +19,18 @@ rclcpp::QoS sensor_qos(size_t depth = 5)
   return rclcpp::SensorDataQoS().keep_last(depth);
 }
 
+cuvslam::Pose pose_optical_to_cuvslam(const PoseOptical & p)
+{
+  cuvslam::Pose pose;
+  pose.translation = {p.translation[0], p.translation[1], p.translation[2]};
+  pose.rotation = {p.rotation[0], p.rotation[1], p.rotation[2], p.rotation[3]};
+  return pose;
+}
+
 }  // namespace
 
-RealsenseCuvslamNode::RealsenseCuvslamNode(const rclcpp::NodeOptions & options)
+RealsenseCuvslamModularNode::RealsenseCuvslamModularNode(
+  const rclcpp::NodeOptions & options)
 : Node("realsense_cuvslam_node", options)
 {
   declare_params();
@@ -80,7 +90,7 @@ RealsenseCuvslamNode::RealsenseCuvslamNode(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(
     get_logger(),
-    "realsense_cuvslam: serial=%s IR %dx%d@%d color=%s@%dHz(pub %.1f) "
+    "realsense_cuvslam (modular): serial=%s IR %dx%d@%d color=%s@%dHz(pub %.1f) "
     "depth=%s%s (decoupled sensors) odom=%s",
     serial_number_.c_str(), infra_width_, infra_height_, infra_fps_,
     enable_color_ ? "on" : "off", color_fps_, color_publish_fps_,
@@ -89,7 +99,7 @@ RealsenseCuvslamNode::RealsenseCuvslamNode(const rclcpp::NodeOptions & options)
     odom_topic_.c_str());
 }
 
-RealsenseCuvslamNode::~RealsenseCuvslamNode()
+RealsenseCuvslamModularNode::~RealsenseCuvslamModularNode()
 {
   running_ = false;
   slot_.cv_pose.notify_all();
@@ -107,10 +117,12 @@ RealsenseCuvslamNode::~RealsenseCuvslamNode()
   if (depth_thread_.joinable()) {
     depth_thread_.join();
   }
-  rs_.stop();
+  if (camera_) {
+    camera_->stop();
+  }
 }
 
-void RealsenseCuvslamNode::declare_params()
+void RealsenseCuvslamModularNode::declare_params()
 {
   serial_number_ = declare_parameter<std::string>("serial_number", "030422250301");
   camera_name_ = declare_parameter<std::string>("camera_name", "camera");
@@ -163,76 +175,54 @@ void RealsenseCuvslamNode::declare_params()
   }
 }
 
-void RealsenseCuvslamNode::start_pipeline()
+void RealsenseCuvslamModularNode::start_pipeline()
 {
-  try {
-    rs_ = open_rs_sensors(
-      serial_number_,
-      infra_width_, infra_height_, infra_fps_,
-      enable_color_, color_width_, color_height_, color_fps_,
-      enable_depth_, depth_width_, depth_height_, depth_fps_,
-      visual_preset_, emitter_enabled_, static_cast<float>(clip_distance_));
-  } catch (const rs2::error & e) {
-    throw std::runtime_error(
-      std::string("RealSense start failed (is another process using the camera?): ") +
-      e.what());
-  } catch (const std::exception & e) {
-    throw std::runtime_error(
-      std::string("RealSense start failed: ") + e.what());
-  }
+  CameraOpenConfig cfg;
+  cfg.serial = serial_number_;
+  cfg.infra_width = infra_width_;
+  cfg.infra_height = infra_height_;
+  cfg.infra_fps = infra_fps_;
+  cfg.enable_color = enable_color_;
+  cfg.color_width = color_width_;
+  cfg.color_height = color_height_;
+  cfg.color_fps = color_fps_;
+  cfg.enable_depth = enable_depth_;
+  cfg.align_depth = align_depth_;
+  cfg.depth_width = depth_width_;
+  cfg.depth_height = depth_height_;
+  cfg.depth_fps = depth_fps_;
+  cfg.visual_preset = visual_preset_;
+  cfg.emitter_enabled = emitter_enabled_;
+  cfg.clip_distance_m = static_cast<float>(clip_distance_);
 
-  const auto & profiles = rs_.profiles;
-  if (!profiles.infra1 || !profiles.infra2) {
-    throw std::runtime_error("IR stereo streams missing from RealSense profile");
-  }
-
-  const auto left_intr = profiles.infra1.get_intrinsics();
-  const auto right_intr = profiles.infra2.get_intrinsics();
-  const auto right_to_left = profiles.infra2.get_extrinsics_to(profiles.infra1);
-  auto rig = build_ir_stereo_rig(left_intr, right_intr, right_to_left);
+  camera_ = std::make_unique<RealsenseCameraDevice>();
+  camera_->open(cfg);
 
   if (enable_color_) {
-    color_camera_info_ = camera_info_from_intrinsics(
-      profiles.color.get_intrinsics(), color_optical_frame_);
+    color_camera_info_ = camera_->color_camera_info();
+    color_camera_info_.header.frame_id = color_optical_frame_;
   }
   if (enable_depth_) {
-    if (align_depth_) {
-      depth_camera_info_ = camera_info_from_intrinsics(
-        profiles.color.get_intrinsics(), depth_optical_frame_);
-      align_to_color_ = std::make_unique<rs2::align>(RS2_STREAM_COLOR);
-    } else {
-      depth_camera_info_ = camera_info_from_intrinsics(
-        profiles.depth.get_intrinsics(), depth_optical_frame_);
-    }
+    depth_camera_info_ = camera_->depth_camera_info();
+    depth_camera_info_.header.frame_id = depth_optical_frame_;
   }
 
-  cuvslam::WarmUpGPU();
-
-  cuvslam::Odometry::Config odom_cfg = cuvslam::Odometry::GetDefaultConfig();
-  odom_cfg.odometry_mode = cuvslam::Odometry::OdometryMode::Multicamera;
-  odom_cfg.async_sba = async_sba_;
-  odom_cfg.rectified_stereo_camera = true;
-  odom_cfg.enable_observations_export = true;
-  odom_cfg.enable_landmarks_export = true;
-  odom_cfg.enable_final_landmarks_export = false;
-  odometry_ = std::make_unique<cuvslam::Odometry>(rig, odom_cfg);
-
-  cuvslam::Slam::Config slam_cfg = cuvslam::Slam::GetDefaultConfig();
-  slam_cfg.sync_mode = slam_sync_mode_;
-  slam_cfg.use_gpu = true;
-  slam_ = std::make_unique<cuvslam::Slam>(
-    rig, odometry_->GetPrimaryCameras(), slam_cfg);
+  VslamConfig vcfg;
+  vcfg.async_sba = async_sba_;
+  vcfg.slam_sync_mode = slam_sync_mode_;
+  vslam_ = std::make_unique<CuvslamBackend>();
+  vslam_->configure(camera_->stereo_calibration(), vcfg);
 
   RCLCPP_INFO(
     get_logger(),
-    "cuVSLAM ready (async_sba=%s slam_sync=%s; IR queue decoupled from color)",
+    "cuVSLAM ready (modular; async_sba=%s slam_sync=%s; IR queue decoupled from color)",
     async_sba_ ? "true" : "false",
     slam_sync_mode_ ? "true" : "false");
 }
 
-void RealsenseCuvslamNode::publish_static_tfs()
+void RealsenseCuvslamModularNode::publish_static_tfs()
 {
-  auto tfs = build_static_camera_tfs(camera_name_, rs_.profiles);
+  auto tfs = camera_->static_camera_tfs(camera_name_);
   const auto now = get_clock()->now();
   for (auto & tf : tfs) {
     tf.header.stamp = now;
@@ -241,7 +231,7 @@ void RealsenseCuvslamNode::publish_static_tfs()
   RCLCPP_INFO(get_logger(), "published %zu static camera TFs", tfs.size());
 }
 
-void RealsenseCuvslamNode::capture_loop()
+void RealsenseCuvslamModularNode::capture_loop()
 {
   using clock = std::chrono::steady_clock;
   int frame_id = 0;
@@ -250,16 +240,13 @@ void RealsenseCuvslamNode::capture_loop()
   constexpr int64_t kJitterWarnNs = 75LL * 1000000LL;
 
   double sum_vo_ms = 0.0;
-  double sum_slam_ms = 0.0;
   double sum_iter_ms = 0.0;
   double max_vo_ms = 0.0;
-  double max_slam_ms = 0.0;
   double max_iter_ms = 0.0;
   int n_track = 0;
   int n_skip_ts = 0;
   int n_ir_frames = 0;
   int color_raw_count = 0;
-  // Publish every Nth sensor frame: e.g. 30 Hz raw / 15 Hz pub → stride 2.
   const int color_stride = (enable_color_ && color_publish_fps_ > 0.0)
     ? std::max(
       1,
@@ -294,18 +281,30 @@ void RealsenseCuvslamNode::capture_loop()
   while (running_ && rclcpp::ok()) {
     const auto iter_t0 = clock::now();
 
-    // Drain color queue; keep every Nth frame for publish (does not gate Track).
+    // Drain color; keep every Nth for publish (does not gate Track).
     if (enable_color_) {
-      rs2::frame color_f;
-      while (rs_.color_queue.poll_for_frame(&color_f)) {
+      ColorFrame color_f;
+      while (camera_->poll_color(color_f)) {
         ++color_raw_count;
         if ((color_raw_count % color_stride) != 0) {
           continue;
         }
         const auto stamp = this->get_clock()->now();
+        sensor_msgs::msg::Image img;
+        img.header.stamp = stamp;
+        img.header.frame_id = color_optical_frame_;
+        img.height = static_cast<uint32_t>(color_f.height);
+        img.width = static_cast<uint32_t>(color_f.width);
+        img.encoding = "rgb8";
+        img.is_bigendian = 0;
+        img.step = static_cast<uint32_t>(
+          color_f.stride > 0 ? color_f.stride : color_f.width * 3);
+        const size_t nbytes = static_cast<size_t>(img.step) * img.height;
+        img.data.resize(nbytes);
+        std::memcpy(img.data.data(), color_f.pixels, nbytes);
         {
           std::lock_guard<std::mutex> lock(slot_.mu);
-          slot_.color_frame = color_f;
+          slot_.color_image = std::move(img);
           slot_.color_stamp = stamp;
           slot_.has_color = true;
           ++slot_.color_seq;
@@ -314,41 +313,18 @@ void RealsenseCuvslamNode::capture_loop()
       }
     }
 
-    rs2::frameset frames;
-    if (!rs_.ir_sync.try_wait_for_frames(&frames, 1000)) {
-      continue;
-    }
-    if (!frames) {
+    StereoFrame stereo;
+    if (!camera_->wait_stereo(stereo, 1000)) {
       continue;
     }
     const auto deq_t0 = profile ? clock::now() : clock::time_point{};
-
-    auto left = frames.get_infrared_frame(1);
-    auto right = frames.get_infrared_frame(2);
-    if (!left || !right) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "IR syncer frameset missing left/right (size=%zu)", frames.size());
-      continue;
-    }
 
     ++frame_id;
     if (log_timing) {
       ++n_ir_frames;
     }
 
-    int64_t timestamp_ns = 0;
-    if (left.supports_frame_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP)) {
-      timestamp_ns =
-        left.get_frame_metadata(RS2_FRAME_METADATA_FRAME_TIMESTAMP) * 1000LL;
-    } else if (left.supports_frame_metadata(RS2_FRAME_METADATA_SENSOR_TIMESTAMP)) {
-      timestamp_ns =
-        left.get_frame_metadata(RS2_FRAME_METADATA_SENSOR_TIMESTAMP) * 1000LL;
-    } else {
-      timestamp_ns = static_cast<int64_t>(frame_id) *
-        (1000000000LL / std::max(1, infra_fps_));
-    }
-    const int64_t arrival_host_ns = profile ? rs_frame_time_of_arrival_ns(left) : 0;
+    const int64_t timestamp_ns = stereo.timestamp_ns;
 
     if (prev_ts >= 0 && (timestamp_ns - prev_ts) > kJitterWarnNs) {
       RCLCPP_WARN_THROTTLE(
@@ -361,9 +337,8 @@ void RealsenseCuvslamNode::capture_loop()
       continue;
     }
 
-    // One glitch/wrap (often near uint32 us * 1000) must not poison Track forever.
-    constexpr int64_t kTsResetBackNs = 1000000000LL;   // 1 s backwards
-    constexpr int64_t kTsRejectFwdNs = 10000000000LL;  // 10 s forwards
+    constexpr int64_t kTsResetBackNs = 1000000000LL;
+    constexpr int64_t kTsRejectFwdNs = 10000000000LL;
     if (last_track_ts > 0 && timestamp_ns + kTsResetBackNs < last_track_ts) {
       RCLCPP_WARN(
         get_logger(),
@@ -392,37 +367,29 @@ void RealsenseCuvslamNode::capture_loop()
       continue;
     }
 
-    cuvslam::Odometry::ImageSet images(2);
-    fill_mono_image(
-      images[0], left.get_data(), left.get_width(), left.get_height(),
-      timestamp_ns, 0);
-    fill_mono_image(
-      images[1], right.get_data(), right.get_width(), right.get_height(),
-      timestamp_ns, 1);
-
-    cuvslam::PoseEstimate estimate;
     const auto vo_t0 = log_timing ? clock::now() : clock::time_point{};
     double sdk_to_track_ms = 0.0;
     double deq_to_track_ms = 0.0;
     if (profile) {
       deq_to_track_ms =
         std::chrono::duration<double, std::milli>(clock::now() - deq_t0).count();
-      if (arrival_host_ns > 0) {
+      if (stereo.arrival_host_ns > 0) {
         const int64_t now_host_ns =
           std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count();
         sdk_to_track_ms =
-          static_cast<double>(now_host_ns - arrival_host_ns) * 1e-6;
+          static_cast<double>(now_host_ns - stereo.arrival_host_ns) * 1e-6;
       } else {
         ++n_arrival_missing;
       }
     }
+    std::optional<PoseOptical> pose_opt;
     try {
-      estimate = odometry_->Track(images);
+      pose_opt = vslam_->track(stereo);
     } catch (const std::exception & e) {
       RCLCPP_ERROR_THROTTLE(
-        get_logger(), *get_clock(), 2000, "Odometry::Track failed: %s", e.what());
+        get_logger(), *get_clock(), 2000, "VslamBackend::track failed: %s", e.what());
       continue;
     }
     const double vo_ms = log_timing
@@ -430,27 +397,10 @@ void RealsenseCuvslamNode::capture_loop()
       : 0.0;
     last_track_ts = timestamp_ns;
 
-    if (!estimate.world_from_rig.has_value()) {
+    if (!pose_opt.has_value()) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000, "pose tracking not valid");
       continue;
-    }
-
-    cuvslam::Pose pose = estimate.world_from_rig->pose;
-    double slam_ms = 0.0;
-    try {
-      cuvslam::Odometry::State state;
-      odometry_->GetState(state);
-      const auto slam_t0 = log_timing ? clock::now() : clock::time_point{};
-      pose = slam_->Track(state);
-      if (log_timing) {
-        slam_ms =
-          std::chrono::duration<double, std::milli>(clock::now() - slam_t0).count();
-      }
-    } catch (const std::exception & e) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "Slam::Track failed, using VO pose: %s", e.what());
     }
 
     if (profile) {
@@ -465,10 +415,8 @@ void RealsenseCuvslamNode::capture_loop()
       const double iter_ms =
         std::chrono::duration<double, std::milli>(clock::now() - iter_t0).count();
       sum_vo_ms += vo_ms;
-      sum_slam_ms += slam_ms;
       sum_iter_ms += iter_ms;
       max_vo_ms = std::max(max_vo_ms, vo_ms);
-      max_slam_ms = std::max(max_slam_ms, slam_ms);
       max_iter_ms = std::max(max_iter_ms, iter_ms);
       ++n_track;
 
@@ -479,16 +427,15 @@ void RealsenseCuvslamNode::capture_loop()
         const double inv_n = n_track > 0 ? 1.0 / static_cast<double>(n_track) : 0.0;
         RCLCPP_INFO(
           get_logger(),
-          "cuVSLAM timing (%.1fs): vo mean/max=%.2f/%.2f ms  "
-          "slam mean/max=%.2f/%.2f ms  iter mean/max=%.2f/%.2f ms  "
+          "cuVSLAM timing (%.1fs): track mean/max=%.2f/%.2f ms  "
+          "iter mean/max=%.2f/%.2f ms  "
           "track=%.1f Hz  ir_frames=%.1f Hz  skip_ts=%d/%d",
           dt,
           sum_vo_ms * inv_n, max_vo_ms,
-          sum_slam_ms * inv_n, max_slam_ms,
           sum_iter_ms * inv_n, max_iter_ms,
           n_track / dt, n_ir_frames / dt, n_skip_ts, n_ir_frames);
-        sum_vo_ms = sum_slam_ms = sum_iter_ms = 0.0;
-        max_vo_ms = max_slam_ms = max_iter_ms = 0.0;
+        sum_vo_ms = sum_iter_ms = 0.0;
+        max_vo_ms = max_iter_ms = 0.0;
         n_track = n_skip_ts = n_ir_frames = 0;
         stats_t0 = stats_now;
       }
@@ -519,14 +466,13 @@ void RealsenseCuvslamNode::capture_loop()
 
     {
       std::lock_guard<std::mutex> lock(slot_.mu);
-      slot_.pose = pose;
+      slot_.pose = *pose_opt;
       slot_.ros_stamp = this->get_clock()->now();
       slot_.has_pose = true;
       ++slot_.pose_seq;
       if (enable_depth_) {
-        slot_.stereo_fs = frames;
         slot_.stereo_stamp = slot_.ros_stamp;
-        slot_.has_stereo = true;
+        slot_.has_stereo_for_depth = true;
       }
     }
     slot_.cv_pose.notify_one();
@@ -536,9 +482,10 @@ void RealsenseCuvslamNode::capture_loop()
   }
 }
 
-void RealsenseCuvslamNode::publish_odom_tf(
-  const rclcpp::Time & stamp, const cuvslam::Pose & pose)
+void RealsenseCuvslamModularNode::publish_odom_tf(
+  const rclcpp::Time & stamp, const PoseOptical & pose_opt)
 {
+  const cuvslam::Pose pose = pose_optical_to_cuvslam(pose_opt);
   std::array<double, 3> t{};
   std::array<double, 4> q{};
   optical_pose_to_ros_flu(pose, t, q);
@@ -581,11 +528,11 @@ void RealsenseCuvslamNode::publish_odom_tf(
   tf_broadcaster_->sendTransform(tf);
 }
 
-void RealsenseCuvslamNode::odom_worker()
+void RealsenseCuvslamModularNode::odom_worker()
 {
   uint64_t last_seq = 0;
   while (running_ && rclcpp::ok()) {
-    cuvslam::Pose pose;
+    PoseOptical pose;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
     {
       std::unique_lock<std::mutex> lock(slot_.mu);
@@ -606,7 +553,7 @@ void RealsenseCuvslamNode::odom_worker()
   }
 }
 
-void RealsenseCuvslamNode::color_worker()
+void RealsenseCuvslamModularNode::color_worker()
 {
   if (color_publish_fps_ <= 0.0) {
     return;
@@ -614,8 +561,7 @@ void RealsenseCuvslamNode::color_worker()
   uint64_t last_seq = 0;
 
   while (running_ && rclcpp::ok()) {
-    rs2::frame color_f;
-    rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    sensor_msgs::msg::Image img;
     {
       std::unique_lock<std::mutex> lock(slot_.mu);
       slot_.cv_color.wait_for(lock, std::chrono::milliseconds(100), [&] {
@@ -628,25 +574,8 @@ void RealsenseCuvslamNode::color_worker()
         continue;
       }
       last_seq = slot_.color_seq;
-      color_f = slot_.color_frame;
-      stamp = slot_.color_stamp;
+      img = slot_.color_image;
     }
-
-    if (!color_f) {
-      continue;
-    }
-    auto cf = color_f.as<rs2::video_frame>();
-    sensor_msgs::msg::Image img;
-    img.header.stamp = stamp;
-    img.header.frame_id = color_optical_frame_;
-    img.height = static_cast<uint32_t>(cf.get_height());
-    img.width = static_cast<uint32_t>(cf.get_width());
-    img.encoding = "rgb8";
-    img.is_bigendian = 0;
-    img.step = static_cast<uint32_t>(cf.get_width() * 3);
-    const size_t nbytes = static_cast<size_t>(img.step) * img.height;
-    img.data.resize(nbytes);
-    std::memcpy(img.data.data(), cf.get_data(), nbytes);
 
     auto info = color_camera_info_;
     info.header = img.header;
@@ -655,7 +584,7 @@ void RealsenseCuvslamNode::color_worker()
   }
 }
 
-void RealsenseCuvslamNode::depth_worker()
+void RealsenseCuvslamModularNode::depth_worker()
 {
   using clock = std::chrono::steady_clock;
   if (depth_publish_fps_ <= 0.0) {
@@ -669,7 +598,7 @@ void RealsenseCuvslamNode::depth_worker()
     {
       std::unique_lock<std::mutex> lock(slot_.mu);
       slot_.cv_depth.wait_until(lock, next, [&] {
-        return !running_ || (slot_.has_stereo && clock::now() >= next);
+        return !running_ || (slot_.has_stereo_for_depth && clock::now() >= next);
       });
       if (!running_) {
         break;
@@ -681,74 +610,40 @@ void RealsenseCuvslamNode::depth_worker()
       continue;
     }
 
-    rs2::frameset stereo_fs;
-    rs2::frame color_f;
-    bool have_color = false;
     rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
     {
       std::lock_guard<std::mutex> lock(slot_.mu);
-      if (!slot_.has_stereo) {
+      if (!slot_.has_stereo_for_depth) {
         continue;
       }
-      stereo_fs = slot_.stereo_fs;
       stamp = slot_.stereo_stamp;
-      if (align_depth_ && slot_.has_color) {
-        color_f = slot_.color_frame;
-        have_color = true;
-      }
     }
 
-    rs2::frameset depth_fs = stereo_fs;
-    if (align_depth_ && align_to_color_) {
-      if (!have_color) {
-        do {
-          next += period;
-        } while (next <= clock::now());
-        continue;
-      }
-      try {
-        // Syncer matches depth+color by timestamp without gating the IR Track path.
-        depth_color_sync_(stereo_fs);
-        depth_color_sync_(color_f);
-        rs2::frameset synced = depth_color_sync_.wait_for_frames(50);
-        if (synced) {
-          depth_fs = align_to_color_->process(synced);
-        } else {
-          do {
-            next += period;
-          } while (next <= clock::now());
-          continue;
-        }
-      } catch (const rs2::error & e) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 2000, "depth align failed: %s", e.what());
-        do {
-          next += period;
-        } while (next <= clock::now());
-        continue;
-      }
+    DepthFrame depth_f;
+    if (!camera_->poll_depth(depth_f)) {
+      do {
+        next += period;
+      } while (next <= clock::now());
+      continue;
     }
 
-    auto depth_frame = depth_fs.get_depth_frame();
-    if (depth_frame) {
-      auto df = depth_frame.as<rs2::depth_frame>();
-      sensor_msgs::msg::Image img;
-      img.header.stamp = stamp;
-      img.header.frame_id = depth_optical_frame_;
-      img.height = static_cast<uint32_t>(df.get_height());
-      img.width = static_cast<uint32_t>(df.get_width());
-      img.encoding = "16UC1";
-      img.is_bigendian = 0;
-      img.step = static_cast<uint32_t>(df.get_width() * 2);
-      const size_t nbytes = static_cast<size_t>(img.step) * img.height;
-      img.data.resize(nbytes);
-      std::memcpy(img.data.data(), df.get_data(), nbytes);
+    sensor_msgs::msg::Image img;
+    img.header.stamp = stamp;
+    img.header.frame_id = depth_optical_frame_;
+    img.height = static_cast<uint32_t>(depth_f.height);
+    img.width = static_cast<uint32_t>(depth_f.width);
+    img.encoding = "16UC1";
+    img.is_bigendian = 0;
+    img.step = static_cast<uint32_t>(
+      depth_f.stride > 0 ? depth_f.stride : depth_f.width * 2);
+    const size_t nbytes = static_cast<size_t>(img.step) * img.height;
+    img.data.resize(nbytes);
+    std::memcpy(img.data.data(), depth_f.pixels, nbytes);
 
-      auto info = depth_camera_info_;
-      info.header = img.header;
-      depth_pub_->publish(img);
-      depth_info_pub_->publish(info);
-    }
+    auto info = depth_camera_info_;
+    info.header = img.header;
+    depth_pub_->publish(img);
+    depth_info_pub_->publish(info);
 
     now = clock::now();
     do {
@@ -758,18 +653,3 @@ void RealsenseCuvslamNode::depth_worker()
 }
 
 }  // namespace hound_core
-
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  try {
-    auto node = std::make_shared<hound_core::RealsenseCuvslamNode>();
-    rclcpp::spin(node);
-  } catch (const std::exception & e) {
-    fprintf(stderr, "[realsense_cuvslam_node] fatal: %s\n", e.what());
-    rclcpp::shutdown();
-    return 1;
-  }
-  rclcpp::shutdown();
-  return 0;
-}

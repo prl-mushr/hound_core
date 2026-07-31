@@ -1,0 +1,13 @@
+# Dora dataflow: YOLO-World instance detector (parallel to clipseg_encoder).
+#
+#   yolo_world ──detections──► (future: sam refine / spencer)
+#
+# Placeholders: __YOLO_PY__
+
+nodes:
+  - id: yolo_world
+    path: __YOLO_PY__
+    inputs:
+      tick: dora/timer/millis/5
+    outputs:
+      - detections
