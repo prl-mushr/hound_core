@@ -145,6 +145,30 @@ struct ManualControlCmd
   uint16_t buttons{0};
 };
 
+/** MAVLink RC_CHANNELS_OVERRIDE payload (unused channels = 65535 = release). */
+struct RcOverrideCmd
+{
+  static constexpr uint16_t kRelease = 65535;
+  static constexpr uint16_t kNeutral = 1500;
+  std::array<uint16_t, 18> channels{};
+
+  static RcOverrideCmd all_release()
+  {
+    RcOverrideCmd cmd;
+    cmd.channels.fill(kRelease);
+    return cmd;
+  }
+
+  static RcOverrideCmd neutral_on(uint8_t ch_a, uint8_t ch_b, uint8_t ch_c)
+  {
+    RcOverrideCmd cmd = all_release();
+    if (ch_a < 18) {cmd.channels[ch_a] = kNeutral;}
+    if (ch_b < 18) {cmd.channels[ch_b] = kNeutral;}
+    if (ch_c < 18) {cmd.channels[ch_c] = kNeutral;}
+    return cmd;
+  }
+};
+
 struct FcuBus
 {
   LatestSlot<ImuSample> imu;

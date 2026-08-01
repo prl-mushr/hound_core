@@ -1,0 +1,83 @@
+# =============================================================================
+# EXAMPLE SSoT for the holonomic (mecanum) robot.
+# Copy to config/SSoT.yaml on that robot's workspace (do not merge into the
+# Ackermann car's live SSoT). Schema of fcu_control.ll.* matches HolonomicLlController.
+# =============================================================================
+
+fcu_control:
+  enabled: true
+  ll_controller: holonomic
+  fcu_url: "/dev/ttyACM0:921600"
+  gcs_url: ""
+  ros_publish_hz: 50.0
+  gcs_block_stream_requests: true
+  gcs_throttle_hz: 5.0
+  gcs_throttle_msgids: [27, 30, 31, 32, 33, 65]
+  send_vision_to_fcu: false
+  enable_ekf: true
+  enable_ll: true
+  enable_baro: true
+  enable_mag: true
+  enable_gps: true
+  fuse_gps: false
+  vision_odom_topic: /visual_slam/tracking/odometry
+  ekf_odom_topic: ekf/odometry
+  ekf_odom_hz: 50
+  mag_max_hz: 20.0
+  baro_max_hz: 20.0
+  ext_nav_align: gps_compass
+  ekf_cpu: 2
+  ll_cpu: 3
+  system_id: 255
+  component_id: 191
+  target_system: 1
+  target_component: 1
+  ext_nav_origin:
+    lat: 37.8715
+    lon: -122.2730
+    hgt: 0.0
+  fcu_params:
+    SR0_EXTRA1: 200
+    SR0_RAW_SENS: 200
+  ll:
+    # Output RC override channels (0-indexed) — matches RCMAP_THROTTLE/ROLL/YAW
+    output_ch_fwd: 8
+    output_ch_lat: 9
+    output_ch_turn: 10
+    # RC input decode (mirrors former teleop_interface.controller_interface_node)
+    input_ch_mode: 4
+    input_ch_fwd: 1
+    input_ch_lat: 0
+    input_ch_yaw: 3
+    mode_pwm_manual_threshold: 1300
+    mode_pwm_auto_threshold: 1700
+    input_deadband: 0.05
+    vel_max_linear: 1.0
+    vel_max_angular: 1.57
+    cmd_vel_timeout: 0.5
+    mode_hold_custom_mode: 4   # ArduPilot Rover HOLD
+    use_odom_feedback: false   # feedforward-only x/y until odom is wired
+    pid_vel_x:
+      max_output: 1.0
+      k_p: 0.0
+      k_i: 0.0
+      k_d: 0.0
+      k_ff: 1.0
+    pid_vel_y:
+      max_output: 1.0
+      k_p: 0.0
+      k_i: 0.0
+      k_d: 0.0
+      k_ff: 1.0
+    pid_yaw_rate:
+      max_output: 1.57
+      k_p: 0.15
+      k_i: 0.0
+      k_d: 0.0
+      k_ff: 0.7
+
+mavros:
+  enabled: false
+
+vesc:
+  enabled: false

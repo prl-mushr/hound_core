@@ -98,7 +98,8 @@ std::optional<PoseOptical> CuvslamBackend::track(const StereoFrame & stereo)
   try {
     cuvslam::Odometry::State state;
     odometry_->GetState(state);
-    pose = slam_->Track(state);
+    slam_->Track(state);
+    pose = slam_->GetPose();
   } catch (const std::exception &) {
     // Fall back to VO pose (same as legacy).
   }

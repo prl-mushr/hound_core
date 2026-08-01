@@ -1,11 +1,22 @@
 #pragma once
 
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <string>
 
+#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
+#include <rclcpp/node.hpp>
+#include <vesc_msgs/msg/vesc_state_stamped.hpp>
+
+#include "hound_core/fcu_slots.hpp"
+#include "hound_core/low_level_controller.hpp"
+#include "hound_core/safety.hpp"
+
 namespace hound_core
 {
+
+class MavlinkBridge;
 
 struct Vec3
 {
@@ -14,8 +25,8 @@ struct Vec3
   float z{0.0f};
 };
 
-/** Pure low-level speed/steer controller (no ROS). Thread-safe state updates. */
-class LlController
+/** Ackermann (RC car) low-level speed/steer controller. Self-actuates via MANUAL_CONTROL. */
+class AckermannLlController : public LowLevelController
 {
 public:
   struct Params
@@ -42,39 +53,41 @@ public:
 
   struct ManualCommand
   {
-    float steering_norm{0.0f};  // [-1, 1]
-    float throttle_duty{0.0f};  // [0, ~1]
+    float steering_norm{0.0f};
+    float throttle_duty{0.0f};
     bool active{false};
     bool intervention{false};
     float wheelspeed_setpoint{0.0f};
     float steering_setpoint{0.0f};
   };
 
-  LlController();
-  explicit LlController(const Params & params);
+  AckermannLlController(MavlinkBridge & bridge, const Params & params);
 
   void set_params(const Params & params);
 
   void update_vesc(float erpm, float voltage_input, float duty_cycle, float current_input);
-  void update_rc(const float * channels, std::size_t n);
-  void update_mode(bool armed, bool guided);
+  void update_rc(const RcSample & rc) override;
+  void update_mode(const FcuStateSample & state) override;
   void update_auto(float steering_rad, float speed_mps);
-  /** IMU-paced tick. Orientation optional (w,x,y,z); if null, skip RPY update. */
-  ManualCommand tick_imu(
-    float gx, float gy, float gz, float ax, float ay, float az,
-    const float * quat_wxyz = nullptr);
+  LlStatus tick_imu(const ImuSample & imu) override;
 
   float auto_wheelspeed_limit() const;
-  float max_rated_speed() const { return max_rated_speed_; }
+  float max_rated_speed() const {return max_rated_speed_;}
+
+  /** Wire VESC + autonomy + /control_limits for the modular node. */
+  void setup_subscriptions(rclcpp::Node & node);
 
 private:
+  ManualCommand compute(const ImuSample & imu);
   void lpf(const Vec3 & measurement, Vec3 & estimate);
   void rpy_from_quat_wxyz(float w, float x, float y, float z);
   float speed_controller(float wheelspeed_setpoint);
   float steering_limiter(float steering_setpoint, bool & intervention);
 
+  MavlinkBridge & bridge_;
   mutable std::mutex mu_;
   Params p_;
+  SlewLimiter throttle_slew_;
 
   float wheelspeed_{0.0f};
   int switch_pos_{0};
@@ -99,7 +112,10 @@ private:
   float K_drag_{0.0f};
   float speed_integral_{0.0f};
   float speed_proportional_{0.0f};
-  float last_throttle_{0.0f};
+
+  rclcpp::Subscription<vesc_msgs::msg::VescStateStamped>::SharedPtr vesc_sub_;
+  rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr auto_sub_;
+  rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr limits_pub_;
 };
 
 }  // namespace hound_core

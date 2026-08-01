@@ -1,19 +1,18 @@
 #pragma once
 
-#include <atomic>
 #include <functional>
 #include <string>
-#include <thread>
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/logger.hpp>
 
 #include "hound_core/fcu_slots.hpp"
+#include "hound_core/imu_paced_worker.hpp"
 
 namespace hound_core
 {
 
-/** IMU-paced estimator_ekf worker (logic copied from HoundFcuControlNode::ekf_worker). */
+/** IMU-paced estimator_ekf worker. */
 class EkfRunner
 {
 public:
@@ -48,14 +47,12 @@ public:
   void stop();
 
 private:
-  void worker();
+  void loop(FcuBus & bus, std::atomic<bool> & running);
 
   rclcpp::Logger logger_;
-  FcuBus * bus_{nullptr};
   Config cfg_;
   OdomCallback odom_cb_;
-  std::atomic<bool> running_{false};
-  std::thread thread_;
+  ImuPacedWorker worker_;
 };
 
 }  // namespace hound_core

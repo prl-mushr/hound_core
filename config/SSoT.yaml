@@ -256,12 +256,12 @@ mavros:
     SR0_EXTRA1: 200     # ATTITUDE stream (USB/SERIAL0), Hz
     SR0_RAW_SENS: 200   # RAW_IMU stream, Hz
 
-# In-process FCU owner: libmavconn + EKF + LL (RealSense-style threads).
-# When enabled, launch skips mavros / standalone ekf / standalone ll_control.
+# In-process FCU owner: libmavconn + EKF + pluggable LL (RealSense-style threads).
+# When enabled, launch skips mavros / standalone ekf.
 fcu_control:
   enabled: false
-  # A/B: legacy = hound_fcu_control_node; modular = hound_fcu_control_modular_node
-  architecture: legacy
+  # Registry key: ackermann | holonomic (see LlControllerRegistry).
+  ll_controller: ackermann
   fcu_url: "/dev/ttyACM1:921600"
   # libmavconn URL: udp://[bind_host:port]@remote_host:port
   # Example: listen on all ifaces, send to GCS at 10.18.249.206:14550
@@ -304,7 +304,7 @@ fcu_control:
   fcu_params:
     SR0_EXTRA1: 200
     SR0_RAW_SENS: 200
-  # LL tuning mirrored from low_level_control when that node is skipped.
+  # LL tuning for ll_controller: ackermann (schema depends on controller).
   ll:
     erpm_gain: 3166.6
     steering_max: 0.488
@@ -346,35 +346,6 @@ vesc:
     erpm_gain: 3166.6
     output_topic: /mavros/vision_pose/vis_odom
     min_publish_interval_s: 0.1
-
-low_level_control:
-  # Master switch for the HOUND low-level controller (speed loop + rollover
-  # prevention + RC/autonomy multiplexing). Requires MAVROS and VESC telemetry.
-  enabled: false
-
-  # MultiThreadedExecutor worker count for the low-level control node.
-  executor_threads: 8
-
-  # Vehicle / controller tuning. Values match config/low_level_control.yaml;
-  # override here to avoid editing two files.
-  erpm_gain: 3166.6
-  steering_max: 0.488
-  wheelbase: 0.29
-  cg_height: 0.125
-  track_width: 0.25
-  wheelspeed_max: 17.0
-  nominal_voltage: 14.8
-  motor_kv: 3930.0
-  speed_control_kp: 1.0
-  speed_control_ki: 1.0
-  safe_mode: true
-  accel_gain: 1.0
-  roll_gain: 0.33
-  steer_slack: 0.2
-  LPF_tau: 0.5
-  throttle_delta: 0.02
-  liftoff_oversteer: true
-  control_dt: 0.02
 
 hal_monitor:
   # Background monitor (HAL_9000): camera health, TF, tunes, rosbag RC control,

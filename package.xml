@@ -20,7 +20,7 @@
   <depend>mavros_msgs</depend>
   <depend>vesc_msgs</depend>
   <depend>ackermann_msgs</depend>
-  <depend>realsense2</depend>
+  <depend>librealsense2</depend>
   <depend>libmavconn</depend>
   <depend>mavlink</depend>
   <depend>tf2_geometry_msgs</depend>
@@ -50,6 +50,7 @@
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>python3-pytest</test_depend>
 
   <export>

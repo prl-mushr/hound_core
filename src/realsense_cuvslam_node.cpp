@@ -442,7 +442,8 @@ void RealsenseCuvslamNode::capture_loop()
       cuvslam::Odometry::State state;
       odometry_->GetState(state);
       const auto slam_t0 = log_timing ? clock::now() : clock::time_point{};
-      pose = slam_->Track(state);
+      slam_->Track(state);
+      pose = slam_->GetPose();
       if (log_timing) {
         slam_ms =
           std::chrono::duration<double, std::milli>(clock::now() - slam_t0).count();

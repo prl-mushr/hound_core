@@ -556,6 +556,52 @@ void MavlinkBridge::send_manual_control(const ManualControlCmd & cmd)
   send_to_fcu(mc);
 }
 
+void MavlinkBridge::send_rc_override(const RcOverrideCmd & cmd)
+{
+  mavlink::common::msg::RC_CHANNELS_OVERRIDE ov{};
+  ov.target_system = cfg_.target_system;
+  ov.target_component = cfg_.target_component;
+  ov.chan1_raw = cmd.channels[0];
+  ov.chan2_raw = cmd.channels[1];
+  ov.chan3_raw = cmd.channels[2];
+  ov.chan4_raw = cmd.channels[3];
+  ov.chan5_raw = cmd.channels[4];
+  ov.chan6_raw = cmd.channels[5];
+  ov.chan7_raw = cmd.channels[6];
+  ov.chan8_raw = cmd.channels[7];
+  ov.chan9_raw = cmd.channels[8];
+  ov.chan10_raw = cmd.channels[9];
+  ov.chan11_raw = cmd.channels[10];
+  ov.chan12_raw = cmd.channels[11];
+  ov.chan13_raw = cmd.channels[12];
+  ov.chan14_raw = cmd.channels[13];
+  ov.chan15_raw = cmd.channels[14];
+  ov.chan16_raw = cmd.channels[15];
+  ov.chan17_raw = cmd.channels[16];
+  ov.chan18_raw = cmd.channels[17];
+  send_to_fcu(ov);
+}
+
+void MavlinkBridge::request_mode(uint32_t custom_mode)
+{
+  const auto now = std::chrono::steady_clock::now();
+  {
+    std::lock_guard<std::mutex> lock(mode_mu_);
+    if (last_mode_request_.time_since_epoch().count() != 0 &&
+      (now - last_mode_request_) < std::chrono::seconds(1))
+    {
+      return;
+    }
+    last_mode_request_ = now;
+  }
+
+  mavlink::common::msg::SET_MODE sm{};
+  sm.target_system = cfg_.target_system;
+  sm.base_mode = static_cast<uint8_t>(mavlink::minimal::MAV_MODE_FLAG::CUSTOM_MODE_ENABLED);
+  sm.custom_mode = custom_mode;
+  send_to_fcu(sm);
+}
+
 bool MavlinkBridge::take_mission(std::vector<mavros_msgs::msg::Waypoint> & out)
 {
   std::lock_guard<std::mutex> lock(mission_mu_);

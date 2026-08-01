@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <pthread.h>
-#include <sched.h>
 
 // nav_filter macros collide with tf2 / angles headers.
 #ifdef deg2rad
@@ -35,17 +33,6 @@ inline uint32_t stamp_ms(const rclcpp::Time & t)
 inline float isa_height_m(float pressure_pa, float sea_level_pa = 101325.0f)
 {
   return 44330.0f * (1.0f - std::pow(pressure_pa / sea_level_pa, 0.190295f));
-}
-
-bool pin_current_thread(int cpu)
-{
-  if (cpu < 0) {
-    return true;
-  }
-  cpu_set_t set;
-  CPU_ZERO(&set);
-  CPU_SET(cpu, &set);
-  return pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
 }
 
 bool accept_rate_limited(uint32_t stamp_ms_now, uint32_t & last_ms, float max_hz)
@@ -177,29 +164,21 @@ EkfRunner::~EkfRunner()
 void EkfRunner::start(FcuBus & bus, const Config & config, OdomCallback odom_cb)
 {
   stop();
-  bus_ = &bus;
   cfg_ = config;
   odom_cb_ = std::move(odom_cb);
-  running_ = true;
-  thread_ = std::thread([this] { worker(); });
+  worker_.start(
+    bus, cfg_.ekf_cpu,
+    [this](FcuBus & b, std::atomic<bool> & running) {loop(b, running);});
 }
 
 void EkfRunner::stop()
 {
-  running_ = false;
-  if (bus_ != nullptr) {
-    bus_->imu.cv.notify_all();
-  }
-  if (thread_.joinable()) {
-    thread_.join();
-  }
-  bus_ = nullptr;
+  worker_.stop();
   odom_cb_ = nullptr;
 }
 
-void EkfRunner::worker()
+void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
 {
-  pin_current_thread(cfg_.ekf_cpu);
   using inertial_nav_ros2::frames::BodyAxes;
   using inertial_nav_ros2::frames::enu_position_to_ned;
   using inertial_nav_ros2::frames::enu_quat_to_ned_frd;
@@ -258,8 +237,8 @@ void EkfRunner::worker()
   float t_corr_enu[3] = {0, 0, 0};
   bool logged_waiting_icp = false;
 
-  while (running_) {
-    if (!bus_->imu.wait_new(last_seq, imu, running_)) {
+  while (running.load(std::memory_order_relaxed)) {
+    if (!bus.imu.wait_new(last_seq, imu, running)) {
       break;
     }
     const uint32_t t_ms = stamp_ms(imu.stamp);
@@ -280,7 +259,7 @@ void EkfRunner::worker()
       static_cast<float>(static_cast<uint64_t>(t_ms) * 1000ULL));
 
     MagSample mag;
-    if (cfg_.enable_mag && bus_->mag.copy_latest(mag)) {
+    if (cfg_.enable_mag && bus.mag.copy_latest(mag)) {
       const uint32_t m_ms = stamp_ms(mag.stamp);
       if (accept_rate_limited(m_ms, last_mag_ms, static_cast<float>(cfg_.mag_max_hz))) {
         float field_ut[3] = {
@@ -293,7 +272,7 @@ void EkfRunner::worker()
     }
 
     BaroSample baro;
-    if (cfg_.enable_baro && bus_->baro.copy_latest(baro)) {
+    if (cfg_.enable_baro && bus.baro.copy_latest(baro)) {
       const uint32_t b_ms = stamp_ms(baro.stamp);
       if (accept_rate_limited(b_ms, last_baro_ms, static_cast<float>(cfg_.baro_max_hz))) {
         const float h = isa_height_m(baro.pressure_pa);
@@ -302,7 +281,7 @@ void EkfRunner::worker()
     }
 
     GpsSample gps;
-    if (cfg_.enable_gps && cfg.gps[0].enabled && bus_->gps.copy_latest(gps) &&
+    if (cfg_.enable_gps && cfg.gps[0].enabled && bus.gps.copy_latest(gps) &&
       gps.fix_type >= 3)
     {
       float vel_ned[3] = {0, 0, 0};
@@ -316,7 +295,7 @@ void EkfRunner::worker()
     }
 
     ExtNavSample nav;
-    bool have_nav = bus_->ext_nav.copy_latest(nav);
+    bool have_nav = bus.ext_nav.copy_latest(nav);
     if (have_nav && !vslam_aligned) {
       if (align_gps_compass) {
         if (ekf.is_initialized()) {
@@ -357,7 +336,7 @@ void EkfRunner::worker()
         }
       } else if (align_lidar_icp) {
         IcpOriginSample icp;
-        if (!bus_->icp_origin.copy_latest(icp) || !icp.valid) {
+        if (!bus.icp_origin.copy_latest(icp) || !icp.valid) {
           if (!logged_waiting_icp) {
             RCLCPP_WARN(
               logger_,

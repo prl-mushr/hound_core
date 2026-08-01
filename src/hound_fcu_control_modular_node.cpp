@@ -19,7 +19,6 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
   ap_odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("~/ap/local_odometry", 10);
   mission_pub_ = create_publisher<mavros_msgs::msg::WaypointList>("~/mission/waypoints", 1);
   diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/low_level_diagnostics", 1);
-  limits_pub_ = create_publisher<ackermann_msgs::msg::AckermannDriveStamped>("/control_limits", 1);
 
   vision_sub_ = create_subscription<nav_msgs::msg::Odometry>(
     vision_odom_topic_, rclcpp::SensorDataQoS(),
@@ -29,12 +28,6 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
       icp_origin_topic_, 10,
       std::bind(&HoundFcuControlModularNode::icp_origin_cb, this, std::placeholders::_1));
   }
-  vesc_sub_ = create_subscription<vesc_msgs::msg::VescStateStamped>(
-    "/sensors/core", rclcpp::SensorDataQoS(),
-    std::bind(&HoundFcuControlModularNode::vesc_cb, this, std::placeholders::_1));
-  auto_sub_ = create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
-    "hound/control", 10,
-    std::bind(&HoundFcuControlModularNode::auto_control_cb, this, std::placeholders::_1));
 
   MavlinkBridge::Config bridge_cfg;
   bridge_cfg.fcu_url = fcu_url_;
@@ -78,13 +71,12 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
   }
 
   if (enable_ll_) {
+    auto entry = LlControllerRegistry::create(ll_controller_name_, *this, *bridge_);
+    ll_controller_ = std::move(entry.controller);
+    entry.setup_subscriptions(*this);
     ll_runner_ = std::make_unique<LlRunner>(get_logger());
     ll_runner_->start(
-      bus_, ll_,
-      [this](const ManualControlCmd & cmd) {
-        bridge_->send_manual_control(cmd);
-      },
-      ll_cpu_,
+      bus_, *ll_controller_, ll_cpu_,
       [this](const diagnostic_msgs::msg::DiagnosticArray & dia) {
         diag_pub_->publish(dia);
       });
@@ -96,7 +88,7 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     std::bind(&HoundFcuControlModularNode::ros_edge_timer, this));
   hb_timer_ = create_wall_timer(
     std::chrono::seconds(1),
-    [this]() { bridge_->send_heartbeat(); });
+    [this]() {bridge_->send_heartbeat();});
   boot_timer_ = create_wall_timer(
     std::chrono::seconds(2),
     [this]() {
@@ -107,10 +99,11 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
 
   RCLCPP_INFO(
     get_logger(),
-    "hound_fcu_control (modular) up: fcu=%s gcs=%s ekf=%d ll=%d ros_hz=%.1f "
-    "align=%s ekf_odom_hz=%d",
+    "hound_fcu_control (modular) up: fcu=%s gcs=%s ekf=%d ll=%d controller=%s "
+    "ros_hz=%.1f align=%s ekf_odom_hz=%d",
     fcu_url_.c_str(), gcs_url_.empty() ? "(none)" : gcs_url_.c_str(),
-    static_cast<int>(enable_ekf_), static_cast<int>(enable_ll_), ros_publish_hz_,
+    static_cast<int>(enable_ekf_), static_cast<int>(enable_ll_),
+    ll_controller_name_.c_str(), ros_publish_hz_,
     ext_nav_align_.c_str(), ekf_odom_hz_);
 }
 
@@ -184,32 +177,13 @@ void HoundFcuControlModularNode::declare_params()
   component_id_ = static_cast<uint8_t>(declare_parameter<int>("component_id", 191));
   target_system_ = static_cast<uint8_t>(declare_parameter<int>("target_system", 1));
   target_component_ = static_cast<uint8_t>(declare_parameter<int>("target_component", 1));
+  ll_controller_name_ = declare_parameter<std::string>("ll_controller", "ackermann");
 
   const int sr0_extra1 = declare_parameter<int>("fcu_params.SR0_EXTRA1", 200);
   const int sr0_raw = declare_parameter<int>("fcu_params.SR0_RAW_SENS", 200);
   fcu_params_["SR0_EXTRA1"] = static_cast<double>(sr0_extra1);
   fcu_params_["SR0_RAW_SENS"] = static_cast<double>(sr0_raw);
-
-  LlController::Params lp;
-  lp.erpm_gain = static_cast<float>(declare_parameter("ll.erpm_gain", 3166.6));
-  lp.steering_max = static_cast<float>(declare_parameter("ll.steering_max", 0.488));
-  lp.wheelbase = static_cast<float>(declare_parameter("ll.wheelbase", 0.29));
-  lp.cg_height = static_cast<float>(declare_parameter("ll.cg_height", 0.125));
-  lp.wheelspeed_max = static_cast<float>(declare_parameter("ll.wheelspeed_max", 17.0));
-  lp.nominal_voltage = static_cast<float>(declare_parameter("ll.nominal_voltage", 14.8));
-  lp.motor_kv = static_cast<float>(declare_parameter("ll.motor_kv", 3930.0));
-  lp.speed_control_kp = static_cast<float>(declare_parameter("ll.speed_control_kp", 1.0));
-  lp.speed_control_ki = static_cast<float>(declare_parameter("ll.speed_control_ki", 1.0));
-  lp.safe_mode = declare_parameter("ll.safe_mode", true);
-  lp.track_width = static_cast<float>(declare_parameter("ll.track_width", 0.25));
-  lp.accel_gain = static_cast<float>(declare_parameter("ll.accel_gain", 1.0));
-  lp.roll_gain = static_cast<float>(declare_parameter("ll.roll_gain", 0.33));
-  lp.steer_slack = static_cast<float>(declare_parameter("ll.steer_slack", 0.4));
-  lp.LPF_tau = static_cast<float>(declare_parameter("ll.LPF_tau", 0.2));
-  lp.throttle_delta = static_cast<float>(declare_parameter("ll.throttle_delta", 0.02));
-  lp.liftoff_oversteer = declare_parameter("ll.liftoff_oversteer", true);
-  lp.control_dt = static_cast<float>(declare_parameter("ll.control_dt", 0.02));
-  ll_.set_params(lp);
+  // Controller-specific ll.* params are declared by each controller factory.
 }
 
 void HoundFcuControlModularNode::vision_cb(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -248,24 +222,6 @@ void HoundFcuControlModularNode::icp_origin_cb(
   RCLCPP_INFO_THROTTLE(
     get_logger(), *get_clock(), 5000,
     "ICP origin sample (map ENU) received on %s", icp_origin_topic_.c_str());
-}
-
-void HoundFcuControlModularNode::vesc_cb(
-  const vesc_msgs::msg::VescStateStamped::SharedPtr msg)
-{
-  ll_.update_vesc(
-    static_cast<float>(msg->state.speed),
-    static_cast<float>(msg->state.voltage_input),
-    static_cast<float>(msg->state.duty_cycle),
-    static_cast<float>(msg->state.current_input));
-}
-
-void HoundFcuControlModularNode::auto_control_cb(
-  const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg)
-{
-  ll_.update_auto(
-    static_cast<float>(msg->drive.steering_angle),
-    static_cast<float>(msg->drive.speed));
 }
 
 void HoundFcuControlModularNode::ros_edge_timer()
@@ -346,14 +302,6 @@ void HoundFcuControlModularNode::ros_edge_timer()
     o.twist.twist.linear.y = ap.vy;
     o.twist.twist.linear.z = ap.vz;
     ap_odom_pub_->publish(o);
-  }
-
-  RcSample rc;
-  if (bus_.rc.copy_latest(rc)) {
-    ackermann_msgs::msg::AckermannDriveStamped limits;
-    limits.header.stamp = rc.stamp;
-    limits.drive.speed = ll_.auto_wheelspeed_limit();
-    limits_pub_->publish(limits);
   }
 
   std::vector<mavros_msgs::msg::Waypoint> waypoints;

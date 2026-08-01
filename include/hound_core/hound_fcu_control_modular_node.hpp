@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <mavros_msgs/msg/waypoint_list.hpp>
@@ -16,12 +15,12 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
-#include <vesc_msgs/msg/vesc_state_stamped.hpp>
 
 #include "hound_core/ekf_runner.hpp"
 #include "hound_core/fcu_slots.hpp"
-#include "hound_core/ll_controller.hpp"
+#include "hound_core/ll_controller_registry.hpp"
 #include "hound_core/ll_runner.hpp"
+#include "hound_core/low_level_controller.hpp"
 #include "hound_core/mavlink_bridge.hpp"
 
 namespace hound_core
@@ -29,8 +28,7 @@ namespace hound_core
 
 /**
  * Thin ROS wire-up for the modular FCU path: params, edge pubs/subs, and
- * MavlinkBridge + EkfRunner + LlRunner over a shared FcuBus.
- * Same ROS param names as HoundFcuControlNode for launch reuse.
+ * MavlinkBridge + EkfRunner + pluggable LlRunner over a shared FcuBus.
  */
 class HoundFcuControlModularNode : public rclcpp::Node
 {
@@ -45,10 +43,7 @@ private:
 
   void vision_cb(const nav_msgs::msg::Odometry::SharedPtr msg);
   void icp_origin_cb(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-  void vesc_cb(const vesc_msgs::msg::VescStateStamped::SharedPtr msg);
-  void auto_control_cb(const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg);
 
-  // Params (mirror legacy names)
   std::string fcu_url_;
   std::string gcs_url_;
   double ros_publish_hz_{50.0};
@@ -79,12 +74,13 @@ private:
   uint8_t component_id_{191};
   uint8_t target_system_{1};
   uint8_t target_component_{1};
+  std::string ll_controller_name_{"ackermann"};
 
   FcuBus bus_;
-  LlController ll_;
   std::unique_ptr<MavlinkBridge> bridge_;
   std::unique_ptr<EkfRunner> ekf_runner_;
   std::unique_ptr<LlRunner> ll_runner_;
+  std::unique_ptr<LowLevelController> ll_controller_;
 
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_pub_;
@@ -94,11 +90,8 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ap_odom_pub_;
   rclcpp::Publisher<mavros_msgs::msg::WaypointList>::SharedPtr mission_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
-  rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr limits_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr vision_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr icp_sub_;
-  rclcpp::Subscription<vesc_msgs::msg::VescStateStamped>::SharedPtr vesc_sub_;
-  rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr auto_sub_;
   rclcpp::TimerBase::SharedPtr edge_timer_;
   rclcpp::TimerBase::SharedPtr hb_timer_;
   rclcpp::TimerBase::SharedPtr boot_timer_;

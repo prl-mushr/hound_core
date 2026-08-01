@@ -62,6 +62,9 @@ public:
   void send_heartbeat();
   void send_vision(const ExtNavSample & nav);
   void send_manual_control(const ManualControlCmd & cmd);
+  void send_rc_override(const RcOverrideCmd & cmd);
+  /** Rate-limited (1 Hz) SET_MODE with custom_mode (e.g. Rover HOLD = 4). */
+  void request_mode(uint32_t custom_mode);
 
   /** If a full mission download finished, copies waypoints and clears dirty. */
   bool take_mission(std::vector<mavros_msgs::msg::Waypoint> & out);
@@ -116,6 +119,9 @@ private:
   std::mutex gcs_throttle_mu_;
   std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> gcs_last_fwd_;
   std::unordered_set<uint32_t> gcs_throttle_ids_;
+
+  std::mutex mode_mu_;
+  std::chrono::steady_clock::time_point last_mode_request_{};
 };
 
 }  // namespace hound_core

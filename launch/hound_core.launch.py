@@ -440,45 +440,12 @@ def _build_vesc_actions(vesc: dict) -> list:
     return nodes
 
 
-def _build_low_level_control_node(ll: dict) -> Node:
-    params = {
-        "executor_threads": int(ll.get("executor_threads", 8)),
-        "erpm_gain": float(ll.get("erpm_gain", 3166.6)),
-        "steering_max": float(ll.get("steering_max", 0.488)),
-        "wheelbase": float(ll.get("wheelbase", 0.29)),
-        "cg_height": float(ll.get("cg_height", 0.125)),
-        "track_width": float(ll.get("track_width", 0.25)),
-        "wheelspeed_max": float(ll.get("wheelspeed_max", 17.0)),
-        "nominal_voltage": float(ll.get("nominal_voltage", 14.8)),
-        "motor_kv": float(ll.get("motor_kv", 3930.0)),
-        "speed_control_kp": float(ll.get("speed_control_kp", 1.0)),
-        "speed_control_ki": float(ll.get("speed_control_ki", 1.0)),
-        "safe_mode": bool(ll.get("safe_mode", True)),
-        "accel_gain": float(ll.get("accel_gain", 1.0)),
-        "roll_gain": float(ll.get("roll_gain", 0.33)),
-        "steer_slack": float(ll.get("steer_slack", 0.2)),
-        "LPF_tau": float(ll.get("LPF_tau", 0.5)),
-        "throttle_delta": float(ll.get("throttle_delta", 0.02)),
-        "liftoff_oversteer": bool(ll.get("liftoff_oversteer", True)),
-        "control_dt": float(ll.get("control_dt", 0.02)),
-    }
-    return Node(
-        package="hound_core",
-        executable="hound_ll_control_node",
-        name="low_level_controller",
-        output="screen",
-        parameters=[params],
-    )
-
-
-def _build_fcu_control_node(fc: dict, ll: dict) -> Node:
-    """In-process MAVLink router + EKF + LL (exclusive FCU tty).
-
-    A/B: ``architecture: modular`` → hound_fcu_control_modular_node.
-    """
+def _build_fcu_control_node(fc: dict) -> Node:
+    """In-process MAVLink router + EKF + pluggable LL (exclusive FCU tty)."""
     origin = fc.get("ext_nav_origin") or {}
     fcu_params = fc.get("fcu_params") or {}
-    ll_cfg = fc.get("ll") or ll or {}
+    ll_cfg = fc.get("ll") or {}
+    ll_controller = str(fc.get("ll_controller", "ackermann")).strip().lower()
     params = {
         "fcu_url": str(fc.get("fcu_url", "/dev/ttyACM1:921600")),
         "gcs_url": str(fc.get("gcs_url", "")),
@@ -515,35 +482,21 @@ def _build_fcu_control_node(fc: dict, ll: dict) -> Node:
         "ext_nav_origin.hgt": float(origin.get("hgt", 0.0)),
         "fcu_params.SR0_EXTRA1": int(fcu_params.get("SR0_EXTRA1", 200)),
         "fcu_params.SR0_RAW_SENS": int(fcu_params.get("SR0_RAW_SENS", 200)),
-        "ll.erpm_gain": float(ll_cfg.get("erpm_gain", 3166.6)),
-        "ll.steering_max": float(ll_cfg.get("steering_max", 0.488)),
-        "ll.wheelbase": float(ll_cfg.get("wheelbase", 0.29)),
-        "ll.cg_height": float(ll_cfg.get("cg_height", 0.125)),
-        "ll.track_width": float(ll_cfg.get("track_width", 0.25)),
-        "ll.wheelspeed_max": float(ll_cfg.get("wheelspeed_max", 17.0)),
-        "ll.nominal_voltage": float(ll_cfg.get("nominal_voltage", 14.8)),
-        "ll.motor_kv": float(ll_cfg.get("motor_kv", 3930.0)),
-        "ll.speed_control_kp": float(ll_cfg.get("speed_control_kp", 1.0)),
-        "ll.speed_control_ki": float(ll_cfg.get("speed_control_ki", 1.0)),
-        "ll.safe_mode": bool(ll_cfg.get("safe_mode", True)),
-        "ll.accel_gain": float(ll_cfg.get("accel_gain", 1.0)),
-        "ll.roll_gain": float(ll_cfg.get("roll_gain", 0.33)),
-        "ll.steer_slack": float(ll_cfg.get("steer_slack", 0.4)),
-        "ll.LPF_tau": float(ll_cfg.get("LPF_tau", 0.2)),
-        "ll.throttle_delta": float(ll_cfg.get("throttle_delta", 0.02)),
-        "ll.liftoff_oversteer": bool(ll_cfg.get("liftoff_oversteer", True)),
-        "ll.control_dt": float(ll_cfg.get("control_dt", 0.02)),
+        "ll_controller": ll_controller,
     }
-    arch = str(fc.get("architecture", "legacy")).strip().lower()
-    exe = (
-        "hound_fcu_control_modular_node"
-        if arch == "modular"
-        else "hound_fcu_control_node"
-    )
-    print(f"[hound_core] fcu_control architecture={arch} exe={exe}")
+    # Pass through the robot-specific ll.* block as ROS params. Schema depends
+    # on ll_controller (ackermann vs holonomic); each controller declares what
+    # it needs under the shared ``ll.*`` namespace.
+    for key, value in ll_cfg.items():
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                params[f"ll.{key}.{nested_key}"] = nested_value
+        else:
+            params[f"ll.{key}"] = value
+    print(f"[hound_core] fcu_control ll_controller={ll_controller}")
     return Node(
         package="hound_core",
-        executable=exe,
+        executable="hound_fcu_control_modular_node",
         name="hound_fcu_control",
         output="screen",
         parameters=[params],
@@ -611,7 +564,6 @@ def generate_launch_description():
     mav = ssot.get("mavros", {})
     fcu = ssot.get("fcu_control", {})
     vesc = ssot.get("vesc", {})
-    ll = ssot.get("low_level_control", {})
     hal = ssot.get("hal_monitor", {})
     seg = ssot.get("segmentation", {})
     yw = ssot.get("yolo_world", {})
@@ -627,13 +579,12 @@ def generate_launch_description():
     mavros_enabled = bool(mav.get("enabled", False))
     fcu_control_enabled = bool(fcu.get("enabled", False))
     vesc_enabled = bool(vesc.get("enabled", False))
-    ll_control_enabled = bool(ll.get("enabled", False))
     hal_enabled = bool(hal.get("enabled", False))
     seg_enabled = bool(seg.get("enabled", False))
     yolo_enabled = bool(yw.get("enabled", False))
     lidar_enabled = bool(lidar.get("enabled", False))
 
-    # In-process FCU owner: exclusive tty — never also start mavros / standalone ekf+ll.
+    # In-process FCU owner: exclusive tty — never also start mavros / standalone ekf.
     if fcu_control_enabled:
         if mavros_enabled:
             print(
@@ -647,12 +598,6 @@ def generate_launch_description():
                 "(in-process EKF)"
             )
             ekf_enabled = False
-        if ll_control_enabled and bool(fcu.get("enable_ll", True)):
-            print(
-                "[hound_core] fcu_control.enabled: forcing low_level_control.enabled=false "
-                "(in-process LL)"
-            )
-            ll_control_enabled = False
 
     # C++ node owns USB exclusively — never also start stock camera / Isaac VSLAM.
     if rsc_enabled:
@@ -746,34 +691,19 @@ def generate_launch_description():
     fcu_acts = []
     mav_acts = []
     if fcu_control_enabled:
-        fcu_acts = [_build_fcu_control_node(fcu, ll)]
+        fcu_acts = [_build_fcu_control_node(fcu)]
         print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
     elif mavros_enabled:
         mav_acts = _build_mavros_actions(mav)
     else:
         print("[hound_core] mavros DISABLED (fcu_control also off)")
 
-    # 3) vesc (+ low-level control once telemetry path exists — classic path only)
+    # 3) vesc (telemetry; LL now lives inside fcu_control when enabled)
     vesc_acts = []
     if vesc_enabled:
         vesc_cfg = dict(vesc)
         vesc_cfg["start_delay_s"] = 0.0  # stagger owns timing
         vesc_acts = _build_vesc_actions(vesc_cfg)
-
-    if ll_control_enabled:
-        if mavros_enabled and vesc_enabled:
-            vesc_acts.append(_build_low_level_control_node(ll))
-        else:
-            missing = [
-                n
-                for n, on in (("mavros", mavros_enabled), ("vesc", vesc_enabled))
-                if not on
-            ]
-            print(
-                "[hound_core] low_level_control needs "
-                + " and ".join(missing)
-                + " -> skipping"
-            )
 
     # 4) camera source: stock RealSense OR in-process realsense_cuvslam
     cam_acts = []
