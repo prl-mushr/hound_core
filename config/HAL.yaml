@@ -15,15 +15,17 @@ battery_voltage_threshold: 14.0
 gps_min_satellites: 16
 gps_max_h_acc_mm: 1000
 
-mavros:
-  monitor_topic: /mavros/imu/data_raw
+fcu:
+  monitor_enabled: true
+  monitor_topic: /hound_fcu_control/imu
   expected_fps: 50.0
-  failure_action: "ros2 run mavros mav sys rate --all 50"
-  pose_topic: /mavros/local_position/pose
-  state_topic: /mavros/state
-  gps_topic: /mavros/gpsstatus/gps1/raw
-  notification_topic: /mavros/play_tune
-  channel_topic: /mavros/rc/in
+  failure_action: ""
+  pose_topic: /hound_fcu_control/ap/local_odometry
+  armed_topic: /hound_fcu_control/state/armed
+  gps_satellites_topic: /hound_fcu_control/gps/satellites
+  gps_h_acc_topic: /hound_fcu_control/gps/h_acc_mm
+  notification_topic: /hound_fcu_control/play_tune
+  channel_topic: /hound_fcu_control/rc/in
   base_frame: base_link
 
 camera:

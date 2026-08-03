@@ -27,6 +27,17 @@ public:
   virtual ~LowLevelController() = default;
   virtual void update_rc(const RcSample & rc) {(void)rc;}
   virtual void update_mode(const FcuStateSample & state) {(void)state;}
+  virtual void update_vesc(const VescSample & vesc) {(void)vesc;}
+  /**
+   * Measured plant feedback for control_state packing.
+   * @return false if not yet valid (e.g. no VESC).
+   */
+  virtual bool plant_feedback(float & steering_rad, float & wheelspeed_mps) const
+  {
+    (void)steering_rad;
+    (void)wheelspeed_mps;
+    return false;
+  }
   virtual LlStatus tick_imu(const ImuSample & imu) = 0;
 };
 

@@ -60,6 +60,22 @@ void AckermannLlController::update_vesc(
   K_drag_ = std::min(1.0f, std::max(0.0f, 0.2f * Kd_meas + 0.8f * K_drag_));
 }
 
+void AckermannLlController::update_vesc(const VescSample & vesc)
+{
+  // Same body as float overload (cannot nest — both take mu_).
+  const float erpm = vesc.speed;
+  const float voltage_input = vesc.voltage_input;
+  const float duty_cycle = vesc.duty_cycle;
+  const float current_input = vesc.current_input;
+  std::lock_guard<std::mutex> lock(mu_);
+  vesc_init_ = true;
+  wheelspeed_ = erpm / p_.erpm_gain;
+  voltage_input_ = voltage_input;
+  const float power_applied = std::fabs(duty_cycle * current_input);
+  const float Kd_meas = power_applied / std::max(1.0f, wheelspeed_ * wheelspeed_);
+  K_drag_ = std::min(1.0f, std::max(0.0f, 0.2f * Kd_meas + 0.8f * K_drag_));
+}
+
 void AckermannLlController::update_rc(const RcSample & rc)
 {
   if (rc.nchan < 5) {
@@ -175,6 +191,11 @@ AckermannLlController::ManualCommand AckermannLlController::compute(const ImuSam
   }
   const float throttle_duty = speed_controller(wheelspeed_setpoint);
 
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    last_steering_rad_ = steering_setpoint;
+  }
+
   out.active = true;
   out.intervention = intervention;
   out.steering_norm = steering_setpoint / steering_max;
@@ -205,6 +226,18 @@ LlStatus AckermannLlController::tick_imu(const ImuSample & imu)
   status.diagnostics.push_back({"wheelspeed_setpoint", std::to_string(cmd.wheelspeed_setpoint)});
   status.diagnostics.push_back({"steering_setpoint", std::to_string(cmd.steering_setpoint)});
   return status;
+}
+
+bool AckermannLlController::plant_feedback(
+  float & steering_rad, float & wheelspeed_mps) const
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!vesc_init_) {
+    return false;
+  }
+  steering_rad = last_steering_rad_;
+  wheelspeed_mps = wheelspeed_;
+  return true;
 }
 
 float AckermannLlController::speed_controller(float wheelspeed_setpoint)
@@ -283,15 +316,6 @@ float AckermannLlController::steering_limiter(float steering_setpoint, bool & in
 
 void AckermannLlController::setup_subscriptions(rclcpp::Node & node)
 {
-  vesc_sub_ = node.create_subscription<vesc_msgs::msg::VescStateStamped>(
-    "/sensors/core", rclcpp::SensorDataQoS(),
-    [this](const vesc_msgs::msg::VescStateStamped::SharedPtr msg) {
-      update_vesc(
-        static_cast<float>(msg->state.speed),
-        static_cast<float>(msg->state.voltage_input),
-        static_cast<float>(msg->state.duty_cycle),
-        static_cast<float>(msg->state.current_input));
-    });
   auto_sub_ = node.create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
     "hound/control", 10,
     [this](const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {

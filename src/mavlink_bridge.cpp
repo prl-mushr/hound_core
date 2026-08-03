@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 #include <mavlink/v2.0/common/common.hpp>
@@ -424,11 +425,12 @@ void MavlinkBridge::handle_mission_item(const mavlink::mavlink_message_t & msg)
   mavlink::MsgMap map(&msg);
   it.deserialize(map);
 
-  mavros_msgs::msg::Waypoint wp;
+  MissionItem wp;
+  wp.seq = it.seq;
   wp.frame = it.frame;
   wp.command = it.command;
-  wp.is_current = it.current;
-  wp.autocontinue = it.autocontinue;
+  wp.is_current = it.current != 0;
+  wp.autocontinue = it.autocontinue != 0;
   wp.param1 = it.param1;
   wp.param2 = it.param2;
   wp.param3 = it.param3;
@@ -602,7 +604,21 @@ void MavlinkBridge::request_mode(uint32_t custom_mode)
   send_to_fcu(sm);
 }
 
-bool MavlinkBridge::take_mission(std::vector<mavros_msgs::msg::Waypoint> & out)
+void MavlinkBridge::send_play_tune(const std::string & tune, uint32_t format)
+{
+  mavlink::common::msg::PLAY_TUNE_V2 pt{};
+  pt.target_system = cfg_.target_system;
+  pt.target_component = cfg_.target_component;
+  pt.format = format;
+  pt.tune.fill(0);
+  const size_t n = std::min(tune.size(), pt.tune.size() - 1);
+  if (n > 0) {
+    std::memcpy(pt.tune.data(), tune.data(), n);
+  }
+  send_to_fcu(pt);
+}
+
+bool MavlinkBridge::take_mission(std::vector<MissionItem> & out)
 {
   std::lock_guard<std::mutex> lock(mission_mu_);
   if (!mission_dirty_) {

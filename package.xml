@@ -3,7 +3,11 @@
 <package format="3">
   <name>hound_core</name>
   <version>0.0.0</version>
-  <description>HOUND bring-up: RealSense D455, Isaac ROS Visual SLAM, MAVROS, segmentation, and low-level vehicle control from a single source-of-truth config.</description>
+  <description>
+    HOUND robot interface: FCU (MAVLink + EKF + LL), VESC/HAL launch, and
+    mission orchestrator (SSoT). Stereo+VSLAM lives in composite_sensing;
+    Dora perception nodes live in perception_models.
+  </description>
   <maintainer email="hound@todo.todo">hound</maintainer>
   <license>Apache-2.0</license>
 
@@ -17,31 +21,31 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>diagnostic_msgs</depend>
-  <depend>mavros_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>vesc_msgs</depend>
   <depend>ackermann_msgs</depend>
-  <depend>librealsense2</depend>
   <depend>libmavconn</depend>
   <depend>mavlink</depend>
   <depend>tf2_geometry_msgs</depend>
+  <depend>serial_driver</depend>
+  <depend>io_context</depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>launch_xml</exec_depend>
-  <exec_depend>realsense2_camera</exec_depend>
-  <exec_depend>isaac_ros_visual_slam</exec_depend>
   <exec_depend>nvblox_ros</exec_depend>
+  <exec_depend>hound_mapping</exec_depend>
+  <exec_depend>hound_viz</exec_depend>
+  <exec_depend>hound_nav</exec_depend>
   <exec_depend>unitree_lidar_ros2</exec_depend>
   <exec_depend>inertial_nav_ros2</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
-  <exec_depend>mavros</exec_depend>
+  <!-- Optional classic path: apt install ros-jazzy-mavros ros-jazzy-mavros-extras -->
   <exec_depend>vesc_driver</exec_depend>
-  <exec_depend>mavros_extras</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
-  <!-- CLIPSeg / NanoSAM backends: perception_models; dora-rs + pyarrow via pip -->
+  <exec_depend>composite_sensing</exec_depend>
   <exec_depend>perception_models</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
 

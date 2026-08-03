@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """Isolated latency experiment: stock RealSense (+ optional MAVROS) + probe.
 
-Does NOT start realsense_cuvslam / FCU modular stack — validates the split
-component path (driver publishes, consumer measures age of header.stamp).
+Diagnostic only — mission bring-up uses composite_sensing stereo_composite.
+Does NOT start stereo_composite / FCU. Camera identity/rates come from SSoT
+``stereo_composite``.
 
 D455 note: IR and depth share the depth module, so both run at infra_fps (60).
-Color is a separate sensor and can stay at 30. Stock realsense2_camera cannot
-publish depth at 30 while IR is at 60.
 
-Usage (mushr_jazzy, camera free — stop hound_core / cuVSLAM first):
+Usage (mushr_jazzy, camera free — stop hound_core / stereo_composite first):
 
   ros2 launch hound_core hw_component_latency.launch.py
-
-  # later, with ArduPilot + mavros already up:
-  ros2 launch hound_core hw_component_latency.launch.py enable_camera:=false
 """
 
 from __future__ import annotations
@@ -39,34 +35,38 @@ def _load_ssot() -> dict:
 
 def _launch_setup(context, *args, **kwargs):
     ssot = _load_ssot()
-    cam_ssot = dict(ssot.get("camera", {}) or {})
-    rsc = dict(ssot.get("realsense_cuvslam", {}) or {})
+    sc = dict(ssot.get("stereo_composite") or {})
 
     # Experiment rates: IR@60, color@30; depth shares IR module → 60.
     infra_fps = int(
         context.launch_configurations.get("infra_fps")
-        or rsc.get("infra_fps", 60)
+        or sc.get("infra_fps", 60)
     )
     color_fps = int(
         context.launch_configurations.get("color_fps")
-        or rsc.get("color_fps", cam_ssot.get("color_fps", 30))
+        or sc.get("color_fps", 30)
     )
 
     cam = {
-        **cam_ssot,
+        **sc,
         "enabled": True,
-        "camera_name": cam_ssot.get("camera_name", "camera"),
+        "camera_name": sc.get("camera_name", "camera"),
         "fps": infra_fps,
+        "infra_width": int(sc.get("infra_width", 640)),
+        "infra_height": int(sc.get("infra_height", 360)),
         "depth_fps": infra_fps,
-        "depth_width": int(cam_ssot.get("infra_width", 640)),
-        "depth_height": int(cam_ssot.get("infra_height", 360)),
+        "depth_width": int(sc.get("infra_width", 640)),
+        "depth_height": int(sc.get("infra_height", 360)),
+        "color_width": int(sc.get("color_width", 640)),
+        "color_height": int(sc.get("color_height", 360)),
         "color_fps": color_fps,
         "enable_color": True,
         "enable_depth": True,
         "enable_sync": False,
         "align_depth": False,
-        "emitter_enabled": int(cam_ssot.get("emitter_enabled", 0)),
+        "emitter_enabled": int(sc.get("emitter_enabled", 0)),
         "enable_imu": False,
+        "serial_number": sc.get("serial_number", ""),
     }
 
     streams = {

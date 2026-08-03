@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <string>
 
@@ -46,6 +47,9 @@ public:
   void start(FcuBus & bus, const Config & config, OdomCallback odom_cb);
   void stop();
 
+  /** Soft reset: next IMU step re-inits at ext_nav_origin and clears VSLAM align. */
+  void request_reset();
+
 private:
   void loop(FcuBus & bus, std::atomic<bool> & running);
 
@@ -53,6 +57,8 @@ private:
   Config cfg_;
   OdomCallback odom_cb_;
   ImuPacedWorker worker_;
+  std::atomic<bool> reset_requested_{false};
 };
 
 }  // namespace hound_core
+

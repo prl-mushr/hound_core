@@ -29,11 +29,15 @@ robot — see `config/SSoT.holonomic.example.yaml` for the mecanum layout.
 
 | Thread | Affinity param | Job |
 |--------|----------------|-----|
-| ROS executor (main) | — | libmavconn callbacks → slots; GCS bridge; ~50 Hz pubs; vision subs |
+| ROS executor (main) | — | libmavconn callbacks → slots; GCS bridge; high-rate edge timer; vision / play_tune subs |
+| `aux` (~`aux_publish_hz`) | — | RC, armed, GPS sats/h_acc, mission `Path` (kept off the hot path) |
 | `ekf_worker` | `ekf_cpu` | IMU-paced `estimator_ekf` |
 | `ll_worker` | `ll_cpu` | IMU-paced pluggable LL (self-actuating) |
+| `vesc` (if `vesc.enabled`) | — | UART `requestState` @ `vesc.telemetry_hz` → `FcuBus.vesc`; edge republishes `/sensors/core` |
 
 Hot path uses `LatestSlot` (`include/hound_core/fcu_slots.hpp`). No 200 Hz IMU on DDS.
+No `mavros_msgs` on the ROS edge — stock `std_msgs` / `nav_msgs` / `sensor_msgs` only.
+When VESC is embedded, launch does not start standalone `vesc_driver` (exclusive VESC tty).
 
 ## MAVLink I/O
 
@@ -42,20 +46,39 @@ Hot path uses `LatestSlot` (`include/hound_core/fcu_slots.hpp`). No 200 Hz IMU o
 
 **TX:** heartbeat, `PARAM_SET` / `SET_MESSAGE_INTERVAL` at boot, `VISION_POSITION_ESTIMATE`
 (optional), `MANUAL_CONTROL` (ackermann), `RC_CHANNELS_OVERRIDE` + `SET_MODE`
-(holonomic), mission download requests.
+(holonomic), `PLAY_TUNE_V2` (from `~/play_tune`), mission download requests.
 
 **GCS:** optional second `libmavconn` URL (`gcs_url`). Forwards FCU→GCS with optional
 msgid throttle; blocks GCS `REQUEST_DATA_STREAM` when
 `gcs_block_stream_requests: true` so QGC cannot stomp USB rates.
 
-## ROS edge (~`ros_publish_hz`)
+## ROS edge
+
+High-rate (~`ros_publish_hz`):
 
 | Topic | Content |
 |-------|---------|
 | `~/imu` `~/mag` `~/baro` `~/gps/fix` | Downsampled sensors |
 | `ekf/odometry` (param) | Onboard EKF (full rate from worker) |
 | `~/ap/local_odometry` | ArduPilot local pose for compare |
-| `~/mission/waypoints` | Pulled mission |
+| `~/control_state` | `Float64MultiArray[17]`: pos,rpy,vel,A,G,steer,wheelspeed (BeamNG / PDef; IMU-synced in `ll_worker`) |
+
+Aux thread (~`aux_publish_hz`):
+
+| Topic | Type | Content |
+|-------|------|---------|
+| `~/state/armed` | `std_msgs/Bool` | Armed flag |
+| `~/rc/in` | `std_msgs/UInt16MultiArray` | RC channels (µs) |
+| `~/gps/satellites` | `std_msgs/UInt8` | Sat count |
+| `~/gps/h_acc_mm` | `std_msgs/UInt32` | Horizontal accuracy (mm, from eph) |
+| `~/mission/path` | `nav_msgs/Path` | Position WPs in map ENU (`ext_nav_origin`) |
+
+Also:
+
+| Topic | Content |
+|-------|---------|
+| `~/play_tune` (sub) | `std_msgs/String` tune → MAVLink `PLAY_TUNE_V2` |
+| `~/ekf_reset` (sub) | `std_msgs/Empty` → soft-reset EKF at `ext_nav_origin` |
 | `/low_level_diagnostics` | LL status |
 | `/control_limits` | Ackermann only (from AckermannLlController) |
 
@@ -69,6 +92,7 @@ Same vision stream can feed both (`send_vision_to_fcu: true`). Diff
 
 - `src/hound_fcu_control_modular_node.cpp` — ROS wire-up + registry selection
 - `src/ackermann_ll_controller.cpp` / `src/holonomic_ll_controller.cpp` — controllers
+- `src/vesc_runner.cpp` — in-process VESC UART telemetry → `FcuBus.vesc`
 - `src/mavlink_bridge.cpp` — FCU/GCS MAVLink
 - `include/hound_core/fcu_slots.hpp` — shared bus
 - `include/hound_core/low_level_controller.hpp` — pluggable interface

@@ -1,12 +1,10 @@
-"""Mission / algorithm tier for HOUND (cuVSLAM, EKF, MAVROS, control, segmentation).
+"""Mission / algorithm tier for HOUND (composite sensing, EKF, control, seg).
 
 Bring-up is staggered (launch.stage_delay_s, default 5s between enabled stages):
-  HAL → mavros → vesc → camera|realsense_cuvslam → lidar → segmentation →
-  vslam → ekf → nvblox
+  HAL → mavros → vesc → stereo_composite → lidar → segmentation →
+  yolo_world → ekf → nvblox
 
-When realsense_cuvslam.enabled, the C++ node owns the D455 (IR+cuVSLAM in-process;
-optional color/depth). Stock realsense2_camera and isaac_ros_visual_slam stages
-are skipped so only one process holds the USB camera.
+Camera + VSLAM come only from composite_sensing (stereo_composite).
 
 Usage:
   ros2 launch hound_core hound_core.launch.py
@@ -32,13 +30,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hound_launch_common import (  # noqa: E402
     build_ekf_node,
     build_hal_monitor_node,
+    build_lidar_mesh_composite_node,
     build_nvblox_node,
+    build_hound_mapping_node,
+    build_viz_node,
+    build_nav_node,
     build_unitree_lidar_actions,
-    build_vslam_container,
     dump_temp_yaml,
     find_ssot,
-    realsense_camera_params,
-    realsense_streams_for_stack,
 )
 
 
@@ -188,9 +187,9 @@ def _build_segmentation_dora_actions(seg: dict) -> list:
     cfg_tf.close()
     cfg_path = cfg_tf.name
 
-    share = get_package_share_directory("hound_core")
-    prefix = get_package_prefix("hound_core")
-    lib = os.path.join(prefix, "lib", "hound_core")
+    share = get_package_share_directory("perception_models")
+    prefix = get_package_prefix("perception_models")
+    lib = os.path.join(prefix, "lib", "perception_models")
     template = Path(share) / "dora" / "segmentation_dataflow.yml"
     text = template.read_text(encoding="utf-8")
     text = (
@@ -259,9 +258,9 @@ def _build_yolo_world_dora_actions(yw: dict) -> list:
     json.dump(cfg, cfg_tf, indent=2)
     cfg_tf.close()
 
-    share = get_package_share_directory("hound_core")
-    prefix = get_package_prefix("hound_core")
-    lib = os.path.join(prefix, "lib", "hound_core")
+    share = get_package_share_directory("perception_models")
+    prefix = get_package_prefix("perception_models")
+    lib = os.path.join(prefix, "lib", "perception_models")
     template = Path(share) / "dora" / "yolo_world_dataflow.yml"
     text = template.read_text(encoding="utf-8").replace(
         "__YOLO_PY__", os.path.join(lib, "dora_yolo_world")
@@ -286,102 +285,67 @@ def _build_yolo_world_dora_actions(yw: dict) -> list:
     ]
 
 
-def _build_camera_node(
-    cam: dict,
-    *,
-    force_color: bool = False,
-    streams: dict | None = None,
-) -> Node:
-    camera_name = cam.get("camera_name", "camera")
-    params = realsense_camera_params(cam, force_color=force_color, streams=streams)
-    print(
-        f"[hound_core] camera ENABLED: serial={params['serial_no']} "
-        f"infra={'on' if params['enable_infra1'] else 'off'} "
-        f"profile={params['depth_module.infra_profile']} "
-        f"depth={'on' if params['enable_depth'] else 'off'} "
-        f"color={'on' if params['enable_color'] else 'off'} "
-        f"sync={params.get('enable_sync', False)} qos=SENSOR_DATA"
-    )
-    return Node(
-        name=camera_name,
-        namespace="",
-        package="realsense2_camera",
-        executable="realsense2_camera_node",
-        output="screen",
-        parameters=[params],
-    )
-
-
-def _build_realsense_cuvslam_node(
-    cam: dict,
-    rsc: dict,
+def _build_stereo_composite_node(
+    sc: dict,
     *,
     need_color: bool,
     need_depth: bool,
 ) -> Node:
-    """In-process RealSense + cuVSLAM (exclusive camera owner).
+    """In-process stereo camera + cuVSLAM (composite_sensing).
 
-    Stream enable flags come from SSoT (``realsense_cuvslam`` / ``camera``).
     Launch does not override an explicit ``enable_depth: false``.
-    A/B: ``architecture: modular`` → realsense_cuvslam_modular_node.
+    A/B: ``architecture: modular`` → stereo_composite_modular_node.
     """
-    camera_name = cam.get("camera_name", "camera")
-    enable_color = bool(rsc.get("enable_color", cam.get("enable_color", True))) or need_color
-    enable_depth = bool(rsc.get("enable_depth", cam.get("enable_depth", False)))
-    align_depth = bool(rsc.get("align_depth", cam.get("align_depth", False)))
+    enable_color = bool(sc.get("enable_color", True)) or need_color
+    enable_depth = bool(sc.get("enable_depth", False))
+    align_depth = bool(sc.get("align_depth", False))
     if need_depth and not enable_depth:
         print(
             "[hound_core] nvblox/stack wants depth but "
-            "realsense_cuvslam.enable_depth=false — not publishing depth"
+            "stereo_composite.enable_depth=false — not publishing depth"
         )
     if enable_depth and align_depth:
         enable_color = True
+    infra_w = int(sc.get("infra_width", 640))
+    infra_h = int(sc.get("infra_height", 360))
+    infra_fps = int(sc.get("infra_fps", 60))
     params = {
-        "serial_number": str(cam.get("serial_number", "")),
-        "camera_name": str(camera_name),
-        "infra_width": int(cam.get("infra_width", 640)),
-        "infra_height": int(cam.get("infra_height", 360)),
-        "infra_fps": int(rsc.get("infra_fps", cam.get("fps", 60))),
+        "serial_number": str(sc.get("serial_number", "")),
+        "camera_name": str(sc.get("camera_name", "camera")),
+        "infra_width": infra_w,
+        "infra_height": infra_h,
+        "infra_fps": infra_fps,
         "enable_color": enable_color,
-        "color_width": int(cam.get("color_width", 640)),
-        "color_height": int(cam.get("color_height", 360)),
-        "color_fps": int(rsc.get("color_fps", cam.get("color_fps", 30))),
-        "color_publish_fps": float(rsc.get("color_publish_fps", 15.0)),
+        "color_width": int(sc.get("color_width", 640)),
+        "color_height": int(sc.get("color_height", 360)),
+        "color_fps": int(sc.get("color_fps", 30)),
+        "color_publish_fps": float(sc.get("color_publish_fps", 15.0)),
         "enable_depth": enable_depth,
         "align_depth": align_depth,
-        "depth_width": int(cam.get("depth_width", cam.get("infra_width", 640))),
-        "depth_height": int(cam.get("depth_height", cam.get("infra_height", 360))),
-        # Depth module shares FPS with infra when both are enabled.
-        "depth_fps": int(
-            rsc.get("infra_fps", cam.get("fps", 30))
-            if enable_depth
-            else cam.get("depth_fps", cam.get("fps", 30))
-        ),
-        "depth_publish_fps": float(rsc.get("depth_publish_fps", 15.0)),
-        "emitter_enabled": int(cam.get("emitter_enabled", 0)),
-        # rsc override optional; else camera.visual_preset (rs400 enum).
-        "visual_preset": int(rsc.get("visual_preset", cam.get("visual_preset", 3))),
-        "clip_distance": float(rsc.get("clip_distance", cam.get("clip_distance", 0.0))),
-        "odom_topic": str(rsc.get("odom_topic", "/visual_slam/tracking/odometry")),
-        "odom_frame": str(rsc.get("odom_frame", "odom")),
-        "base_frame": str(rsc.get("base_frame", "camera_link")),
-        "async_sba": bool(rsc.get("async_sba", True)),
-        "slam_sync_mode": bool(rsc.get("slam_sync_mode", False)),
-        "warmup_frames": int(rsc.get("warmup_frames", 60)),
-        "log_cuvslam_timing": bool(rsc.get("log_cuvslam_timing", False)),
-        "profile": bool(rsc.get("profile", False)),
+        "depth_width": int(sc.get("depth_width", infra_w)),
+        "depth_height": int(sc.get("depth_height", infra_h)),
+        "depth_fps": infra_fps if enable_depth else int(sc.get("depth_fps", 30)),
+        "depth_publish_fps": float(sc.get("depth_publish_fps", 15.0)),
+        "emitter_enabled": int(sc.get("emitter_enabled", 0)),
+        "visual_preset": int(sc.get("visual_preset", 3)),
+        "clip_distance": float(sc.get("clip_distance", 0.0)),
+        "odom_topic": str(sc.get("odom_topic", "/visual_slam/tracking/odometry")),
+        "odom_frame": str(sc.get("odom_frame", "odom")),
+        "base_frame": str(sc.get("base_frame", "camera_link")),
+        "async_sba": bool(sc.get("async_sba", True)),
+        "slam_sync_mode": bool(sc.get("slam_sync_mode", False)),
+        "warmup_frames": int(sc.get("warmup_frames", 60)),
+        "log_cuvslam_timing": bool(sc.get("log_cuvslam_timing", False)),
+        "profile": bool(sc.get("profile", False)),
     }
-    # People-mask path may have set cam["align_depth"]=True; honor when depth is on.
-    if enable_depth:
-        params["align_depth"] = bool(cam.get("align_depth", params["align_depth"]))
-    arch = str(rsc.get("architecture", "legacy")).strip().lower()
+    arch = str(sc.get("architecture", "modular")).strip().lower()
     exe = (
-        "realsense_cuvslam_modular_node"
+        "stereo_composite_modular_node"
         if arch == "modular"
-        else "realsense_cuvslam_node"
+        else "stereo_composite_node"
     )
     print(
-        f"[hound_core] realsense_cuvslam ENABLED ({arch}): serial={params['serial_number']} "
+        f"[hound_core] stereo_composite ENABLED ({arch}): serial={params['serial_number']} "
         f"IR {params['infra_width']}x{params['infra_height']}@{params['infra_fps']} "
         f"color={params['enable_color']}@{params['color_fps']}Hz pub={params['color_publish_fps']}Hz "
         f"depth={params['enable_depth']}@{params['depth_publish_fps']}Hz "
@@ -390,9 +354,9 @@ def _build_realsense_cuvslam_node(
         f"odom={params['odom_topic']} exe={exe}"
     )
     return Node(
-        package="hound_core",
+        package="composite_sensing",
         executable=exe,
-        name="realsense_cuvslam_node",
+        name="stereo_composite_node",
         output="screen",
         parameters=[params],
     )
@@ -404,13 +368,14 @@ def _build_vesc_actions(vesc: dict) -> list:
     start_delay_s = float(vesc.get("start_delay_s", 0.0))
     wheel_odom = vesc.get("wheel_odom") or {}
 
+    telemetry_hz = float(vesc.get("telemetry_hz", 50.0))
     nodes = [
         Node(
             package="vesc_driver",
             executable="vesc_driver_node",
             name="vesc_driver",
             output="screen",
-            parameters=[{"port": port}],
+            parameters=[{"port": port, "telemetry_hz": telemetry_hz}],
             remappings=[("sensors/core", "/sensors/core")],
             respawn=respawn,
         ),
@@ -440,12 +405,13 @@ def _build_vesc_actions(vesc: dict) -> list:
     return nodes
 
 
-def _build_fcu_control_node(fc: dict) -> Node:
-    """In-process MAVLink router + EKF + pluggable LL (exclusive FCU tty)."""
+def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
+    """In-process MAVLink router + EKF + pluggable LL (+ optional VESC)."""
     origin = fc.get("ext_nav_origin") or {}
     fcu_params = fc.get("fcu_params") or {}
     ll_cfg = fc.get("ll") or {}
     ll_controller = str(fc.get("ll_controller", "ackermann")).strip().lower()
+    vesc = vesc or {}
     params = {
         "fcu_url": str(fc.get("fcu_url", "/dev/ttyACM1:921600")),
         "gcs_url": str(fc.get("gcs_url", "")),
@@ -464,6 +430,7 @@ def _build_fcu_control_node(fc: dict) -> Node:
             fc.get("vision_odom_topic", "/visual_slam/tracking/odometry")
         ),
         "ekf_odom_topic": str(fc.get("ekf_odom_topic", "ekf/odometry")),
+        "ekf_reset_topic": str(fc.get("ekf_reset_topic", "~/ekf_reset")),
         "ekf_odom_hz": int(fc.get("ekf_odom_hz", 50)),
         "mag_max_hz": float(fc.get("mag_max_hz", 20.0)),
         "baro_max_hz": float(fc.get("baro_max_hz", 20.0)),
@@ -483,6 +450,10 @@ def _build_fcu_control_node(fc: dict) -> Node:
         "fcu_params.SR0_EXTRA1": int(fcu_params.get("SR0_EXTRA1", 200)),
         "fcu_params.SR0_RAW_SENS": int(fcu_params.get("SR0_RAW_SENS", 200)),
         "ll_controller": ll_controller,
+        # Top-level SSoT vesc: block — in-process when fcu_control owns the stack.
+        "vesc_enabled": bool(vesc.get("enabled", False)),
+        "vesc_port": str(vesc.get("port", "/dev/ttyACM0")),
+        "vesc_telemetry_hz": float(vesc.get("telemetry_hz", 200.0)),
     }
     # Pass through the robot-specific ll.* block as ROS params. Schema depends
     # on ll_controller (ackermann vs holonomic); each controller declares what
@@ -542,25 +513,17 @@ def _build_mavros_actions(mav: dict) -> list:
     return actions
 
 
-def _build_vslam_actions(cam: dict, vslam: dict) -> list:
-    print(
-        "[hound_core] RealSense cuVSLAM in visual_slam_launch_container "
-        "(camera already staged separately; SENSOR_DATA QoS)"
-    )
-    return [build_vslam_container(cam, vslam)]
-
-
 def generate_launch_description():
     ssot_file = find_ssot()
     print(f"[hound_core] Using SSoT file: {ssot_file}")
     with open(ssot_file, "r", encoding="utf-8") as handle:
         ssot = yaml.safe_load(handle)
 
-    cam = ssot.get("camera", {})
-    rsc = ssot.get("realsense_cuvslam", {})
-    vslam = ssot.get("vslam", {})
+    sc = dict(ssot.get("stereo_composite") or {})
     ekf = ssot.get("ekf", {})
     nvblox = ssot.get("nvblox", {})
+    viz = ssot.get("viz", {})
+    nav = ssot.get("nav", {})
     mav = ssot.get("mavros", {})
     fcu = ssot.get("fcu_control", {})
     vesc = ssot.get("vesc", {})
@@ -570,12 +533,12 @@ def generate_launch_description():
     launch_cfg = ssot.get("launch", {})
     lidar = ssot.get("lidar", {})
 
-    rsc_enabled = bool(rsc.get("enabled", False))
-    camera_enabled = bool(cam.get("enabled", True))
+    sc_enabled = bool(sc.get("enabled", False))
     stage_delay_s = float(launch_cfg.get("stage_delay_s", 5.0))
-    vslam_enabled = bool(vslam.get("enabled", True))
     ekf_enabled = bool(ekf.get("enabled", False))
     nvblox_enabled = bool(nvblox.get("enabled", False))
+    viz_enabled = bool(viz.get("enabled", False))
+    nav_enabled = bool(nav.get("enabled", False))
     mavros_enabled = bool(mav.get("enabled", False))
     fcu_control_enabled = bool(fcu.get("enabled", False))
     vesc_enabled = bool(vesc.get("enabled", False))
@@ -599,51 +562,19 @@ def generate_launch_description():
             )
             ekf_enabled = False
 
-    # C++ node owns USB exclusively — never also start stock camera / Isaac VSLAM.
-    if rsc_enabled:
-        if camera_enabled:
+    # nvblox people mask needs depth aligned to color.
+    if nvblox_enabled and bool(nvblox.get("use_people_mask", True)):
+        if not bool(sc.get("align_depth", False)):
             print(
-                "[hound_core] realsense_cuvslam.enabled: forcing camera.enabled=false "
-                "(exclusive USB ownership)"
+                "[hound_core] nvblox use_people_mask=true: forcing "
+                "stereo_composite.align_depth=true (mask/depth must share color frame)"
             )
-            camera_enabled = False
-        if vslam_enabled:
-            print(
-                "[hound_core] realsense_cuvslam.enabled: forcing vslam.enabled=false "
-                "(in-process Tracker)"
-            )
-            vslam_enabled = False
-
-    # nvblox: enable depth on stock RealSense path only. realsense_cuvslam
-    # streams are controlled exclusively by realsense_cuvslam.* in SSoT.
-    if nvblox_enabled:
-        cam = dict(cam)
-        if not rsc_enabled:
-            cam["enable_depth"] = True
-        if bool(nvblox.get("use_people_mask", True)):
-            # Mask is in color pixels — depth must be aligned to color.
-            if not bool(cam.get("align_depth", False)) and not bool(
-                rsc.get("align_depth", False)
-            ):
-                print(
-                    "[hound_core] nvblox use_people_mask=true: forcing "
-                    "align_depth=true (mask/depth must share color frame)"
-                )
-            cam["align_depth"] = True
-            if rsc_enabled:
-                rsc = dict(rsc)
-                rsc["align_depth"] = True
-        if bool(nvblox.get("use_people_mask", True)) and not seg_enabled:
+            sc = dict(sc)
+            sc["align_depth"] = True
+        if not seg_enabled:
             print(
                 "[hound_core] nvblox use_people_mask=true but segmentation DISABLED "
                 "-> people mask remaps will stall until SAM publishes"
-            )
-        if not bool(vslam.get("publish_odom_to_base_tf", False)):
-            vslam = dict(vslam)
-            vslam["publish_odom_to_base_tf"] = True
-            print(
-                "[hound_core] nvblox: forcing vslam.publish_odom_to_base_tf=true "
-                "(needs odom→camera_link TF)"
             )
 
     need_color = (
@@ -653,36 +584,29 @@ def generate_launch_description():
     )
     need_depth = nvblox_enabled and bool(nvblox.get("use_depth", False))
     if need_depth is False and nvblox_enabled and "use_depth" not in nvblox:
-        # Legacy: if use_depth omitted, only require camera depth when no lidar.
         need_depth = not bool(nvblox.get("use_lidar", False))
-    has_camera_source = camera_enabled or rsc_enabled
-    rs_streams = realsense_streams_for_stack(
-        cam,
-        vslam_enabled=vslam_enabled,
-        nvblox_enabled=nvblox_enabled,
-        seg_enabled=seg_enabled or yolo_enabled,
-    )
-    if camera_enabled:
-        print(
-            f"[hound_core] RealSense streams: infra={rs_streams['enable_infra1']} "
-            f"depth={rs_streams['enable_depth']} color={rs_streams['enable_color']} "
-            f"(from enabled stack nodes)"
-        )
+    has_camera_source = sc_enabled
 
     # --- Stage builders (order matches bring-up sequence) --------------------
     # 1) HAL
     hal_acts = []
     if hal_enabled:
+        fcu_hal = hal.get("fcu") or hal.get("mavros") or {}
         if (
             mavros_enabled
             or fcu_control_enabled
-            or not (hal.get("mavros") or {}).get("monitor_enabled", True)
+            or not fcu_hal.get("monitor_enabled", True)
         ):
-            hal_acts = [build_hal_monitor_node(hal, cam)]
+            # HAL camera defaults use camera_name / fps from stereo_composite.
+            hal_cam = {
+                "camera_name": sc.get("camera_name", "camera"),
+                "fps": float(sc.get("color_publish_fps", sc.get("color_fps", 15.0))),
+            }
+            hal_acts = [build_hal_monitor_node(hal, hal_cam)]
         else:
             print(
                 "[hound_core] hal_monitor needs mavros/fcu_control or "
-                "mavros.monitor_enabled=false"
+                "fcu.monitor_enabled=false"
             )
     else:
         print("[hound_core] hal_monitor DISABLED")
@@ -691,53 +615,83 @@ def generate_launch_description():
     fcu_acts = []
     mav_acts = []
     if fcu_control_enabled:
-        fcu_acts = [_build_fcu_control_node(fcu)]
+        fcu_acts = [_build_fcu_control_node(fcu, vesc)]
         print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
     elif mavros_enabled:
         mav_acts = _build_mavros_actions(mav)
     else:
         print("[hound_core] mavros DISABLED (fcu_control also off)")
 
-    # 3) vesc (telemetry; LL now lives inside fcu_control when enabled)
+    # 3) vesc — embed in fcu_control when both enabled (exclusive VESC tty);
+    #    otherwise standalone vesc_driver for the classic path.
     vesc_acts = []
     if vesc_enabled:
-        vesc_cfg = dict(vesc)
-        vesc_cfg["start_delay_s"] = 0.0  # stagger owns timing
-        vesc_acts = _build_vesc_actions(vesc_cfg)
+        if fcu_control_enabled:
+            print(
+                "[hound_core] vesc ENABLED in-process (fcu_control); "
+                "skipping standalone vesc_driver"
+            )
+            wheel_odom = vesc.get("wheel_odom") or {}
+            if bool(wheel_odom.get("enabled", False)):
+                vesc_acts.append(
+                    Node(
+                        package="hound_core",
+                        executable="wheel_odom_node",
+                        name="wheel_odom_node",
+                        output="screen",
+                        parameters=[{
+                            "erpm_gain": float(wheel_odom.get("erpm_gain", 3166.6)),
+                            "output_topic": str(
+                                wheel_odom.get(
+                                    "output_topic", "/mavros/vision_pose/vis_odom"
+                                )
+                            ),
+                            "min_publish_interval_s": float(
+                                wheel_odom.get("min_publish_interval_s", 0.1)
+                            ),
+                        }],
+                    )
+                )
+        else:
+            vesc_cfg = dict(vesc)
+            vesc_cfg["start_delay_s"] = 0.0  # stagger owns timing
+            vesc_acts = _build_vesc_actions(vesc_cfg)
 
-    # 4) camera source: stock RealSense OR in-process realsense_cuvslam
+    # 4) stereo_composite (composite_sensing)
     cam_acts = []
-    if rsc_enabled:
+    if sc_enabled:
         cam_acts = [
-            _build_realsense_cuvslam_node(
-                cam, rsc, need_color=need_color, need_depth=need_depth
+            _build_stereo_composite_node(
+                sc, need_color=need_color, need_depth=need_depth
             )
         ]
-    elif camera_enabled:
-        cam_acts = [_build_camera_node(cam, force_color=need_color, streams=rs_streams)]
     else:
-        print("[hound_core] camera DISABLED (no realsense_cuvslam either)")
+        print("[hound_core] stereo_composite DISABLED")
 
-    # 5) LiDAR (Unitree UniLidar)
+    # 5) LiDAR — composite (SDK+mesh PF) XOR legacy unitree_lidar_ros2
     lidar_acts = []
     if lidar_enabled:
-        backend = str(lidar.get("backend", "unitree")).lower()
-        if backend == "unitree":
-            lidar_acts = build_unitree_lidar_actions(lidar)
+        comp = lidar.get("composite") or {}
+        if bool(comp.get("enabled", False)):
+            lidar_acts = [build_lidar_mesh_composite_node(lidar)]
         else:
-            print(f"[hound_core] lidar.backend={backend!r} not supported — skipping")
+            backend = str(lidar.get("backend", "unitree")).lower()
+            if backend == "unitree":
+                lidar_acts = build_unitree_lidar_actions(lidar)
+            else:
+                print(
+                    f"[hound_core] lidar.backend={backend!r} not supported — skipping"
+                )
     else:
         print("[hound_core] lidar DISABLED")
 
-    # 6) segmentation (dora: encoder -> FiLM/SAM refine; ROS topics unchanged)
+    # 6) segmentation (dora: encoder -> FiLM/SAM refine)
     seg_acts = []
     if seg_enabled:
         replay_mode = bool(seg.get("replay_mode", False))
         if has_camera_source or replay_mode:
             seg_for_dora = dict(seg)
             if yolo_enabled:
-                # YOLO owns people: strip people prompts from CLIPSeg; NanoSAM
-                # gets person boxes from /yolo_world/detections.
                 prompts = dict(seg_for_dora.get("prompts") or {})
                 if isinstance(prompts, dict) and "people" in prompts:
                     prompts = {k: v for k, v in prompts.items() if k != "people"}
@@ -746,61 +700,71 @@ def generate_launch_description():
                 seg_for_dora["yolo_detections_topic"] = str(
                     yw.get("detections_topic", "/yolo_world/detections")
                 )
-                # Keep a people SAM channel index even if CLIPSeg has no people group.
-                # After strip: trav=0, nontrav=1 → people_idx=2.
                 print(
                     "[hound_core] yolo_world.on → CLIPSeg people prompts removed; "
                     "NanoSAM people from YOLO boxes"
                 )
             seg_acts = _build_segmentation_dora_actions(seg_for_dora)
         else:
-            print("[hound_core] segmentation skipped (no color source)")
+            print("[hound_core] segmentation skipped (no stereo_composite)")
     else:
         print("[hound_core] segmentation DISABLED")
 
-    # 6b) YOLO-World instance detector (dora; parallel to CLIPSeg)
+    # 6b) YOLO-World
     yolo_acts = []
     if yolo_enabled:
         yw_replay = bool(yw.get("replay_mode", False))
         if has_camera_source or yw_replay:
             yolo_acts = _build_yolo_world_dora_actions(yw)
         else:
-            print("[hound_core] yolo_world skipped (no color source)")
+            print("[hound_core] yolo_world skipped (no stereo_composite)")
     else:
         print("[hound_core] yolo_world DISABLED")
 
-    # 7) vslam (skipped when realsense_cuvslam owns tracking)
-    vslam_acts = []
-    if vslam_enabled:
-        if camera_enabled:
-            vslam_acts = _build_vslam_actions(cam, vslam)
-        else:
-            print("[hound_core] vslam requested but no camera source -> skipping")
-    else:
-        print("[hound_core] vslam DISABLED")
-
-    # 8) ekf (pose from /visual_slam/tracking/odometry — C++ or Isaac)
+    # 7) ekf (pose from stereo_composite odom topic)
     ekf_acts = []
     if ekf_enabled:
-        if not (vslam_enabled or rsc_enabled):
+        if not sc_enabled:
             print(
-                "[hound_core] ekf requested but no VSLAM source "
-                "(vslam/realsense_cuvslam) -> skipping"
+                "[hound_core] ekf requested but stereo_composite DISABLED -> skipping"
             )
         else:
             ekf_acts.append(build_ekf_node(ekf))
     else:
         print("[hound_core] ekf DISABLED")
 
-    # 9) nvblox
+    # 8) nvblox / hound_mapping
     nvblox_acts = []
     if nvblox_enabled:
         if not has_camera_source:
-            print("[hound_core] nvblox requested but no camera -> skipping")
+            print("[hound_core] nvblox requested but stereo_composite DISABLED -> skipping")
         else:
-            nvblox_acts = [build_nvblox_node(nvblox, cam, seg, lidar)]
+            backend = str(nvblox.get("backend", "hound")).strip().lower()
+            if backend == "ros":
+                nvblox_acts = [build_nvblox_node(nvblox, sc, seg, lidar)]
+            else:
+                if backend != "hound":
+                    print(
+                        f"[hound_core] nvblox.backend={backend!r} unknown; "
+                        "using hound_mapping"
+                    )
+                nvblox_acts = [build_hound_mapping_node(nvblox, sc, seg, lidar)]
     else:
         print("[hound_core] nvblox DISABLED")
+
+    # 9) nav (needs LocalMap + odom)
+    nav_acts = []
+    if nav_enabled:
+        nav_acts = [build_nav_node(nav)]
+    else:
+        print("[hound_core] nav DISABLED")
+
+    # 10) viz (subscribe-only; last so producers exist)
+    viz_acts = []
+    if viz_enabled:
+        viz_acts = [build_viz_node(viz)]
+    else:
+        print("[hound_core] viz DISABLED")
 
     print(
         f"[hound_core] staggered bring-up: stage_delay_s={stage_delay_s} "
@@ -811,12 +775,13 @@ def generate_launch_description():
         ("fcu_control", fcu_acts),
         ("mavros", mav_acts),
         ("vesc", vesc_acts),
-        ("camera", cam_acts),
+        ("stereo_composite", cam_acts),
         ("lidar", lidar_acts),
         ("segmentation", seg_acts),
         ("yolo_world", yolo_acts),
-        ("vslam", vslam_acts),
         ("ekf", ekf_acts),
         ("nvblox", nvblox_acts),
+        ("nav", nav_acts),
+        ("viz", viz_acts),
     ]
     return LaunchDescription(_schedule_stages(stages, stage_delay_s))

@@ -7,7 +7,6 @@
 
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <rclcpp/node.hpp>
-#include <vesc_msgs/msg/vesc_state_stamped.hpp>
 
 #include "hound_core/fcu_slots.hpp"
 #include "hound_core/low_level_controller.hpp"
@@ -66,15 +65,17 @@ public:
   void set_params(const Params & params);
 
   void update_vesc(float erpm, float voltage_input, float duty_cycle, float current_input);
+  void update_vesc(const VescSample & vesc) override;
   void update_rc(const RcSample & rc) override;
   void update_mode(const FcuStateSample & state) override;
   void update_auto(float steering_rad, float speed_mps);
   LlStatus tick_imu(const ImuSample & imu) override;
+  bool plant_feedback(float & steering_rad, float & wheelspeed_mps) const override;
 
   float auto_wheelspeed_limit() const;
   float max_rated_speed() const {return max_rated_speed_;}
 
-  /** Wire VESC + autonomy + /control_limits for the modular node. */
+  /** Wire autonomy + /control_limits (VESC comes from FcuBus). */
   void setup_subscriptions(rclcpp::Node & node);
 
 private:
@@ -112,8 +113,8 @@ private:
   float K_drag_{0.0f};
   float speed_integral_{0.0f};
   float speed_proportional_{0.0f};
+  float last_steering_rad_{0.0f};
 
-  rclcpp::Subscription<vesc_msgs::msg::VescStateStamped>::SharedPtr vesc_sub_;
   rclcpp::Subscription<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr auto_sub_;
   rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr limits_pub_;
 };

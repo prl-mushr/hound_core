@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <mavconn/interface.hpp>
-#include <mavros_msgs/msg/waypoint.hpp>
 #include <rclcpp/clock.hpp>
 #include <rclcpp/logger.hpp>
 
@@ -65,9 +64,11 @@ public:
   void send_rc_override(const RcOverrideCmd & cmd);
   /** Rate-limited (1 Hz) SET_MODE with custom_mode (e.g. Rover HOLD = 4). */
   void request_mode(uint32_t custom_mode);
+  /** PLAY_TUNE_V2 (QBasic format=1 by default). */
+  void send_play_tune(const std::string & tune, uint32_t format = 1);
 
-  /** If a full mission download finished, copies waypoints and clears dirty. */
-  bool take_mission(std::vector<mavros_msgs::msg::Waypoint> & out);
+  /** If a full mission download finished, copies items and clears dirty. */
+  bool take_mission(std::vector<MissionItem> & out);
 
 private:
   void open_links();
@@ -113,7 +114,7 @@ private:
   std::mutex mission_mu_;
   uint16_t mission_count_{0};
   uint16_t mission_next_{0};
-  std::vector<mavros_msgs::msg::Waypoint> mission_items_;
+  std::vector<MissionItem> mission_items_;
   bool mission_dirty_{false};
 
   std::mutex gcs_throttle_mu_;

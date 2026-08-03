@@ -1,64 +1,34 @@
 # =============================================================================
 # SINGLE SOURCE OF TRUTH (SSoT) for HOUND perception + control bring-up.
 #
-# Camera: Intel RealSense D455
-# Prefer realsense_cuvslam (in-process IR+cuVSLAM + optional color/depth) over
-# stock realsense2_camera + isaac_ros_visual_slam when realsense_cuvslam.enabled.
+# Camera + VSLAM: composite_sensing stereo_composite (in-process IR+cuVSLAM).
+# No stock realsense2_camera / isaac_ros_visual_slam path.
 # =============================================================================
 
-camera:
-  enabled: false
+# In-process stereo + cuVSLAM (exclusive USB owner). Package: composite_sensing.
+# IR (Track) and color use separate queues — color FPS does not gate Track.
+stereo_composite:
+  enabled: true
+  # A/B: legacy = stereo_composite_node; modular = stereo_composite_modular_node
+  architecture: modular
   camera_name: camera
   serial_number: "030422250301"
-  # D455 (rs400) depth_module.visual_preset — applied by stock realsense2_camera
-  # and realsense_cuvslam_node (stereo depth algo; set before emitter/clip):
-  #   0 custom
-  #   1 default
-  #   2 hand
-  #   3 high_accuracy
-  #   4 high_density
-  #   5 medium_density
-  #   6 remove_ir_pattern
-  visual_preset: 3      # high_accuracy
-  clip_distance: 6.0    # meters
-  # IR + depth share the D455 depth module: same WxH and FPS required.
+  # IR stereo drives Track (odom/TF). WxH shared with depth when enable_depth.
   infra_width: 640
   infra_height: 360
-  fps: 30
+  infra_fps: 60
   emitter_enabled: 0
+  # D455 (rs400) depth_module.visual_preset (set before emitter/clip):
+  #   0 custom … 3 high_accuracy … 6 remove_ir_pattern
+  visual_preset: 3
+  clip_distance: 6.0    # meters
   enable_color: true
-  # Keep false when color_fps != depth/infra fps (sync would stall / drop).
-  enable_sync: false
   color_width: 640
   color_height: 360
   color_fps: 30
-  enable_imu: false
-  gyro_fps: 200
-  accel_fps: 200
-  # Depth for nvblox (aligned to color so people mask matches depth pixels).
-  enable_depth: false
-  align_depth: false
-  depth_width: 640
-  depth_height: 360
-  depth_fps: 30
-
-# In-process RealSense + cuVSLAM (exclusive USB owner). Replaces camera + vslam.
-# IR (stereo module) and color (RGB sensor) use separate queues — color FPS no
-# longer gates Track. Keep color_fps at a supported RGB rate (often 30).
-realsense_cuvslam:
-  enabled: true
-  # A/B: legacy = realsense_cuvslam_node; modular = realsense_cuvslam_modular_node
-  architecture: modular
-  # IR stereo drives Track (odom/TF). Color/depth optional at lower publish FPS.
-  infra_fps: 60
-  color_fps: 30
-  enable_color: true
   color_publish_fps: 15.0
   enable_depth: true
-  visual_preset: 3      # high_accuracy
-  clip_distance: 6.0    # meters
-  # false → /camera/depth/image_rect_raw (+ depth CameraInfo / optical frame)
-  # true  → /camera/aligned_depth_to_color/* (color CameraInfo; needed for people mask)
+  # false → /camera/depth/image_rect_raw; true → aligned_depth_to_color (people mask)
   align_depth: false
   # When enable_depth: node forces depth WxH/FPS to match infra (shared module).
   depth_publish_fps: 15.0
@@ -68,15 +38,14 @@ realsense_cuvslam:
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
-  # Periodic Track timing INFO (every 2s). Off by default.
   log_cuvslam_timing: false
-  # SDK TIME_OF_ARRIVAL → Track + dequeue→Track (every 2s). Off by default.
   profile: false
 
-# Unitree UniLidar (serial). Staggered after camera in hound_core.launch.py.
+# Lidar bring-up. Prefer in-process composite (SDK + mesh PF); legacy ROS driver
+# remains available when composite.enabled is false.
 lidar:
   enabled: false
-  backend: unitree
+  backend: unitree          # unitree | ouster | livox (composite adapters)
   port: /dev/ttyUSB0
   rotate_yaw_bias: 0.0
   range_scale: 0.001
@@ -116,35 +85,20 @@ lidar:
     timestamp_field: time
     timestamp_unit: seconds
 
-vslam:
-  # Disabled when realsense_cuvslam.enabled (in-process Tracker replaces Isaac node).
-  enabled: false
-  publish_map_to_odom_tf: false
-  # Required for nvblox (odom → camera_link). Launch forces true if nvblox on.
-  publish_odom_to_base_tf: true
-  # 0 = stereo-only, 1 = VIO (needs IMU). D455 IMU unavailable on this Jetson → 0.
-  tracking_mode: 0
-
-  rectified_images: true
-  enable_image_denoising: false
-  # Nominal 30 Hz period ≈ 33 ms. cuVSLAM often sees ~66 ms (every other
-  # stereo pair) under load — allow one skipped frame before warning.
-  image_jitter_threshold_ms: 75.0
-
-  # Viz is expensive; leave off if you care about frame timing.
-  enable_slam_visualization: false
-  enable_landmarks_view: false
-  enable_observations_view: false
-
-  # Must match RealSense infra*_qos (BEST_EFFORT). Isaac default is SENSOR_DATA.
-  image_qos: SENSOR_DATA
-  imu_qos: SENSOR_DATA
-
-  calibration_frequency: 200.0
-  gyro_noise_density: 0.000244
-  gyro_random_walk: 0.000019393
-  accel_noise_density: 0.001862
-  accel_random_walk: 0.003
+  # In-process Unitree SDK + constant-twist Embree mesh PF (no EKF odom prior).
+  # When enabled, launch skips the legacy unitree_lidar_ros2 node.
+  composite:
+    enabled: false
+    map_file: ""                 # path to .dae/.obj/.ply mesh
+    map_frame: map
+    base_frame: base_link
+    pose_topic: /localization/mesh_pose
+    localize_hz: 10.0
+    num_particles: 2000
+    beam_samples: 64
+    global_init_on_start: true
+    publish_cloud: true
+    init_bb: {xmin: -20.0, ymin: -20.0, zmin: 0.0, xmax: 20.0, ymax: 20.0, zmax: 2.0}
 
 # Mission bring-up (hound_core/launch/hound_core.launch.py).
 launch:
@@ -162,9 +116,29 @@ ekf:
 # People mask applies to the camera/depth path only (not lidar points).
 nvblox:
   enabled: false
+  # backend: ros = stock nvblox_ros; hound = in-house hound_mapping
+  # (TSDF integrate + GPU TSDF→BEV elev/cost/normals → LocalMap).
+  backend: hound
   use_depth: true
   use_color: true
   use_lidar: true
+  # Local 2.5D map (hound backend). Cost = semantic (1 - BT.601/255) OR slope lethal.
+  elevation_resolution: 0.1
+  unobserved_luminance: 0.0
+  elev_z_min_rel: -5.0
+  elev_z_max_rel: 2.0
+  # Min free height under an overhang to treat the lower surface as floor.
+  robot_height_m: 0.4
+  # Surface tilt above this (deg from horizontal) → lethal (OR with semantic).
+  lethal_slope_deg: 60.0
+  # Low-res Telea fill of unknown elev (then upsample + mask). Normals/slope after.
+  do_inpaint: true
+  inpaint_resolution_m: 0.25
+  inpaint_radius: 3
+  # Unobserved cells: elev = vehicle Z until inpaint; cost from slope after.
+  publish_map_rate_hz: 20.0
+  # How often to drop TSDF blocks outside map_clearing_radius_m.
+  map_clear_rate_hz: 20.0
   # Lidar PointCloud2 for nvblox (organized width×height required).
   # Defaults to lidar.cloud_topic; use deskewed topic if deskewer.enabled.
   lidar_topic: "/unilidar/cloud"
@@ -184,7 +158,7 @@ nvblox:
   use_lidar_motion_compensation: false
   pointcloud2_timestamps_are_relative: false
   # Map resolution: 0.05 = 5 cm, 0.10 = 10 cm.
-  voxel_size: 0.05
+  voxel_size: 0.1
   use_people_mask: false
   # people_mask_topic: "/segmentation/refined_people_mask"
   people_mask_topic: "/segmentation/coarse_people_mask"
@@ -204,21 +178,70 @@ nvblox:
   layer_visualization_exclusion_height_m: 3.0
   # Debug back-projected lidar/depth cloud viz only (not TSDF integrate).
   max_back_projection_distance: 32.0
-  # ESDF 2D slice heights relative to map_clearing_frame (tune to mount).
+  # ESDF 2D slice (nvblox_ros backend only; hound BEV does not use ESDF).
   esdf_slice_height: 0.0
   esdf_slice_min_height: -0.1
   esdf_slice_max_height: 0.3
-  # Rate limits (sensors can be faster; nvblox throttles work).
-  # Depth arrives ~60 Hz but is integrated at integrate_depth_rate_hz.
-  # ESDF / mesh / color are separate throttles — raise carefully (GPU load).
+  # Rate limits (sensors can be faster; mapper throttles work).
   integrate_depth_rate_hz: 20.0
   integrate_lidar_rate_hz: 10.0
   integrate_color_rate_hz: 20.0
-  update_esdf_rate_hz: 20.0
+  update_esdf_rate_hz: 20.0   # nvblox_ros only
   update_mesh_rate_hz: 10.0
   publish_layer_rate_hz: 10.0
   # View-based decay needs a depth camera view; leave 0 for lidar-only geometry.
   decay_tsdf_rate_hz: 0.0
+
+# Browser visualization (Viser). Separate process; subscribe-only, no control path.
+# Open http://<robot-ip>:<port>/ after bring-up. Needs: pip install viser
+viz:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8080
+  global_frame: odom
+  base_frame: base_link
+  local_map_topic: /hound_mapping/local_map
+  odom_topic: /visual_slam/tracking/odometry
+  lidar_topic: /unilidar/cloud
+  camera_topic: /camera/color/image_raw
+  path_topic: /mission/path
+  mesh_pose_topic: /localization/mesh_pose
+  use_local_map: true
+  use_odom: true
+  use_lidar: true
+  use_camera: true
+  use_path: true
+  use_mesh_pose: true
+  lidar_max_points: 20000
+  lidar_min_period_s: 0.2
+  camera_min_period_s: 0.2
+  map_mesh_stride: 2
+  map_z_exaggeration: 1.0
+
+# IGHA* (planner process) + BeamNGRL UW_mppi (main thread). Untouched deps in src/.
+# Requires: pip install -e src/IGHAStar ; CUDA; LocalMap + control_state + mission path.
+nav:
+  enabled: false
+  config_path: ""   # empty -> hound_nav/config/nav_example.yaml
+  local_map_topic: /hound_mapping/local_map
+  # Float64MultiArray[17] from fcu_control: pos,rpy,vel,A,G,steer,wheelspeed
+  # Optional data[17]=publisher ROS time (s) for /hound_nav/state_to_cmd_ms.
+  state_topic: /hound_fcu_control/control_state
+  path_topic: /mission/path
+  # When set + skip_planner, MPPI uses this Path and does not start IGHA*.
+  inject_path_topic: /hound_nav/inject_path
+  skip_planner: false
+  cmd_topic: /hound_nav/cmd_ackermann
+  plan_topic: /hound_nav/local_plan
+  latency_topic: /hound_nav/state_to_cmd_ms
+  # Wake MPPI on each control_state (min latency). If false, pace at control_rate_hz.
+  event_driven: true
+  # Background BEV warp+H2D at bev_hz (and on every LocalMap); MPPI uses latest ready.
+  async_bev: true
+  bev_hz: 20.0
+  control_rate_hz: 20.0
+  max_steer_rad: 0.6
+  max_speed_mps: 20.0
 
 mavros:
   # Classic multi-process MAVROS bring-up (apm.launch). Prefer fcu_control
@@ -267,6 +290,8 @@ fcu_control:
   # Example: listen on all ifaces, send to GCS at 10.18.249.206:14550
   gcs_url: "udp://@10.18.249.206:14550"
   ros_publish_hz: 50.0
+  # Low-rate aux thread: RC, armed, GPS sats/h_acc, mission Path (not on hot path).
+  aux_publish_hz: 10.0
   gcs_block_stream_requests: true
   gcs_throttle_hz: 5.0
   gcs_throttle_msgids: [27, 30, 31, 32, 33, 65]
@@ -301,6 +326,9 @@ fcu_control:
     lat: 37.8715
     lon: -122.2730
     hgt: 0.0
+  # Soft-reset EKF to origin without restarting the process:
+  #   ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty {}
+  ekf_reset_topic: ~/ekf_reset
   fcu_params:
     SR0_EXTRA1: 200
     SR0_RAW_SENS: 200
@@ -326,19 +354,20 @@ fcu_control:
     control_dt: 0.02
 
 vesc:
-  # Telemetry-only: vesc_driver polls the VESC and publishes /sensors/core.
-  # HOUND does not command the VESC over ROS (actuation goes through MAVROS/FCU).
-  # Master switch for the VESC serial driver (vesc_ros2).
+  # Telemetry-only (no ROS motor commands; actuation goes through the FCU).
+  # With fcu_control.enabled: VESC UART is polled in-process (VescRunner thread),
+  # LL reads FcuBus.vesc, and /sensors/core is published at ros_publish_hz for HAL/bags.
+  # Without fcu_control: standalone vesc_driver_node owns the port.
   enabled: false
 
-  # Delay before starting VESC nodes (seconds). The old stack used timed launch
-  # (~50s) to avoid USB enumeration races with MAVROS / other peripherals.
+  # Delay before starting standalone VESC nodes (seconds). Unused when embedded.
   start_delay_s: 0.0
 
-  # Serial device for the VESC. On HOUND the FCU is often a different port
-  # (see mavros.fcu_url, e.g. /dev/ttyACM0) — avoid sharing one tty with VESC.
+  # Serial device for the VESC. Must differ from fcu_control.fcu_url / mavros.fcu_url.
   port: /dev/ttyACM0
   respawn: true
+  # Poll rate for requestState (in-process or vesc_driver). 200 Hz is fine on USB.
+  telemetry_hz: 200.0
 
   wheel_odom:
     # Feed wheel-speed measurements to mavlink (legacy vesc_to_odom.py behavior).
@@ -369,27 +398,29 @@ hal_monitor:
   gps_min_satellites: 16
   gps_max_h_acc_mm: 1000
 
-  mavros:
+  # Stock ROS msgs from hound_fcu_control (no mavros_msgs).
+  fcu:
     monitor_enabled: true
-    monitor_topic: /mavros/imu/data_raw
-    expected_fps: 200.0
-    failure_action: "ros2 run mavros mav sys rate --all 200"
-    pose_topic: /mavros/local_position/pose
-    state_topic: /mavros/state
-    gps_topic: /mavros/gpsstatus/gps1/raw
-    notification_topic: /mavros/play_tune
-    channel_topic: /mavros/rc/in
+    monitor_topic: /hound_fcu_control/imu
+    expected_fps: 50.0
+    failure_action: ""
+    pose_topic: /hound_fcu_control/ap/local_odometry
+    armed_topic: /hound_fcu_control/state/armed
+    gps_satellites_topic: /hound_fcu_control/gps/satellites
+    gps_h_acc_topic: /hound_fcu_control/gps/h_acc_mm
+    notification_topic: /hound_fcu_control/play_tune
+    channel_topic: /hound_fcu_control/rc/in
     base_frame: base_link
 
   camera:
     monitor_enabled: true
-    # RealSense infra (D455).
-    monitor_topic: /camera/infra1/image_rect_raw
-    expected_fps: 30.0
+    # stereo_composite publishes color (IR stays in-process, not on DDS).
+    monitor_topic: /camera/color/image_raw
+    expected_fps: 15.0
     pos: [0.15, 0.047, 0.04]
     rot: [0.0, 0.0, 0.0, 1.0]
     depth_frame: camera_link
-    depth_optical_frame: camera_infra1_optical_frame
+    depth_optical_frame: camera_color_optical_frame
 
   vesc:
     topic: /sensors/core

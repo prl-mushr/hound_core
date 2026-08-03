@@ -1,6 +1,7 @@
 """Background monitor for HOUND: health checks, TF, tunes, and rosbag control.
 
 ROS 2 port of the legacy HAL_9000.py monitor node.
+Talks to fcu_control via stock ROS messages (no mavros_msgs).
 """
 
 from __future__ import annotations
@@ -19,11 +20,12 @@ from typing import Deque, List, Optional
 import numpy as np
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import PoseStamped, TransformStamped
-from mavros_msgs.msg import GPSRAW, PlayTuneV2, RCIn, State
+from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, Imu
+from std_msgs.msg import Bool, String, UInt8, UInt16MultiArray, UInt32
 from tf2_ros import TransformBroadcaster
 from vesc_msgs.msg import VescStateStamped
 
@@ -72,38 +74,40 @@ class HalMonitorNode(Node):
         super().__init__("HAL_9000")
 
         self._on_jetson = platform.machine() == "aarch64"
-        self._mavros_hz = TopicHzTracker()
+        self._fcu_hz = TopicHzTracker()
         self._camera_hz = TopicHzTracker()
         self._tf_broadcaster = TransformBroadcaster(self)
 
         self._declare_parameters()
         self._load_record_topics()
 
-        self._mavros_init = False
+        self._fcu_init = False
         self._camera_init = False
         self._recording_state = False
         self._gps_status = False
+        self._last_sats: Optional[int] = None
+        self._last_h_acc_mm: Optional[int] = None
         self._last_map_clear = time.time()
         self._rosbag_proc: Optional[subprocess.Popen] = None
         self._record_cmd: List[str] = []
         self._gpu_freq_path: Optional[str] = None
 
         self._notification_pub = self.create_publisher(
-            PlayTuneV2, self._p("mavros.notification_topic"), 10
+            String, self._p("fcu.notification_topic"), 10
         )
         self._diagnostics_pub = self.create_publisher(
             DiagnosticArray, self._p("diagnostics_topic"), 2
         )
 
-        self._mavros_monitor_enabled = bool(
-            self.get_parameter("mavros.monitor_enabled").value
+        self._fcu_monitor_enabled = bool(
+            self.get_parameter("fcu.monitor_enabled").value
         )
 
-        if self._mavros_monitor_enabled:
+        if self._fcu_monitor_enabled:
             self.create_subscription(
                 Imu,
-                self._p("mavros.monitor_topic"),
-                lambda _msg: self._mavros_hz.tick(),
+                self._p("fcu.monitor_topic"),
+                lambda _msg: self._fcu_hz.tick(),
                 qos_profile_sensor_data,
             )
         if self.get_parameter("camera.monitor_enabled").value:
@@ -114,19 +118,22 @@ class HalMonitorNode(Node):
                 qos_profile_sensor_data,
             )
         self.create_subscription(
-            RCIn, self._p("mavros.channel_topic"), self._channel_cb, 2
+            UInt16MultiArray, self._p("fcu.channel_topic"), self._channel_cb, 2
         )
         self.create_subscription(
             VescStateStamped, self._p("vesc.topic"), self._voltage_cb, 1
         )
         self.create_subscription(
-            GPSRAW, self._p("mavros.gps_topic"), self._gps_cb, 1
+            UInt8, self._p("fcu.gps_satellites_topic"), self._gps_sats_cb, 1
         )
         self.create_subscription(
-            PoseStamped, self._p("mavros.pose_topic"), self._pose_cb, 1
+            UInt32, self._p("fcu.gps_h_acc_topic"), self._gps_h_acc_cb, 1
         )
         self.create_subscription(
-            State, self._p("mavros.state_topic"), self._mavros_status_cb, 10
+            Odometry, self._p("fcu.pose_topic"), self._pose_cb, 1
+        )
+        self.create_subscription(
+            Bool, self._p("fcu.armed_topic"), self._armed_cb, 10
         )
 
         startup_delay_s = float(self.get_parameter("startup_delay_s").value)
@@ -140,9 +147,9 @@ class HalMonitorNode(Node):
             device = str(self.get_parameter("usb_reset_device").value)
             os.system(f'usbreset "{device}"')
 
-        failure_action = str(self.get_parameter("mavros.failure_action").value).strip()
+        failure_action = str(self.get_parameter("fcu.failure_action").value).strip()
         if failure_action:
-            self.get_logger().info(f"Running MAVROS failure action: {failure_action}")
+            self.get_logger().info(f"Running FCU failure action: {failure_action}")
             subprocess.run(shlex.split(failure_action), check=False)
 
         self.create_timer(2.0, self._main_loop_tick)
@@ -173,24 +180,26 @@ class HalMonitorNode(Node):
         self.declare_parameter("gps_min_satellites", 16)
         self.declare_parameter("gps_max_h_acc_mm", 1000)
 
-        self.declare_parameter("mavros.monitor_enabled", True)
-        self.declare_parameter("mavros.monitor_topic", "/mavros/imu/data_raw")
-        self.declare_parameter("mavros.expected_fps", 50.0)
+        # fcu_control edge (stock msgs). Defaults assume node name hound_fcu_control.
+        self.declare_parameter("fcu.monitor_enabled", True)
+        self.declare_parameter("fcu.monitor_topic", "/hound_fcu_control/imu")
+        self.declare_parameter("fcu.expected_fps", 50.0)
+        self.declare_parameter("fcu.failure_action", "")
         self.declare_parameter(
-            "mavros.failure_action", "ros2 run mavros mav sys rate --all 50"
+            "fcu.pose_topic", "/hound_fcu_control/ap/local_odometry"
+        )
+        self.declare_parameter("fcu.armed_topic", "/hound_fcu_control/state/armed")
+        self.declare_parameter(
+            "fcu.gps_satellites_topic", "/hound_fcu_control/gps/satellites"
         )
         self.declare_parameter(
-            "mavros.pose_topic", "/mavros/local_position/pose"
-        )
-        self.declare_parameter("mavros.state_topic", "/mavros/state")
-        self.declare_parameter(
-            "mavros.gps_topic", "/mavros/gpsstatus/gps1/raw"
+            "fcu.gps_h_acc_topic", "/hound_fcu_control/gps/h_acc_mm"
         )
         self.declare_parameter(
-            "mavros.notification_topic", "/mavros/play_tune"
+            "fcu.notification_topic", "/hound_fcu_control/play_tune"
         )
-        self.declare_parameter("mavros.channel_topic", "/mavros/rc/in")
-        self.declare_parameter("mavros.base_frame", "base_link")
+        self.declare_parameter("fcu.channel_topic", "/hound_fcu_control/rc/in")
+        self.declare_parameter("fcu.base_frame", "base_link")
 
         self.declare_parameter("camera.monitor_enabled", True)
         self.declare_parameter(
@@ -218,64 +227,29 @@ class HalMonitorNode(Node):
             "",
         )
 
-    @staticmethod
-    def _read_sysfs_freq_ghz(path: str) -> Optional[float]:
-        try:
-            with open(path, encoding="ascii") as f:
-                return float(f.read().strip()) * 1e-9
-        except OSError:
-            return None
-
-    def _gpu_freq_path_candidates(self) -> List[str]:
-        override = str(self._p("jetson_diagnostics.gpu_freq_path")).strip()
-        candidates: List[str] = []
-        if override:
-            candidates.append(override)
-
-        candidates.extend(_LEGACY_GPU_FREQ_PATHS)
-
-        discovered: List[str] = []
-        for pattern in _GPU_FREQ_GLOB_PATTERNS:
-            discovered.extend(glob.glob(pattern))
-
-        def _rank(path: str) -> tuple:
-            prefers_gpu = 0 if "gpu" in path.lower() else 1
-            prefers_cur = 0 if path.endswith("/cur_freq") else 1
-            return (prefers_gpu, prefers_cur, path)
-
-        candidates.extend(sorted(set(discovered), key=_rank))
-
-        unique: List[str] = []
-        seen = set()
-        for path in candidates:
-            if path not in seen:
-                seen.add(path)
-                unique.append(path)
-        return unique
-
     def _resolve_gpu_freq_path(self) -> Optional[str]:
-        if self._gpu_freq_path and os.path.isfile(self._gpu_freq_path):
-            return self._gpu_freq_path
-
-        for path in self._gpu_freq_path_candidates():
-            if os.path.isfile(path) and self._read_sysfs_freq_ghz(path) is not None:
-                if path != self._gpu_freq_path:
-                    self.get_logger().info(f"Using GPU freq sysfs path: {path}")
-                self._gpu_freq_path = path
+        configured = str(self.get_parameter("jetson_diagnostics.gpu_freq_path").value)
+        if configured and Path(configured).is_file():
+            return configured
+        for path in _LEGACY_GPU_FREQ_PATHS:
+            if Path(path).is_file():
                 return path
-
-        if self._gpu_freq_path:
-            self.get_logger().warning(
-                f"GPU freq sysfs path unavailable: {self._gpu_freq_path}"
-            )
-        self._gpu_freq_path = None
+        for pattern in _GPU_FREQ_GLOB_PATTERNS:
+            matches = sorted(glob.glob(pattern))
+            if matches:
+                return matches[0]
         return None
 
     def _read_gpu_freq_ghz(self) -> float:
-        path = self._resolve_gpu_freq_path()
-        if path is None:
+        if self._gpu_freq_path is None:
+            self._gpu_freq_path = self._resolve_gpu_freq_path()
+        if not self._gpu_freq_path:
             return 0.0
-        return self._read_sysfs_freq_ghz(path) or 0.0
+        try:
+            raw = Path(self._gpu_freq_path).read_text().strip()
+            return float(raw) * 1e-9
+        except (OSError, ValueError):
+            return 0.0
 
     def _load_record_topics(self) -> None:
         topics_file = Path(str(self._p("record_topics_file")))
@@ -297,9 +271,8 @@ class HalMonitorNode(Node):
             return
         if self._notification_pub.get_subscription_count() == 0:
             return
-        msg = PlayTuneV2()
-        msg.format = 1
-        msg.tune = tune
+        msg = String()
+        msg.data = tune
         self._notification_pub.publish(msg)
 
     def _start_recording(self) -> None:
@@ -346,10 +319,20 @@ class HalMonitorNode(Node):
         if msg.state.voltage_input < threshold:
             self._publish_notification("low battery")
 
-    def _gps_cb(self, msg: GPSRAW) -> None:
+    def _gps_sats_cb(self, msg: UInt8) -> None:
+        self._last_sats = int(msg.data)
+        self._maybe_update_gps_status()
+
+    def _gps_h_acc_cb(self, msg: UInt32) -> None:
+        self._last_h_acc_mm = int(msg.data)
+        self._maybe_update_gps_status()
+
+    def _maybe_update_gps_status(self) -> None:
+        if self._last_sats is None or self._last_h_acc_mm is None:
+            return
         min_sats = int(self.get_parameter("gps_min_satellites").value)
         max_h_acc = int(self.get_parameter("gps_max_h_acc_mm").value)
-        good = msg.satellites_visible >= min_sats and msg.h_acc <= max_h_acc
+        good = self._last_sats >= min_sats and self._last_h_acc_mm <= max_h_acc
         if good and not self._gps_status:
             self._publish_notification("GPS good")
             self._gps_status = True
@@ -357,13 +340,13 @@ class HalMonitorNode(Node):
             self._publish_notification("GPS bad")
             self._gps_status = False
 
-    def _channel_cb(self, rc: RCIn) -> None:
-        if not rc.channels:
+    def _channel_cb(self, rc: UInt16MultiArray) -> None:
+        if not rc.data:
             return
         channel_idx = int(self.get_parameter("record_rc_channel").value)
-        if channel_idx >= len(rc.channels):
+        if channel_idx >= len(rc.data):
             return
-        stick = rc.channels[channel_idx]
+        stick = int(rc.data[channel_idx])
         on_threshold = int(self.get_parameter("record_on_threshold").value)
         off_threshold = int(self.get_parameter("record_off_threshold").value)
         if not self._recording_state and stick > on_threshold:
@@ -396,10 +379,10 @@ class HalMonitorNode(Node):
         tf_msg.transform.rotation.w = float(rotation[3])
         self._tf_broadcaster.sendTransform(tf_msg)
 
-    def _pose_cb(self, msg: PoseStamped) -> None:
-        base_frame = str(self._p("mavros.base_frame"))
-        pos = msg.pose.position
-        rot = msg.pose.orientation
+    def _pose_cb(self, msg: Odometry) -> None:
+        base_frame = str(self._p("fcu.base_frame"))
+        pos = msg.pose.pose.position
+        rot = msg.pose.pose.orientation
         stamp = msg.header.stamp
 
         self._send_transform(
@@ -430,8 +413,8 @@ class HalMonitorNode(Node):
             (-0.5, 0.5, -0.5, 0.5),
         )
 
-    def _mavros_status_cb(self, msg: State) -> None:
-        if msg.armed:
+    def _armed_cb(self, msg: Bool) -> None:
+        if msg.data:
             return
         if not self.get_parameter("elevation_map_clear.enabled").value:
             return
@@ -481,7 +464,7 @@ class HalMonitorNode(Node):
             KeyValue(key="avg_cpu", value=str(round(avg_cpu, 2))),
             KeyValue(key="avg_gpu", value=str(round(avg_gpu, 2))),
             KeyValue(key="gpu_freq_path", value=gpu_path),
-            KeyValue(key="mavros_init", value=str(self._mavros_init)),
+            KeyValue(key="fcu_init", value=str(self._fcu_init)),
             KeyValue(key="camera_init", value=str(self._camera_init)),
         ]
 
@@ -490,15 +473,15 @@ class HalMonitorNode(Node):
         self._diagnostics_pub.publish(msg)
 
     def _main_loop_tick(self) -> None:
-        if self._mavros_monitor_enabled:
-            mavros_fps = float(self._p("mavros.expected_fps"))
-            mavros_hz = self._mavros_hz.get_hz()
-            if mavros_hz >= 0.8 * mavros_fps and not self._mavros_init:
-                self._mavros_init = True
+        if self._fcu_monitor_enabled:
+            fcu_fps = float(self._p("fcu.expected_fps"))
+            fcu_hz = self._fcu_hz.get_hz()
+            if fcu_hz >= 0.8 * fcu_fps and not self._fcu_init:
+                self._fcu_init = True
                 self._publish_notification("low level ready")
-            elif mavros_hz < 0.8 * mavros_fps and self._mavros_init:
-                self._mavros_init = False
-                failure_action = str(self._p("mavros.failure_action")).strip()
+            elif fcu_hz < 0.8 * fcu_fps and self._fcu_init:
+                self._fcu_init = False
+                failure_action = str(self._p("fcu.failure_action")).strip()
                 if failure_action:
                     subprocess.run(shlex.split(failure_action), check=False)
 

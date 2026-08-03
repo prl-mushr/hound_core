@@ -57,8 +57,42 @@ void LlRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     if (bus.state.copy_latest(st)) {
       controller_->update_mode(st);
     }
+    VescSample vesc;
+    if (bus.vesc.copy_latest(vesc)) {
+      controller_->update_vesc(vesc);
+    }
 
     const LlStatus status = controller_->tick_imu(imu);
+
+    // Pack BeamNG 17-vector for planning/control (synced to this IMU tick).
+    EkfNavSample nav;
+    if (bus.ekf_nav.copy_latest(nav)) {
+      ControlStateSample cs;
+      cs.stamp = imu.stamp;
+      cs.x[0] = nav.pos_enu[0];
+      cs.x[1] = nav.pos_enu[1];
+      cs.x[2] = nav.pos_enu[2];
+      cs.x[3] = nav.rpy[0];
+      cs.x[4] = nav.rpy[1];
+      cs.x[5] = nav.rpy[2];
+      cs.x[6] = nav.vel_body[0];
+      cs.x[7] = nav.vel_body[1];
+      cs.x[8] = nav.vel_body[2];
+      cs.x[9] = imu.ax;
+      cs.x[10] = imu.ay;
+      cs.x[11] = imu.az;
+      cs.x[12] = imu.gx;
+      cs.x[13] = imu.gy;
+      cs.x[14] = imu.gz;
+      float steer_rad = 0.0f;
+      float wheelspeed_mps = 0.0f;
+      if (controller_->plant_feedback(steer_rad, wheelspeed_mps)) {
+        cs.x[15] = steer_rad;
+        cs.x[16] = wheelspeed_mps;
+      }
+      bus.control_state.write(cs);
+    }
+
     if (!status.active && status.diagnostics.empty()) {
       continue;
     }

@@ -564,6 +564,227 @@ def build_nvblox_node(
     )
 
 
+def build_hound_mapping_node(
+    nvblox: dict, cam: dict, seg: dict, lidar: dict | None = None
+) -> Node:
+    """In-house nvblox mapping: elevation/cost/esdf images + MapInfo (no GridMap)."""
+    camera_name = str(cam.get("camera_name", "camera"))
+    lidar = lidar or {}
+    use_people_mask = bool(nvblox.get("use_people_mask", False))
+    use_lidar = bool(nvblox.get("use_lidar", False))
+    if "use_depth" in nvblox:
+        use_depth = bool(nvblox.get("use_depth"))
+    else:
+        use_depth = bool(cam.get("enable_depth", False))
+    use_color = bool(nvblox.get("use_color", True))
+    global_frame = str(nvblox.get("global_frame", "odom"))
+    map_clearing_frame = str(nvblox.get("map_clearing_frame_id", f"{camera_name}_link"))
+
+    if use_people_mask and not use_depth:
+        use_people_mask = False
+
+    align = bool(cam.get("align_depth", False))
+    if align:
+        depth_image = f"/{camera_name}/aligned_depth_to_color/image_raw"
+        depth_info = f"/{camera_name}/aligned_depth_to_color/camera_info"
+    else:
+        depth_image = f"/{camera_name}/depth/image_rect_raw"
+        depth_info = f"/{camera_name}/depth/camera_info"
+
+    default_color = f"/{camera_name}/color/image_raw"
+    color_info = f"/{camera_name}/color/camera_info"
+    color_image = str(nvblox.get("color_topic") or "").strip() or default_color
+    if color_image and not color_image.startswith("/"):
+        color_image = "/" + color_image
+    if color_image in ("sam_traversability", "traversability"):
+        color_image = str(
+            seg.get("sam_traversability_topic", "/segmentation/refined_traversability")
+        )
+        if not color_image.startswith("/"):
+            color_image = "/" + color_image
+
+    people_mask = str(
+        nvblox.get("people_mask_topic")
+        or seg.get("sam_people_mask_topic")
+        or "/segmentation/refined_people_mask"
+    )
+    if people_mask and not people_mask.startswith("/"):
+        people_mask = "/" + people_mask
+
+    deskew = lidar.get("deskewer") or {}
+    default_lidar_topic = str(lidar.get("cloud_topic", "/unilidar/cloud"))
+    if not default_lidar_topic.startswith("/"):
+        default_lidar_topic = "/" + default_lidar_topic
+    if bool(deskew.get("enabled", False)):
+        default_lidar_topic = str(
+            deskew.get("output_topic", "/unilidar/cloud_deskewed")
+        )
+        if not default_lidar_topic.startswith("/"):
+            default_lidar_topic = "/" + default_lidar_topic
+    lidar_topic = str(nvblox.get("lidar_topic") or default_lidar_topic)
+    if lidar_topic and not lidar_topic.startswith("/"):
+        lidar_topic = "/" + lidar_topic
+
+    integ_max = float(
+        nvblox.get(
+            "projective_integrator_max_integration_distance_m",
+            nvblox.get("lidar_projective_integrator_max_integration_distance_m", 15.0),
+        )
+    )
+    lidar_integ_max = float(
+        nvblox.get("lidar_projective_integrator_max_integration_distance_m", integ_max)
+    )
+
+    params = {
+        "global_frame": global_frame,
+        "map_clearing_frame_id": map_clearing_frame,
+        "voxel_size": float(nvblox.get("voxel_size", 0.05)),
+        "elevation_resolution": float(
+            nvblox.get("elevation_resolution", nvblox.get("voxel_size", 0.05))
+        ),
+        "map_clearing_radius_m": float(nvblox.get("map_clearing_radius_m", 32.0)),
+        "max_integration_distance_m": integ_max,
+        "lidar_max_integration_distance_m": lidar_integ_max,
+        "lethal_slope_deg": float(nvblox.get("lethal_slope_deg", 60.0)),
+        "do_inpaint": bool(nvblox.get("do_inpaint", True)),
+        "inpaint_resolution_m": float(nvblox.get("inpaint_resolution_m", 0.25)),
+        "inpaint_radius": int(nvblox.get("inpaint_radius", 3)),
+        "unobserved_luminance": float(nvblox.get("unobserved_luminance", 0.0)),
+        "color_weight_min": float(nvblox.get("color_weight_min", 0.001)),
+        "robot_height_m": float(nvblox.get("robot_height_m", 0.4)),
+        "elev_z_min_rel": float(nvblox.get("elev_z_min_rel", -5.0)),
+        "elev_z_max_rel": float(nvblox.get("elev_z_max_rel", 2.0)),
+        "use_depth": use_depth,
+        "use_color": use_color,
+        "use_lidar": use_lidar,
+        "use_people_mask": use_people_mask,
+        "depth_topic": depth_image,
+        "depth_info_topic": depth_info,
+        "color_topic": color_image,
+        "color_info_topic": color_info,
+        "lidar_topic": lidar_topic,
+        "people_mask_topic": people_mask,
+        "lidar_width": int(nvblox.get("lidar_width", lidar.get("lidar_width", 360))),
+        "lidar_height": int(nvblox.get("lidar_height", lidar.get("lidar_height", 90))),
+        "lidar_vertical_fov_rad": float(
+            nvblox.get(
+                "lidar_vertical_fov_rad",
+                lidar.get("lidar_vertical_fov_rad", 2.094395),
+            )
+        ),
+        "lidar_min_valid_range_m": float(nvblox.get("lidar_min_valid_range_m", 0.3)),
+        "use_lidar_motion_compensation": bool(
+            nvblox.get("use_lidar_motion_compensation", False)
+        ),
+        "integrate_depth_rate_hz": float(nvblox.get("integrate_depth_rate_hz", 20.0)),
+        "integrate_color_rate_hz": float(nvblox.get("integrate_color_rate_hz", 20.0)),
+        "integrate_lidar_rate_hz": float(nvblox.get("integrate_lidar_rate_hz", 10.0)),
+        "map_clear_rate_hz": float(nvblox.get("map_clear_rate_hz", 20.0)),
+        "publish_map_rate_hz": float(nvblox.get("publish_map_rate_hz", 5.0)),
+    }
+
+    print(
+        f"[hound_core] hound_mapping ENABLED: voxel={params['voxel_size']} "
+        f"depth={use_depth} lidar={use_lidar} color={use_color} "
+        f"~/local_map + ~/elev_color, clear_r={params['map_clearing_radius_m']}"
+    )
+    return Node(
+        package="hound_mapping",
+        executable="mapping_node",
+        name="hound_mapping",
+        output="screen",
+        parameters=[params],
+    )
+
+
+def build_nav_node(nav: dict) -> Node:
+    """IGHA* + UW_mppi navigation (MPPI main thread, planner process)."""
+    params = {
+        "config_path": str(nav.get("config_path", "") or ""),
+        "local_map_topic": str(
+            nav.get("local_map_topic", "/hound_mapping/local_map")
+        ),
+        "state_topic": str(
+            nav.get("state_topic", "/hound_fcu_control/control_state")
+        ),
+        "path_topic": str(nav.get("path_topic", "/mission/path")),
+        "inject_path_topic": str(
+            nav.get("inject_path_topic", "/hound_nav/inject_path")
+        ),
+        "skip_planner": bool(nav.get("skip_planner", False)),
+        "cmd_topic": str(nav.get("cmd_topic", "/hound_nav/cmd_ackermann")),
+        "plan_topic": str(nav.get("plan_topic", "/hound_nav/local_plan")),
+        "latency_topic": str(
+            nav.get("latency_topic", "/hound_nav/state_to_cmd_ms")
+        ),
+        "event_driven": bool(nav.get("event_driven", True)),
+        "async_bev": bool(nav.get("async_bev", True)),
+        "bev_hz": float(nav.get("bev_hz", 20.0)),
+        "control_rate_hz": float(nav.get("control_rate_hz", 20.0)),
+        "max_steer_rad": float(nav.get("max_steer_rad", 0.6)),
+        "max_speed_mps": float(nav.get("max_speed_mps", 20.0)),
+    }
+    print(
+        f"[hound_core] nav ENABLED: map={params['local_map_topic']} "
+        f"state={params['state_topic']} cmd={params['cmd_topic']} "
+        f"skip_planner={params['skip_planner']} "
+        f"event_driven={params['event_driven']} "
+        f"async_bev={params['async_bev']}@{params['bev_hz']}Hz "
+        f"rate={params['control_rate_hz']} Hz"
+    )
+    return Node(
+        package="hound_nav",
+        executable="nav_node",
+        name="hound_nav",
+        output="screen",
+        parameters=[params],
+    )
+
+
+def build_viz_node(viz: dict) -> Node:
+    """Viser whole-stack browser viz (subscribe-only)."""
+    params = {
+        "host": str(viz.get("host", "0.0.0.0")),
+        "port": int(viz.get("port", 8080)),
+        "global_frame": str(viz.get("global_frame", "odom")),
+        "base_frame": str(viz.get("base_frame", "base_link")),
+        "local_map_topic": str(
+            viz.get("local_map_topic", "/hound_mapping/local_map")
+        ),
+        "odom_topic": str(
+            viz.get("odom_topic", "/visual_slam/tracking/odometry")
+        ),
+        "lidar_topic": str(viz.get("lidar_topic", "/unilidar/cloud")),
+        "camera_topic": str(viz.get("camera_topic", "/camera/color/image_raw")),
+        "path_topic": str(viz.get("path_topic", "/mission/path")),
+        "mesh_pose_topic": str(
+            viz.get("mesh_pose_topic", "/localization/mesh_pose")
+        ),
+        "use_local_map": bool(viz.get("use_local_map", True)),
+        "use_odom": bool(viz.get("use_odom", True)),
+        "use_lidar": bool(viz.get("use_lidar", True)),
+        "use_camera": bool(viz.get("use_camera", True)),
+        "use_path": bool(viz.get("use_path", True)),
+        "use_mesh_pose": bool(viz.get("use_mesh_pose", True)),
+        "lidar_max_points": int(viz.get("lidar_max_points", 20000)),
+        "lidar_min_period_s": float(viz.get("lidar_min_period_s", 0.2)),
+        "camera_min_period_s": float(viz.get("camera_min_period_s", 0.2)),
+        "map_mesh_stride": int(viz.get("map_mesh_stride", 2)),
+        "map_z_exaggeration": float(viz.get("map_z_exaggeration", 1.0)),
+    }
+    print(
+        f"[hound_core] viz ENABLED: Viser http://<host>:{params['port']}/ "
+        f"map={params['local_map_topic']}"
+    )
+    return Node(
+        package="hound_viz",
+        executable="viz_node",
+        name="hound_viz",
+        output="screen",
+        parameters=[params],
+    )
+
+
 def build_ekf_node(ekf: dict) -> Node:
     preset = str(ekf.get("preset", "realsense_vslam"))
     params_file = os.path.join(
@@ -584,26 +805,81 @@ def build_ekf_node(ekf: dict) -> Node:
 
 
 def apply_hal_camera_defaults(hal: dict, cam: dict) -> dict:
-    """Return HAL params with RealSense camera monitor topics/frames."""
+    """Return HAL params with stereo_composite camera monitor topics/frames."""
     params = flatten_params({k: v for k, v in hal.items() if k != "enabled"})
     camera_name = str(cam.get("camera_name", "camera"))
     params.setdefault("camera.depth_frame", f"{camera_name}_link")
     params.setdefault(
         "camera.depth_optical_frame",
-        f"{camera_name}_infra1_optical_frame",
+        f"{camera_name}_color_optical_frame",
     )
     params.setdefault(
         "camera.monitor_topic",
-        f"/{camera_name}/infra1/image_rect_raw",
+        f"/{camera_name}/color/image_raw",
     )
-    params.setdefault("camera.expected_fps", float(cam.get("fps", 60.0)))
+    params.setdefault("camera.expected_fps", float(cam.get("fps", 15.0)))
 
-    mavros_cfg = hal.get("mavros") or {}
+    fcu_cfg = hal.get("fcu") or hal.get("mavros") or {}
     params.setdefault(
-        "mavros.monitor_enabled",
-        bool(mavros_cfg.get("monitor_enabled", True)),
+        "fcu.monitor_enabled",
+        bool(fcu_cfg.get("monitor_enabled", True)),
     )
     return params
+
+
+def build_lidar_mesh_composite_node(lidar: dict) -> Node:
+    """In-process lidar SDK + constant-twist mesh PF (composite_sensing)."""
+    comp = dict(lidar.get("composite") or {})
+    xyz = lidar.get("xyz") or [0.0, 0.0, 0.1]
+    rpy = lidar.get("rpy") or [180.0, -15.0, 0.0]
+    bb = dict(comp.get("init_bb") or {})
+    params = {
+        "lidar_backend": str(lidar.get("backend", "unitree")),
+        "port": str(lidar.get("port", "/dev/ttyUSB0")),
+        "lidar_frame": str(lidar.get("cloud_frame", "unilidar_lidar")),
+        # Extrinsic xyz/rpy is base→lidar; static TF uses the same (parent should
+        # match base_frame for the mesh PF body frame).
+        "base_frame": str(comp.get("base_frame", "base_link")),
+        "parent_frame": str(
+            comp.get("base_frame", lidar.get("parent_frame", "base_link"))
+        ),
+        "xyz.x": float(xyz[0]),
+        "xyz.y": float(xyz[1]),
+        "xyz.z": float(xyz[2]),
+        "rpy.roll": float(rpy[0]),
+        "rpy.pitch": float(rpy[1]),
+        "rpy.yaw": float(rpy[2]),
+        "range_min": float(lidar.get("range_min", 0.4)),
+        "range_max": float(lidar.get("range_max", 50.0)),
+        "cloud_scan_num": int(lidar.get("cloud_scan_num", 18)),
+        "publish_cloud": bool(comp.get("publish_cloud", True)),
+        "cloud_topic": str(lidar.get("cloud_topic", "/unilidar/cloud")),
+        "map_file": str(comp.get("map_file", "")),
+        "map_frame": str(comp.get("map_frame", "map")),
+        "pose_topic": str(comp.get("pose_topic", "/localization/mesh_pose")),
+        "localize_hz": float(comp.get("localize_hz", 10.0)),
+        "num_particles": int(comp.get("num_particles", 2000)),
+        "beam_samples": int(comp.get("beam_samples", 64)),
+        "global_init_on_start": bool(comp.get("global_init_on_start", True)),
+        "init_bb.xmin": float(bb.get("xmin", -20.0)),
+        "init_bb.ymin": float(bb.get("ymin", -20.0)),
+        "init_bb.zmin": float(bb.get("zmin", 0.0)),
+        "init_bb.xmax": float(bb.get("xmax", 20.0)),
+        "init_bb.ymax": float(bb.get("ymax", 20.0)),
+        "init_bb.zmax": float(bb.get("zmax", 2.0)),
+    }
+    print(
+        f"[hound_core] lidar_mesh_composite ENABLED: port={params['port']} "
+        f"map={params['map_file'] or '(none)'} pose={params['pose_topic']} "
+        f"hz={params['localize_hz']}"
+    )
+    return Node(
+        package="composite_sensing",
+        executable="lidar_mesh_composite_node",
+        name="lidar_mesh_composite",
+        output="screen",
+        parameters=[params],
+    )
 
 
 def build_unitree_lidar_actions(lidar: dict) -> list:

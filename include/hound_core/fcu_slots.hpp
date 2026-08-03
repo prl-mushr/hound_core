@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -113,6 +114,18 @@ struct FcuStateSample
   std::string mode;
 };
 
+/** One mission item from MISSION_ITEM_INT (no mavros_msgs). */
+struct MissionItem
+{
+  uint16_t seq{0};
+  uint8_t frame{0};
+  uint16_t command{0};
+  bool is_current{false};
+  bool autocontinue{true};
+  float param1{0}, param2{0}, param3{0}, param4{0};
+  double x_lat{0}, y_long{0}, z_alt{0};
+};
+
 struct ExtNavSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
@@ -143,6 +156,51 @@ struct ManualControlCmd
 {
   float x{0}, y{0}, z{0}, r{0};
   uint16_t buttons{0};
+};
+
+/** VESC COMM_GET_VALUES telemetry (in-process poller → LL / ROS edge). */
+struct VescSample
+{
+  rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  float speed{0};  // eRPM
+  float voltage_input{0};
+  float duty_cycle{0};
+  float current_input{0};
+  float current_motor{0};
+  float temperature_pcb{0};
+  float charge_drawn{0};
+  float charge_regen{0};
+  float energy_drawn{0};
+  float energy_regen{0};
+  float displacement{0};
+  float distance_traveled{0};
+  int32_t fault_code{0};
+};
+
+/** Latest EKF pose/vel for packing control_state (no covariance). */
+struct EkfNavSample
+{
+  rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  float pos_enu[3]{0, 0, 0};
+  float rpy[3]{0, 0, 0};       // roll, pitch, yaw (ENU / FLU)
+  float vel_body[3]{0, 0, 0};  // FLU body linear velocity
+};
+
+/**
+ * BeamNG / UW_mppi plant state (17):
+ *   [0:3]  pos ENU xyz
+ *   [3:6]  rpy
+ *   [6:9]  vel body xyz
+ *   [9:12] accel body xyz
+ *   [12:15] gyro body xyz
+ *   [15]   steering (rad, +left)
+ *   [16]   throttle / measured wheelspeed (m/s)
+ */
+struct ControlStateSample
+{
+  static constexpr size_t kDim = 17;
+  rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  std::array<double, kDim> x{};
 };
 
 /** MAVLink RC_CHANNELS_OVERRIDE payload (unused channels = 65535 = release). */
@@ -181,6 +239,9 @@ struct FcuBus
   LatestSlot<IcpOriginSample> icp_origin;
   LatestSlot<ApLocalPoseSample> ap_local;
   LatestSlot<ManualControlCmd> manual_cmd;
+  LatestSlot<VescSample> vesc;
+  LatestSlot<EkfNavSample> ekf_nav;
+  LatestSlot<ControlStateSample> control_state;
 };
 
 }  // namespace hound_core

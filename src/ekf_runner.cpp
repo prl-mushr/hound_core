@@ -177,6 +177,16 @@ void EkfRunner::stop()
   odom_cb_ = nullptr;
 }
 
+void EkfRunner::request_reset()
+{
+  reset_requested_.store(true, std::memory_order_relaxed);
+  RCLCPP_WARN(
+    logger_,
+    "EKF reset requested — re-initializing at ext_nav_origin "
+    "(lat=%.6f lon=%.6f hgt=%.1f) and clearing VSLAM align",
+    cfg_.ext_nav_origin_lat, cfg_.ext_nav_origin_lon, cfg_.ext_nav_origin_hgt);
+}
+
 void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
 {
   using inertial_nav_ros2::frames::BodyAxes;
@@ -378,6 +388,13 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       ekf.set_ext_nav_pose(pos_ned, vel_ned, q_ned, 0.1f, 0.1f, 0.2f, true, 0);
     }
 
+    if (reset_requested_.exchange(false, std::memory_order_relaxed)) {
+      filter_reset = true;
+      vslam_aligned = false;
+      yaw_corr = 0.0f;
+      t_corr_enu[0] = t_corr_enu[1] = t_corr_enu[2] = 0.0f;
+      logged_waiting_icp = false;
+    }
     ekf.run_filter(filter_reset);
     filter_reset = false;
 
@@ -389,6 +406,39 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       continue;
     }
 
+    const float * st = core->states;
+    float pos_enu[3];
+    ned_position_to_enu(&st[7], pos_enu);
+    float q_wxyz[4] = {st[0], st[1], st[2], st[3]};
+    geometry_msgs::msg::Quaternion q_enu;
+    ned_frd_quat_to_enu(q_wxyz, body_axes, q_enu);
+    float vel_frd[3], vel_ros[3];
+    ned_velocity_to_frd_body(&st[4], q_wxyz, vel_frd);
+    inertial_nav_ros2::frames::frd_body_vector_to_ros(vel_frd, body_axes, vel_ros);
+
+    EkfNavSample nav_s;
+    nav_s.stamp = imu.stamp;
+    nav_s.pos_enu[0] = pos_enu[0];
+    nav_s.pos_enu[1] = pos_enu[1];
+    nav_s.pos_enu[2] = pos_enu[2];
+    {
+      const float qw = static_cast<float>(q_enu.w);
+      const float qx = static_cast<float>(q_enu.x);
+      const float qy = static_cast<float>(q_enu.y);
+      const float qz = static_cast<float>(q_enu.z);
+      nav_s.rpy[0] = std::atan2(
+        2.0f * (qw * qx + qy * qz), 1.0f - 2.0f * (qx * qx + qy * qy));
+      const float sinp = 2.0f * (qw * qy - qz * qx);
+      nav_s.rpy[1] = (std::fabs(sinp) >= 1.0f) ?
+        std::copysign(static_cast<float>(M_PI) / 2.0f, sinp) : std::asin(sinp);
+      nav_s.rpy[2] = std::atan2(
+        2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
+    }
+    nav_s.vel_body[0] = vel_ros[0];
+    nav_s.vel_body[1] = vel_ros[1];
+    nav_s.vel_body[2] = vel_ros[2];
+    bus.ekf_nav.write(nav_s);
+
     ++imu_ticks_since_pub;
     if (imu_ticks_since_pub < pub_every) {
       continue;
@@ -399,17 +449,10 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     odom.header.stamp = imu.stamp;
     odom.header.frame_id = "map";
     odom.child_frame_id = "base_link";
-    const float * st = core->states;
-    float pos_enu[3];
-    ned_position_to_enu(&st[7], pos_enu);
     odom.pose.pose.position.x = pos_enu[0];
     odom.pose.pose.position.y = pos_enu[1];
     odom.pose.pose.position.z = pos_enu[2];
-    float q_wxyz[4] = {st[0], st[1], st[2], st[3]};
-    ned_frd_quat_to_enu(q_wxyz, body_axes, odom.pose.pose.orientation);
-    float vel_frd[3], vel_ros[3];
-    ned_velocity_to_frd_body(&st[4], q_wxyz, vel_frd);
-    inertial_nav_ros2::frames::frd_body_vector_to_ros(vel_frd, body_axes, vel_ros);
+    odom.pose.pose.orientation = q_enu;
     odom.twist.twist.linear.x = vel_ros[0];
     odom.twist.twist.linear.y = vel_ros[1];
     odom.twist.twist.linear.z = vel_ros[2];

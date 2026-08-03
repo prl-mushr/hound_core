@@ -15,17 +15,14 @@ setup(
     zip_safe=True,
     maintainer="hound",
     maintainer_email="hound@todo.todo",
-    description="D455 + Isaac ROS Visual SLAM bring-up from a single source-of-truth config.",
+    description="HOUND robot interface + SSoT mission orchestrator.",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "dora_clipseg_encoder = hound_core.dora_clipseg_encoder:main",
-            "dora_seg_refine = hound_core.dora_seg_refine:main",
             "bag_replay = hound_core.bag_replay:main",
             "wheel_odom_node = hound_core.wheel_odom_node:main",
             "hal_monitor_node = hound_core.hal_monitor_node:main",
-            "realsense_cuvslam_stereo = hound_core.realsense_cuvslam_stereo:main",
         ],
     },
 )
