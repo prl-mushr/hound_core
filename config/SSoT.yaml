@@ -162,8 +162,8 @@ nvblox:
   use_people_mask: false
   # people_mask_topic: "/segmentation/refined_people_mask"
   people_mask_topic: "/segmentation/coarse_people_mask"
-  # Color layer for the mesh. Empty = camera RGB. Prefer SAM traversability
-  # (rgb8: G=traversable, R=non-traversable, B=none) for semantic coloring.
+  # Color → semantic cost via luminance (1 - BT.601/255). Prefer grayscale
+  # trav (white=free, black=obstacle). Empty = camera RGB.
   # color_topic: "/segmentation/refined_traversability"
   color_topic: "/segmentation/coarse_traversability"
   # color_topic: "/camera/color/image_raw"
@@ -449,27 +449,22 @@ segmentation:
   # HuggingFace model id. rd16 is the light/fast variant (good on Orin NX).
   model: "CIDAS/clipseg-rd16"
 
-  # Prompts grouped into navigation categories. CLIPSeg runs EVERY sub-prompt,
-  # then their maps are aggregated within each group, and each pixel is labeled
-  # with its argmax group. The label map (mono8) encodes everything:
-  #   0 = none/unknown, then group_index + 1 in the order below, i.e.
-  #   1 = traversable, 2 = non_traversable, 3 = people.
-  # Overlay colors follow PALETTE (1->green, 2->red, 3->blue). Semantic, not
-  # geometric, traversability -- the planner fuses it with geometry.
-  # (A flat list still works too: each prompt becomes its own group.)
-  # prompts:
-  #   traversable: ["dirt", "hill", "road", "grass", "gravel", "path"]
-  #   non_traversable: ["tree", "wall", "pebbles", "fence", "vehicle"]
-  #   people: ["person", "animal"]
+  # Nav-only: segment obstacles; everything else is free.
+  # CLIPSeg runs every non_traversable sub-prompt (aggregated with `aggregate`),
+  # then the published trav image is grayscale: white=free, black=obstacle.
+  # Mapper cost = 1 - BT.601(color)/255 → free→0, obstacle→1 (OR slope).
+  # Sky as free is OK — lidar never returns there. Labels mono8 still use
+  # group_index+1 (0=none); overlay PALETTE unchanged.
+  # (A flat list still works: each prompt becomes its own group.)
   prompts:
-    traversable: ["floor", "carpet", "concrete", "traversable"]
-    non_traversable: ["furniture", "wall", "pillar", "non_traversable"]
-    people: ["person", "car"]
+    traversable: []          # unused for nav binary (kept for group index stability)
+    non_traversable: ["furniture", "wall", "pillar", "people", "car"]
+    people: []
 
-  # Suppress prompts: their probability is subtracted from EVERY group (clamped at
-  # 0), so these regions get no mask / class (e.g. sky shouldn't be traversable,
-  # non-traversable, or a person). Leave empty ([]) to disable.
-  suppress_prompts: ["sky"]
+  # Optional: subtract from every group before label/pack. Empty for nav binary
+  # (sky is free by default). Use e.g. ["sky"] only if CLIPSeg false-positives
+  # obstacles on sky-like regions.
+  suppress_prompts: []
 
   # How to combine the sub-prompt maps within a group, before the argmax label:
   #   max      -> per-group OR; SATURATES and is list-size invariant (recommended)
@@ -493,10 +488,9 @@ segmentation:
   color_topic: "/camera/color/image_raw"
   labels_topic: "/segmentation/labels"        # mono8 category map (the product)
 
-  # FiLM coarse traversability (always available; works with sam_node false).
-  # rgb8 packing: R=non_traversable, G=traversable, B=neither. Same layout as
-  # refined_traversability so planners can swap topics.
-  publish_coarse_traversability: false
+  # FiLM coarse trav (works with sam_node false). rgb8 grayscale:
+  # white=free, black=obstacle. Same packing as refined_traversability.
+  publish_coarse_traversability: true
   coarse_traversability_topic: "/segmentation/coarse_traversability"
   coarse_people_mask_topic: "/segmentation/coarse_people_mask"
 
@@ -529,10 +523,8 @@ segmentation:
   profile_every: 30
 
   # --- SAM refinement (in-process on seg_refine; FiLM ∥ SAM-encode streams) -----
-  # positive_groups / negative_groups -> traversable / non-traversable; remaining
-  # groups (e.g. people) become the people mask.
-  # For nav-only: set sam_node false; use coarse_traversability.
-  # Keep true when you need NanoSAM refine for fine motion / manipulation.
+  # Nav binary: only negative_groups matter for trav rgb pack; positive unused.
+  # Remaining groups (e.g. people) → people mask. For FiLM-only: sam_node false.
   sam_node: true
   positive_groups: ["traversable"]
   negative_groups: ["non_traversable"]
