@@ -40,6 +40,21 @@ stereo_composite:
   warmup_frames: 60
   log_cuvslam_timing: false
   profile: false
+  # Multi-cam batch smoke (feature/multicam-batch). When backend=dataset_replay,
+  # launch starts composite_sensing multicam_rail_replay instead of RealSense.
+  # Real 3× USB open is stubbed — config only for now.
+  backend: realsense   # realsense | dataset_replay
+  # dataset: "/root/colcon_ws/src/hound_mapping/data/rail_sim/race-2_multicam"
+  cameras:
+    - name: front
+      role: vslam_stereo   # IR@60 + RGB + depth (hardware); replay: RGBD+IR files
+      serial: "030422250301"
+    - name: left
+      role: rgbd
+      serial: ""
+    - name: right
+      role: rgbd
+      serial: ""
 
 # Lidar bring-up. Prefer in-process composite (SDK + mesh PF); legacy ROS driver
 # remains available when composite.enabled is false.
@@ -166,7 +181,11 @@ nvblox:
   # trav (white=free, black=obstacle). Empty = camera RGB.
   # color_topic: "/segmentation/refined_traversability"
   color_topic: "/segmentation/coarse_traversability"
-  # color_topic: "/camera/color/image_raw"
+  # Multi-cam: non-empty camera_names → per-view depth + color_topic_template.
+  # camera_names: ["front", "left", "right"]
+  # color_topic_template: "/segmentation/{name}/coarse_traversability"
+  # color_info_topic_template: "/{name}/color/camera_info"
+  # map_clearing_frame_id: base_link
   global_frame: odom
   map_clearing_frame_id: camera_link
   # Drop blocks farther than this from map_clearing_frame (Hz below).
@@ -449,21 +468,17 @@ segmentation:
   # HuggingFace model id. rd16 is the light/fast variant (good on Orin NX).
   model: "CIDAS/clipseg-rd16"
 
-  # Nav-only: segment obstacles; everything else is free.
-  # CLIPSeg runs every non_traversable sub-prompt (aggregated with `aggregate`),
-  # then the published trav image is grayscale: white=free, black=obstacle.
-  # Mapper cost = 1 - BT.601(color)/255 → free→0, obstacle→1 (OR slope).
-  # Sky as free is OK — lidar never returns there. Labels mono8 still use
-  # group_index+1 (0=none); overlay PALETTE unchanged.
-  # (A flat list still works: each prompt becomes its own group.)
+  # Prompt groups → CLIPSeg label map (mono8: 0=none, 1=traversable, 2=non_traversable,
+  # 3=people). Empty lists skip that group at decode time. Trav rgb8 uses
+  # traversability_colors below; unlabeled pixels get ``none``.
+  # Nav-only: leave traversable + people empty → only non_traversable is painted;
+  # everything else stays ``none`` (typically white / free for mapper cost).
   prompts:
-    traversable: []          # unused for nav binary (kept for group index stability)
+    traversable: []
     non_traversable: ["furniture", "wall", "pillar", "people", "car"]
     people: []
 
-  # Optional: subtract from every group before label/pack. Empty for nav binary
-  # (sky is free by default). Use e.g. ["sky"] only if CLIPSeg false-positives
-  # obstacles on sky-like regions.
+  # Optional: subtract from every group before label/pack (e.g. sky false positives).
   suppress_prompts: []
 
   # How to combine the sub-prompt maps within a group, before the argmax label:
@@ -480,16 +495,31 @@ segmentation:
 
   input_res: 224          # 224 (fast) or 352 (CLIPSeg native, sharper)
   threshold: 0.3          # below this a pixel is label 0 (none/unknown)
+
+  # Trav rgb8 colors for coarse + refined traversability topics.
+  # Mapper cost ≈ 1 - BT.601(luminance)/255 — use white≈free, black≈lethal.
+  # Priority when painting: non_traversable > people > traversable > none.
+  traversability_colors:
+    traversable: [255, 255, 255]
+    non_traversable: [0, 0, 0]
+    people: [0, 0, 0]
+    none: [255, 255, 255]
+  # Optional; defaults to threshold above.
+  # traversability_pack_threshold: 0.3
   # NOTE: max-autotune's GEMM autotuning is disabled on Orin NX (too few SMs), so
   # it gives ~no gain over reduce-overhead but costs much longer startup.
   # Ignored when clipseg_vision_engine is set.
   compile_mode: "reduce-overhead"   # "reduce-overhead" | "default" | "none"
 
   color_topic: "/camera/color/image_raw"
+  # Multi-cam batch encode: list of color topics (encoder packs N×RGB).
+  # color_topics: ["/front/color/image_raw", "/left/color/image_raw", "/right/color/image_raw"]
+  # camera_names: ["front", "left", "right"]
+  # clipseg_batch_n: 3
+  # clipseg_vision_engine: ".../clipseg_vision_rd16_224_b3.engine"
   labels_topic: "/segmentation/labels"        # mono8 category map (the product)
 
-  # FiLM coarse trav (works with sam_node false). rgb8 grayscale:
-  # white=free, black=obstacle. Same packing as refined_traversability.
+  # FiLM coarse trav (works with sam_node false). Same rgb8 + colors as refined.
   publish_coarse_traversability: true
   coarse_traversability_topic: "/segmentation/coarse_traversability"
   coarse_people_mask_topic: "/segmentation/coarse_people_mask"
@@ -519,12 +549,12 @@ segmentation:
   #   seg_refine: film_decode, sam_encoder, sam_decoder, stream_wall, stream_overlap
   pipeline_queue_size: 3
   use_cuda_streams: true
-  profile: false
+  profile: true
   profile_every: 30
 
   # --- SAM refinement (in-process on seg_refine; FiLM ∥ SAM-encode streams) -----
-  # Nav binary: only negative_groups matter for trav rgb pack; positive unused.
-  # Remaining groups (e.g. people) → people mask. For FiLM-only: sam_node false.
+  # positive_groups / negative_groups / people → traversability_colors roles.
+  # Empty prompt groups are ignored; people also published on *_people_mask.
   sam_node: true
   positive_groups: ["traversable"]
   negative_groups: ["non_traversable"]

@@ -113,6 +113,9 @@ def _build_segmentation_dora_actions(seg: dict) -> list:
         "threshold": float(seg.get("threshold", 0.3)),
         "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
         "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
+        "color_topics": [str(t) for t in (seg.get("color_topics") or [])],
+        "camera_names": [str(t) for t in (seg.get("camera_names") or [])],
+        "clipseg_batch_n": int(seg.get("clipseg_batch_n", 1)),
         "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
         "viz_overlay": bool(seg.get("viz_overlay", False)),
         "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
@@ -145,6 +148,10 @@ def _build_segmentation_dora_actions(seg: dict) -> list:
         "positive_groups": pos_idx or [0],
         "negative_groups": neg_idx or [1],
         "people_groups": people_idx or [2],
+        "traversability_colors": dict(seg.get("traversability_colors") or {}),
+        "traversability_pack_threshold": float(
+            seg.get("traversability_pack_threshold", seg.get("threshold", 0.3))
+        ),
         "sam_image_encoder": str(
             seg.get(
                 "sam_image_encoder",
@@ -293,9 +300,38 @@ def _build_stereo_composite_node(
 ) -> Node:
     """In-process stereo camera + cuVSLAM (composite_sensing).
 
-    Launch does not override an explicit ``enable_depth: false``.
-    A/B: ``architecture: modular`` → stereo_composite_modular_node.
+    ``backend: dataset_replay`` → multicam_rail_replay (GT poses, no RealSense).
     """
+    backend = str(sc.get("backend", "realsense")).strip().lower()
+    if backend == "dataset_replay":
+        dataset = str(
+            sc.get(
+                "dataset",
+                "/root/colcon_ws/src/hound_mapping/data/rail_sim/race-2_multicam",
+            )
+        )
+        cams = sc.get("cameras") or []
+        names = [str(c.get("name", "")) for c in cams if c.get("name")]
+        print(
+            f"[hound_core] stereo_composite dataset_replay: {dataset} "
+            f"cameras={names or ['front','left','right']}"
+        )
+        return Node(
+            package="composite_sensing",
+            executable="multicam_rail_replay",
+            name="multicam_rail_replay",
+            output="screen",
+            parameters=[
+                {
+                    "dataset": dataset,
+                    "rate_hz": float(sc.get("replay_rate_hz", 10.0)),
+                    "loop": bool(sc.get("replay_loop", True)),
+                    "global_frame": str(sc.get("odom_frame", "odom")),
+                    "base_frame": str(sc.get("base_frame", "base_link")),
+                }
+            ],
+        )
+
     enable_color = bool(sc.get("enable_color", True)) or need_color
     enable_depth = bool(sc.get("enable_depth", False))
     align_depth = bool(sc.get("align_depth", False))

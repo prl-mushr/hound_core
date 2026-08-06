@@ -664,6 +664,11 @@ def build_hound_mapping_node(
         "color_info_topic": color_info,
         "lidar_topic": lidar_topic,
         "people_mask_topic": people_mask,
+        "camera_names": [str(x) for x in (nvblox.get("camera_names") or [])],
+        "color_topic_template": str(nvblox.get("color_topic_template", "")),
+        "color_info_topic_template": str(
+            nvblox.get("color_info_topic_template", "")
+        ),
         "lidar_width": int(nvblox.get("lidar_width", lidar.get("lidar_width", 360))),
         "lidar_height": int(nvblox.get("lidar_height", lidar.get("lidar_height", 90))),
         "lidar_vertical_fov_rad": float(
