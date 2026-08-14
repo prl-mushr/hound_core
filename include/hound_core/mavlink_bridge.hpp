@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -66,6 +67,8 @@ public:
   void request_mode(uint32_t custom_mode);
   /** PLAY_TUNE_V2 (QBasic format=1 by default). */
   void send_play_tune(const std::string & tune, uint32_t format = 1);
+  /** Inject one RTCM3 frame as GPS_RTCM_DATA (fragmented if >180 B). */
+  void send_gps_rtcm(const uint8_t * data, size_t len);
 
   /** If a full mission download finished, copies items and clears dirty. */
   bool take_mission(std::vector<MissionItem> & out);
@@ -123,6 +126,8 @@ private:
 
   std::mutex mode_mu_;
   std::chrono::steady_clock::time_point last_mode_request_{};
+
+  uint8_t rtcm_seq_{0};
 };
 
 }  // namespace hound_core

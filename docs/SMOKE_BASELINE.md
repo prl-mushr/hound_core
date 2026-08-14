@@ -17,3 +17,11 @@ Expected topics (unchanged contracts):
 - with `nvblox.enabled: true` + `backend: hound`: `/hound_mapping/local_map` (`LocalMap`), `/hound_mapping/elev_color`
 - with `backend: ros`: stock `nvblox_node` layer/mesh topics
 - with `viz.enabled: true`: Viser at `http://<host>:8080/` (install `viser` via `hound_viz` `install_deps.sh`)
+
+DatasetCameraDevice full stack (cuVSLAM + seg + NanoSAM + hound map + Viser), Ctrl+C cleanup:
+
+```bash
+bash /root/colcon_ws/src/hound_core/scripts/smoke_dataset_pipeline.sh
+```
+
+`ENABLE_VSLAM=0` uses GT poses from the rail dataset (no cuVSLAM). Default bakes synthetic IR into `race-2` when missing so Track can run.

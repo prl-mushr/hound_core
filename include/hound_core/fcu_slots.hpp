@@ -5,8 +5,10 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <rclcpp/time.hpp>
 
@@ -227,6 +229,44 @@ struct RcOverrideCmd
   }
 };
 
+/** FIFO of complete RTCM3 frames (not latest-wins — drops break RTK). */
+struct RtcmQueue
+{
+  static constexpr size_t kMaxFrames = 64;
+
+  void push(std::vector<uint8_t> && frame)
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (q_.size() >= kMaxFrames) {
+      q_.pop_front();
+      ++dropped_;
+    }
+    q_.push_back(std::move(frame));
+  }
+
+  bool pop(std::vector<uint8_t> & out)
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (q_.empty()) {
+      return false;
+    }
+    out = std::move(q_.front());
+    q_.pop_front();
+    return true;
+  }
+
+  uint64_t dropped() const
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    return dropped_;
+  }
+
+private:
+  mutable std::mutex mu_;
+  std::deque<std::vector<uint8_t>> q_;
+  uint64_t dropped_{0};
+};
+
 struct FcuBus
 {
   LatestSlot<ImuSample> imu;
@@ -242,6 +282,7 @@ struct FcuBus
   LatestSlot<VescSample> vesc;
   LatestSlot<EkfNavSample> ekf_nav;
   LatestSlot<ControlStateSample> control_state;
+  RtcmQueue rtcm;
 };
 
 }  // namespace hound_core

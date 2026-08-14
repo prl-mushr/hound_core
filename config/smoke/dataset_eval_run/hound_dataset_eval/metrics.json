@@ -1,0 +1,46 @@
+{
+  "elapsed_s": 60.02677631378174,
+  "n_pose_pairs": 547,
+  "n_local_maps": 40,
+  "rmse": {
+    "n": 547,
+    "trans_rmse_m_sim3": 12.66258507018499,
+    "trans_rmse_m_se3": 12.66258507018499,
+    "trans_mean_m_sim3": 11.299619644578435,
+    "trans_median_m_sim3": 11.129272508396081,
+    "trans_max_m_sim3": 22.11574070834691,
+    "scale": 1.0,
+    "rot_mean_deg_raw": 107.55900022903396,
+    "rot_median_deg_raw": 107.48086706354883,
+    "note": "trans RMSE after Umeyama align of VSLAM traj \u2192 GT (Sim3 includes scale). rot_* is raw quat angle before align.",
+    "est_path_length_m": 0.0,
+    "gt_path_length_m": 283.32,
+    "verdict": "cuVSLAM published ~9Hz but translation stayed at origin (synthetic IR); ATE vs GT is not a meaningful VO score"
+  },
+  "profile": {
+    "stereo_cuvslam": {
+      "track_mean_ms": 2.2236842105263164,
+      "track_max_ms": 5.777368421052631,
+      "iter_mean_ms": 109.68105263157898,
+      "track_hz": 9.115789473684213,
+      "ir_hz": 9.115789473684213
+    },
+    "clipseg_encoder": {
+      "clipseg_encode_ms": 9.7125,
+      "feature_xfer_ms": 2.1625,
+      "n_samples": 8
+    },
+    "seg_refine": {
+      "note": "no [timing] lines emitted during run (NanoSAM up; profile_every may not have flushed)"
+    },
+    "mapping_extract": {
+      "total_ms": 38.352631578947374,
+      "snapshot_ms": 5.736842105263158,
+      "bev_ms": 2.8460526315789476,
+      "inpaint_ms": 32.1,
+      "slope_ms": 2.1355263157894737,
+      "colorize_ms": 1.2526315789473685,
+      "n_samples": 76
+    }
+  }
+}

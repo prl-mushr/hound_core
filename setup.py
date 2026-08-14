@@ -23,6 +23,8 @@ setup(
             "bag_replay = hound_core.bag_replay:main",
             "wheel_odom_node = hound_core.wheel_odom_node:main",
             "hal_monitor_node = hound_core.hal_monitor_node:main",
+            "bag_recorder = hound_core.bag_recorder_node:main",
+            "mission_pose_builder = hound_core.mission_pose_builder_node:main",
         ],
     },
 )

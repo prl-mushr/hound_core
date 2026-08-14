@@ -40,6 +40,7 @@ add_executable(hound_fcu_control_modular_node
   src/ekf_runner.cpp
   src/ll_runner.cpp
   src/vesc_runner.cpp
+  src/ntrip_runner.cpp
   src/ll_controller_registry.cpp
   src/pid.cpp
   src/ackermann_ll_controller.cpp
@@ -80,6 +81,7 @@ ament_target_dependencies(hound_fcu_control_modular_node
   ackermann_msgs
   libmavconn
   tf2
+  tf2_ros
   tf2_geometry_msgs
   serial_driver
   io_context
@@ -111,6 +113,8 @@ install(PROGRAMS
   scripts/bag_replay
   scripts/wheel_odom_node
   scripts/hal_monitor_node
+  scripts/bag_recorder
+  scripts/mission_pose_builder
   scripts/hw_latency_probe
   scripts/wait_for_topic_hz.py
   DESTINATION lib/${PROJECT_NAME}

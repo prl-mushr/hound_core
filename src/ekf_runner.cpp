@@ -447,8 +447,8 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
 
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = imu.stamp;
-    odom.header.frame_id = "map";
-    odom.child_frame_id = "base_link";
+    odom.header.frame_id = cfg_.odom_frame;
+    odom.child_frame_id = cfg_.base_frame;
     odom.pose.pose.position.x = pos_enu[0];
     odom.pose.pose.position.y = pos_enu[1];
     odom.pose.pose.position.z = pos_enu[2];

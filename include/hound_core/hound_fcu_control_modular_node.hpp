@@ -22,8 +22,10 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8.hpp>
+#include <std_msgs/msg/u_int8_multi_array.hpp>
 #include <std_msgs/msg/u_int16_multi_array.hpp>
 #include <std_msgs/msg/u_int32.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 #include <vesc_msgs/msg/vesc_state_stamped.hpp>
 
 #include "hound_core/ekf_runner.hpp"
@@ -32,6 +34,7 @@
 #include "hound_core/ll_runner.hpp"
 #include "hound_core/low_level_controller.hpp"
 #include "hound_core/mavlink_bridge.hpp"
+#include "hound_core/ntrip_runner.hpp"
 #include "hound_core/vesc_runner.hpp"
 
 namespace hound_core
@@ -87,6 +90,9 @@ private:
   std::string vision_odom_topic_;
   std::string ekf_odom_topic_;
   std::string ekf_reset_topic_{"~/ekf_reset"};
+  bool publish_ekf_tf_{true};
+  std::string ekf_odom_frame_{"odom"};
+  std::string ekf_base_frame_{"base_link"};
   double ext_nav_origin_lat_{0.0};
   double ext_nav_origin_lon_{0.0};
   double ext_nav_origin_hgt_{0.0};
@@ -100,6 +106,9 @@ private:
   bool vesc_enabled_{false};
   std::string vesc_port_{"/dev/ttyACM0"};
   double vesc_telemetry_hz_{200.0};
+  bool ntrip_enabled_{false};
+  NtripRunner::Config ntrip_cfg_;
+  std::string ntrip_rtcm_topic_{"~/rtcm"};
 
   FcuBus bus_;
   std::unique_ptr<MavlinkBridge> bridge_;
@@ -107,6 +116,7 @@ private:
   std::unique_ptr<LlRunner> ll_runner_;
   std::unique_ptr<LowLevelController> ll_controller_;
   std::unique_ptr<VescRunner> vesc_runner_;
+  std::unique_ptr<NtripRunner> ntrip_runner_;
 
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_pub_;
@@ -114,6 +124,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ekf_odom_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ap_odom_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr mission_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr armed_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt16MultiArray>::SharedPtr rc_pub_;
@@ -122,6 +133,7 @@ private:
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::Publisher<vesc_msgs::msg::VescStateStamped>::SharedPtr vesc_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr control_state_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr rtcm_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr vision_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr icp_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr play_tune_sub_;

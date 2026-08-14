@@ -1,41 +1,40 @@
 # HAL monitor defaults (also available under hal_monitor in SSoT.yaml).
+# Recording is handled by bag_recorder_node (see bagdir / record_* below for shared defaults).
 diagnostics_topic: /SOC_diagnostics
 startup_delay_s: 15.0
 usb_reset_on_start: true
 usb_reset_device: "ChibiOS/RT Virtual COM Port"
 
+# Shared bag_recorder defaults (hal_monitor no longer records).
+# Trigger: std_msgs/Bool on /hal/record (true=start, false=stop).
+# Status: latched Bool on /hal/recording.
 bagdir: /root/colcon_ws/bags/
 record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
 record_split_duration_min: 5
-record_rc_channel: 3
-record_on_threshold: 1900
-record_off_threshold: 1100
+record_topic: /hal/record
 
 battery_voltage_threshold: 14.0
 gps_min_satellites: 16
 gps_max_h_acc_mm: 1000
+
+# Control-loop rate / receive-time latency (state → cmd).
+cmd_topic: /hound_nav/cmd_ackermann
 
 fcu:
   monitor_enabled: true
   monitor_topic: /hound_fcu_control/imu
   expected_fps: 50.0
   failure_action: ""
-  pose_topic: /hound_fcu_control/ap/local_odometry
   armed_topic: /hound_fcu_control/state/armed
   gps_satellites_topic: /hound_fcu_control/gps/satellites
   gps_h_acc_topic: /hound_fcu_control/gps/h_acc_mm
   notification_topic: /hound_fcu_control/play_tune
-  channel_topic: /hound_fcu_control/rc/in
-  base_frame: base_link
+  control_state_topic: /hound_fcu_control/control_state
 
 camera:
   monitor_enabled: true
   monitor_topic: /camera/infra1/image_rect_raw
   expected_fps: 60.0
-  pos: [0.15, 0.047, 0.04]
-  rot: [0.0, 0.0, 0.0, 1.0]
-  depth_frame: camera_link
-  depth_optical_frame: camera_infra1_optical_frame
 
 vesc:
   topic: /sensors/core

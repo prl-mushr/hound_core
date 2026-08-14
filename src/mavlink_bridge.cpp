@@ -604,6 +604,47 @@ void MavlinkBridge::request_mode(uint32_t custom_mode)
   send_to_fcu(sm);
 }
 
+void MavlinkBridge::send_gps_rtcm(const uint8_t * data, size_t len)
+{
+  if (data == nullptr || len == 0 || !fcu_) {
+    return;
+  }
+  mavlink::common::msg::GPS_RTCM_DATA msg{};
+  const size_t max_frag = msg.data.size();
+
+  auto send_slice = [&](uint8_t flags, const uint8_t * p, size_t n) {
+      msg.flags = flags;
+      msg.len = static_cast<uint8_t>(n);
+      std::copy(p, p + n, msg.data.begin());
+      if (n < max_frag) {
+        std::fill(msg.data.begin() + n, msg.data.end(), 0);
+      }
+      send_to_fcu(msg);
+    };
+
+  if (len <= max_frag) {
+    send_slice(static_cast<uint8_t>((rtcm_seq_++ & 0x1Fu) << 3), data, len);
+    return;
+  }
+  if (len <= 4 * max_frag) {
+    const uint8_t seq_u5 = static_cast<uint8_t>((rtcm_seq_++ & 0x1Fu) << 3);
+    size_t off = 0;
+    for (uint8_t frag = 0; frag < 4 && off < len; ++frag) {
+      const size_t n = std::min(len - off, max_frag);
+      send_slice(static_cast<uint8_t>(1u | (frag << 1) | seq_u5), data + off, n);
+      off += n;
+    }
+    return;
+  }
+  // Larger than 4*180: GPS UART is a byte pipe — inject unfragmented slices.
+  size_t off = 0;
+  while (off < len) {
+    const size_t n = std::min(len - off, max_frag);
+    send_slice(static_cast<uint8_t>((rtcm_seq_++ & 0x1Fu) << 3), data + off, n);
+    off += n;
+  }
+}
+
 void MavlinkBridge::send_play_tune(const std::string & tune, uint32_t format)
 {
   mavlink::common::msg::PLAY_TUNE_V2 pt{};

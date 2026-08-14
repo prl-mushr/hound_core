@@ -23,7 +23,7 @@
     lidar_vertical_fov_rad: 2.094395
     lidar_min_valid_range_m: 0.1
     use_non_equal_vertical_fov_lidar_params: false
-    use_lidar_motion_compensation: false
+    use_lidar_motion_compensation: true
     pointcloud2_timestamps_are_relative: false
     integrate_lidar_rate_hz: 10.0
 

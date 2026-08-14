@@ -4,6 +4,9 @@
 #include <chrono>
 #include <cmath>
 #include <utility>
+#include <vector>
+
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 namespace hound_core
 {
@@ -110,13 +113,29 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     ekf_cfg.ext_nav_origin_lat = ext_nav_origin_lat_;
     ekf_cfg.ext_nav_origin_lon = ext_nav_origin_lon_;
     ekf_cfg.ext_nav_origin_hgt = ext_nav_origin_hgt_;
+    ekf_cfg.odom_frame = ekf_odom_frame_;
+    ekf_cfg.base_frame = ekf_base_frame_;
     ekf_cfg.ekf_cpu = ekf_cpu_;
 
+    if (publish_ekf_tf_) {
+      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
     ekf_runner_ = std::make_unique<EkfRunner>(get_logger());
     ekf_runner_->start(
       bus_, ekf_cfg,
       [this](const nav_msgs::msg::Odometry & odom) {
         ekf_odom_pub_->publish(odom);
+        if (!tf_broadcaster_) {
+          return;
+        }
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header = odom.header;
+        tf.child_frame_id = odom.child_frame_id;
+        tf.transform.translation.x = odom.pose.pose.position.x;
+        tf.transform.translation.y = odom.pose.pose.position.y;
+        tf.transform.translation.z = odom.pose.pose.position.z;
+        tf.transform.rotation = odom.pose.pose.orientation;
+        tf_broadcaster_->sendTransform(tf);
       });
     ekf_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
       ekf_reset_topic_, 1,
@@ -150,6 +169,13 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     }
   }
 
+  if (ntrip_enabled_) {
+    rtcm_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(
+      ntrip_rtcm_topic_, rclcpp::SensorDataQoS());
+    ntrip_runner_ = std::make_unique<NtripRunner>(get_logger());
+    ntrip_runner_->start(bus_, ntrip_cfg_);
+  }
+
   const auto edge_period = std::chrono::duration<double>(1.0 / std::max(1.0, ros_publish_hz_));
   edge_timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::nanoseconds>(edge_period),
@@ -171,12 +197,15 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
   RCLCPP_INFO(
     get_logger(),
     "hound_fcu_control (modular) up: fcu=%s gcs=%s ekf=%d ll=%d controller=%s "
-    "vesc=%d ros_hz=%.1f aux_hz=%.1f align=%s ekf_odom_hz=%d",
+    "vesc=%d ntrip=%d ros_hz=%.1f aux_hz=%.1f align=%s ekf_odom_hz=%d tf=%s→%s",
     fcu_url_.c_str(), gcs_url_.empty() ? "(none)" : gcs_url_.c_str(),
     static_cast<int>(enable_ekf_), static_cast<int>(enable_ll_),
     ll_controller_name_.c_str(), static_cast<int>(vesc_enabled_),
+    static_cast<int>(ntrip_enabled_),
     ros_publish_hz_, aux_publish_hz_,
-    ext_nav_align_.c_str(), ekf_odom_hz_);
+    ext_nav_align_.c_str(), ekf_odom_hz_,
+    publish_ekf_tf_ ? ekf_odom_frame_.c_str() : "(off)",
+    publish_ekf_tf_ ? ekf_base_frame_.c_str() : "");
 }
 
 HoundFcuControlModularNode::~HoundFcuControlModularNode()
@@ -184,6 +213,9 @@ HoundFcuControlModularNode::~HoundFcuControlModularNode()
   aux_running_.store(false);
   if (aux_thread_.joinable()) {
     aux_thread_.join();
+  }
+  if (ntrip_runner_) {
+    ntrip_runner_->stop();
   }
   if (vesc_runner_) {
     vesc_runner_->stop();
@@ -249,6 +281,9 @@ void HoundFcuControlModularNode::declare_params()
     "vision_odom_topic", "/visual_slam/tracking/odometry");
   ekf_odom_topic_ = declare_parameter<std::string>("ekf_odom_topic", "ekf/odometry");
   ekf_reset_topic_ = declare_parameter<std::string>("ekf_reset_topic", "~/ekf_reset");
+  publish_ekf_tf_ = declare_parameter<bool>("publish_ekf_tf", true);
+  ekf_odom_frame_ = declare_parameter<std::string>("ekf_odom_frame", "odom");
+  ekf_base_frame_ = declare_parameter<std::string>("ekf_base_frame", "base_link");
   ext_nav_origin_lat_ = declare_parameter<double>("ext_nav_origin.lat", 37.8715);
   ext_nav_origin_lon_ = declare_parameter<double>("ext_nav_origin.lon", -122.2730);
   ext_nav_origin_hgt_ = declare_parameter<double>("ext_nav_origin.hgt", 0.0);
@@ -262,6 +297,24 @@ void HoundFcuControlModularNode::declare_params()
   vesc_enabled_ = declare_parameter<bool>("vesc_enabled", false);
   vesc_port_ = declare_parameter<std::string>("vesc_port", "/dev/ttyACM0");
   vesc_telemetry_hz_ = declare_parameter<double>("vesc_telemetry_hz", 200.0);
+  ntrip_enabled_ = declare_parameter<bool>("ntrip_enabled", false);
+  ntrip_cfg_.server = declare_parameter<std::string>("ntrip_server", "");
+  ntrip_cfg_.user = declare_parameter<std::string>("ntrip_user", "");
+  ntrip_cfg_.password = declare_parameter<std::string>("ntrip_password", "");
+  ntrip_cfg_.mountpoint = declare_parameter<std::string>("ntrip_mountpoint", "");
+  ntrip_cfg_.gga = declare_parameter<std::string>("ntrip_gga", "bus");
+  ntrip_cfg_.static_gga = declare_parameter<std::string>("ntrip_static_gga", "");
+  ntrip_cfg_.gga_period_s = declare_parameter<double>("ntrip_gga_period_s", 10.0);
+  ntrip_cfg_.reconnect_s = declare_parameter<double>("ntrip_reconnect_s", 2.0);
+  ntrip_rtcm_topic_ = declare_parameter<std::string>("ntrip_rtcm_topic", "~/rtcm");
+  ntrip_cfg_.origin_lat = ext_nav_origin_lat_;
+  ntrip_cfg_.origin_lon = ext_nav_origin_lon_;
+  ntrip_cfg_.origin_alt = ext_nav_origin_hgt_;
+  if (ntrip_cfg_.gga != "bus" && ntrip_cfg_.gga != "static" && ntrip_cfg_.gga != "none") {
+    RCLCPP_WARN(
+      get_logger(), "ntrip_gga=%s unknown; using bus", ntrip_cfg_.gga.c_str());
+    ntrip_cfg_.gga = "bus";
+  }
 
   const int sr0_extra1 = declare_parameter<int>("fcu_params.SR0_EXTRA1", 200);
   const int sr0_raw = declare_parameter<int>("fcu_params.SR0_RAW_SENS", 200);
@@ -410,6 +463,20 @@ void HoundFcuControlModularNode::aux_loop()
 
 void HoundFcuControlModularNode::ros_edge_timer()
 {
+  if (ntrip_enabled_ && bridge_) {
+    std::vector<uint8_t> frame;
+    int drained = 0;
+    while (drained < 16 && bus_.rtcm.pop(frame)) {
+      if (rtcm_pub_) {
+        std_msgs::msg::UInt8MultiArray out;
+        out.data = frame;
+        rtcm_pub_->publish(out);
+      }
+      bridge_->send_gps_rtcm(frame.data(), frame.size());
+      ++drained;
+    }
+  }
+
   ImuSample imu;
   if (bus_.imu.copy_latest(imu)) {
     sensor_msgs::msg::Imu m;

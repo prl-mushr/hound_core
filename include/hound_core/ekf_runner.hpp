@@ -33,6 +33,8 @@ public:
     double ext_nav_origin_lat{0.0};
     double ext_nav_origin_lon{0.0};
     double ext_nav_origin_hgt{0.0};
+    std::string odom_frame{"odom"};
+    std::string base_frame{"base_link"};
     int ekf_cpu{2};
   };
 

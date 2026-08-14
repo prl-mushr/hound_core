@@ -1,6 +1,7 @@
-"""Background monitor for HOUND: health checks, TF, tunes, and rosbag control.
+"""Diagnostics monitor for HOUND: health checks, tunes, and control latency.
 
-ROS 2 port of the legacy HAL_9000.py monitor node.
+ROS 2 port of the legacy HAL_9000.py monitor node (recording and TF removed;
+rosbag lives in bag_recorder_node).
 Talks to fcu_control via stock ROS messages (no mavros_msgs).
 """
 
@@ -10,23 +11,20 @@ import glob
 import os
 import platform
 import shlex
-import signal
 import subprocess
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, List, Optional
+from typing import Deque, Optional
 
 import numpy as np
 import rclpy
+from ackermann_msgs.msg import AckermannDriveStamped
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from geometry_msgs.msg import TransformStamped
-from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, Imu
-from std_msgs.msg import Bool, String, UInt8, UInt16MultiArray, UInt32
-from tf2_ros import TransformBroadcaster
+from std_msgs.msg import Bool, Float64MultiArray, String, UInt8, UInt32
 from vesc_msgs.msg import VescStateStamped
 
 _LEGACY_GPU_FREQ_PATHS = (
@@ -63,8 +61,6 @@ class HalMonitorNode(Node):
     TUNES = {
         "low level ready": "MLO2L2A",
         "low battery": "MSO3L8dddP8ddd",
-        "record start": "ML O3 L8 CD",
-        "record stop": "ML O3 L8 DC",
         "GPS good": "MSO3L8dP8d",
         "GPS bad": "MSO3L8ddP8dd",
         "camera ready": "MLO2L2C",
@@ -76,21 +72,23 @@ class HalMonitorNode(Node):
         self._on_jetson = platform.machine() == "aarch64"
         self._fcu_hz = TopicHzTracker()
         self._camera_hz = TopicHzTracker()
-        self._tf_broadcaster = TransformBroadcaster(self)
+        self._control_state_hz = TopicHzTracker()
+        self._cmd_hz = TopicHzTracker()
 
         self._declare_parameters()
-        self._load_record_topics()
 
         self._fcu_init = False
         self._camera_init = False
-        self._recording_state = False
         self._gps_status = False
         self._last_sats: Optional[int] = None
         self._last_h_acc_mm: Optional[int] = None
         self._last_map_clear = time.time()
-        self._rosbag_proc: Optional[subprocess.Popen] = None
-        self._record_cmd: List[str] = []
         self._gpu_freq_path: Optional[str] = None
+
+        # Receive-time latency: control_state arrival → cmd arrival (monotonic).
+        self._last_control_state_mono: Optional[float] = None
+        self._control_latency_ms: float = 0.0
+        self._latency_ema_alpha = 0.2
 
         self._notification_pub = self.create_publisher(
             String, self._p("fcu.notification_topic"), 10
@@ -118,9 +116,6 @@ class HalMonitorNode(Node):
                 qos_profile_sensor_data,
             )
         self.create_subscription(
-            UInt16MultiArray, self._p("fcu.channel_topic"), self._channel_cb, 2
-        )
-        self.create_subscription(
             VescStateStamped, self._p("vesc.topic"), self._voltage_cb, 1
         )
         self.create_subscription(
@@ -130,10 +125,19 @@ class HalMonitorNode(Node):
             UInt32, self._p("fcu.gps_h_acc_topic"), self._gps_h_acc_cb, 1
         )
         self.create_subscription(
-            Odometry, self._p("fcu.pose_topic"), self._pose_cb, 1
+            Bool, self._p("fcu.armed_topic"), self._armed_cb, 10
         )
         self.create_subscription(
-            Bool, self._p("fcu.armed_topic"), self._armed_cb, 10
+            Float64MultiArray,
+            self._p("fcu.control_state_topic"),
+            self._control_state_cb,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            AckermannDriveStamped,
+            self._p("cmd_topic"),
+            self._cmd_cb,
+            10,
         )
 
         startup_delay_s = float(self.get_parameter("startup_delay_s").value)
@@ -153,7 +157,7 @@ class HalMonitorNode(Node):
             subprocess.run(shlex.split(failure_action), check=False)
 
         self.create_timer(2.0, self._main_loop_tick)
-        self.get_logger().info("HAL monitor online")
+        self.get_logger().info("HAL monitor online (diagnostics-only)")
 
     def _p(self, name: str):
         return self.get_parameter(name).value
@@ -166,28 +170,14 @@ class HalMonitorNode(Node):
             "usb_reset_device", "ChibiOS/RT Virtual COM Port"
         )
 
-        self.declare_parameter("bagdir", "/root/colcon_ws/bags/")
-        self.declare_parameter(
-            "record_topics_file",
-            "/root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt",
-        )
-        self.declare_parameter("record_split_duration_min", 5)
-        self.declare_parameter("record_rc_channel", 3)
-        self.declare_parameter("record_on_threshold", 1900)
-        self.declare_parameter("record_off_threshold", 1100)
-
         self.declare_parameter("battery_voltage_threshold", 14.0)
         self.declare_parameter("gps_min_satellites", 16)
         self.declare_parameter("gps_max_h_acc_mm", 1000)
 
-        # fcu_control edge (stock msgs). Defaults assume node name hound_fcu_control.
         self.declare_parameter("fcu.monitor_enabled", True)
         self.declare_parameter("fcu.monitor_topic", "/hound_fcu_control/imu")
         self.declare_parameter("fcu.expected_fps", 50.0)
         self.declare_parameter("fcu.failure_action", "")
-        self.declare_parameter(
-            "fcu.pose_topic", "/hound_fcu_control/ap/local_odometry"
-        )
         self.declare_parameter("fcu.armed_topic", "/hound_fcu_control/state/armed")
         self.declare_parameter(
             "fcu.gps_satellites_topic", "/hound_fcu_control/gps/satellites"
@@ -198,20 +188,17 @@ class HalMonitorNode(Node):
         self.declare_parameter(
             "fcu.notification_topic", "/hound_fcu_control/play_tune"
         )
-        self.declare_parameter("fcu.channel_topic", "/hound_fcu_control/rc/in")
-        self.declare_parameter("fcu.base_frame", "base_link")
+        self.declare_parameter(
+            "fcu.control_state_topic", "/hound_fcu_control/control_state"
+        )
+
+        self.declare_parameter("cmd_topic", "/hound_nav/cmd_ackermann")
 
         self.declare_parameter("camera.monitor_enabled", True)
         self.declare_parameter(
             "camera.monitor_topic", "/camera/infra1/image_rect_raw"
         )
         self.declare_parameter("camera.expected_fps", 60.0)
-        self.declare_parameter("camera.pos", [0.15, 0.047, 0.04])
-        self.declare_parameter("camera.rot", [0.0, 0.0, 0.0, 1.0])
-        self.declare_parameter("camera.depth_frame", "camera_link")
-        self.declare_parameter(
-            "camera.depth_optical_frame", "camera_infra1_optical_frame"
-        )
 
         self.declare_parameter("vesc.topic", "/sensors/core")
 
@@ -251,20 +238,6 @@ class HalMonitorNode(Node):
         except (OSError, ValueError):
             return 0.0
 
-    def _load_record_topics(self) -> None:
-        topics_file = Path(str(self._p("record_topics_file")))
-        if not topics_file.is_file():
-            self.get_logger().warning(
-                f"Record topics file not found: {topics_file}"
-            )
-            self._record_topics: List[str] = []
-            return
-        self._record_topics = [
-            line.strip()
-            for line in topics_file.read_text().splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-
     def _publish_notification(self, message: str) -> None:
         tune = self.TUNES.get(message)
         if tune is None:
@@ -275,44 +248,24 @@ class HalMonitorNode(Node):
         msg.data = tune
         self._notification_pub.publish(msg)
 
-    def _start_recording(self) -> None:
-        bagdir = Path(str(self._p("bagdir")))
-        bagdir.mkdir(parents=True, exist_ok=True)
-        split_min = int(self.get_parameter("record_split_duration_min").value)
-        output = str(bagdir / "temp")
-        self._record_cmd = [
-            "ros2",
-            "bag",
-            "record",
-            "-o",
-            output,
-            "--max-bag-duration",
-            str(split_min * 60),
-            *self._record_topics,
-        ]
-        self.get_logger().info(f"Starting bag record: {' '.join(self._record_cmd)}")
-        self._rosbag_proc = subprocess.Popen(self._record_cmd)
-        self._publish_notification("record start")
+    def _control_state_cb(self, _msg: Float64MultiArray) -> None:
+        now = time.monotonic()
+        self._control_state_hz.tick()
+        self._last_control_state_mono = now
 
-    def _stop_recording(self) -> None:
-        if self._rosbag_proc is not None and self._rosbag_proc.poll() is None:
-            self._rosbag_proc.send_signal(signal.SIGINT)
-            try:
-                self._rosbag_proc.wait(timeout=10.0)
-            except subprocess.TimeoutExpired:
-                self._rosbag_proc.kill()
-        self._rosbag_proc = None
-        self._publish_notification("record stop")
-
-        bagdir = Path(str(self._p("bagdir")))
-        if not bagdir.is_dir():
+    def _cmd_cb(self, _msg: AckermannDriveStamped) -> None:
+        now = time.monotonic()
+        self._cmd_hz.tick()
+        if self._last_control_state_mono is None:
             return
-        candidates = sorted(
-            (p for p in bagdir.iterdir() if p.name.startswith("temp")),
-            key=lambda p: p.stat().st_mtime,
-        )
-        for i, path in enumerate(candidates):
-            path.rename(bagdir / f"hound_{i}")
+        latency_ms = (now - self._last_control_state_mono) * 1000.0
+        if self._control_latency_ms <= 0.0:
+            self._control_latency_ms = latency_ms
+        else:
+            a = self._latency_ema_alpha
+            self._control_latency_ms = (
+                a * latency_ms + (1.0 - a) * self._control_latency_ms
+            )
 
     def _voltage_cb(self, msg: VescStateStamped) -> None:
         threshold = float(self.get_parameter("battery_voltage_threshold").value)
@@ -339,79 +292,6 @@ class HalMonitorNode(Node):
         elif not good and self._gps_status:
             self._publish_notification("GPS bad")
             self._gps_status = False
-
-    def _channel_cb(self, rc: UInt16MultiArray) -> None:
-        if not rc.data:
-            return
-        channel_idx = int(self.get_parameter("record_rc_channel").value)
-        if channel_idx >= len(rc.data):
-            return
-        stick = int(rc.data[channel_idx])
-        on_threshold = int(self.get_parameter("record_on_threshold").value)
-        off_threshold = int(self.get_parameter("record_off_threshold").value)
-        if not self._recording_state and stick > on_threshold:
-            self.get_logger().info("RC request: start recording")
-            self._start_recording()
-            self._recording_state = True
-        elif self._recording_state and stick < off_threshold:
-            self.get_logger().info("RC request: stop recording")
-            self._stop_recording()
-            self._recording_state = False
-
-    def _send_transform(
-        self,
-        stamp,
-        frame_id: str,
-        child_frame_id: str,
-        translation,
-        rotation,
-    ) -> None:
-        tf_msg = TransformStamped()
-        tf_msg.header.stamp = stamp
-        tf_msg.header.frame_id = frame_id
-        tf_msg.child_frame_id = child_frame_id
-        tf_msg.transform.translation.x = float(translation[0])
-        tf_msg.transform.translation.y = float(translation[1])
-        tf_msg.transform.translation.z = float(translation[2])
-        tf_msg.transform.rotation.x = float(rotation[0])
-        tf_msg.transform.rotation.y = float(rotation[1])
-        tf_msg.transform.rotation.z = float(rotation[2])
-        tf_msg.transform.rotation.w = float(rotation[3])
-        self._tf_broadcaster.sendTransform(tf_msg)
-
-    def _pose_cb(self, msg: Odometry) -> None:
-        base_frame = str(self._p("fcu.base_frame"))
-        pos = msg.pose.pose.position
-        rot = msg.pose.pose.orientation
-        stamp = msg.header.stamp
-
-        self._send_transform(
-            stamp,
-            "map",
-            base_frame,
-            (pos.x, pos.y, pos.z),
-            (rot.x, rot.y, rot.z, rot.w),
-        )
-
-        cam_pos = list(self._p("camera.pos"))
-        cam_rot = list(self._p("camera.rot"))
-        depth_frame = str(self._p("camera.depth_frame"))
-        self._send_transform(
-            stamp, base_frame, depth_frame, cam_pos, cam_rot
-        )
-
-        self._send_transform(
-            stamp, "map", "odom", (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)
-        )
-
-        depth_optical = str(self._p("camera.depth_optical_frame"))
-        self._send_transform(
-            stamp,
-            depth_frame,
-            depth_optical,
-            (0.0, 0.0, 0.0),
-            (-0.5, 0.5, -0.5, 0.5),
-        )
 
     def _armed_cb(self, msg: Bool) -> None:
         if msg.data:
@@ -466,6 +346,15 @@ class HalMonitorNode(Node):
             KeyValue(key="gpu_freq_path", value=gpu_path),
             KeyValue(key="fcu_init", value=str(self._fcu_init)),
             KeyValue(key="camera_init", value=str(self._camera_init)),
+            KeyValue(
+                key="control_state_hz",
+                value=str(round(self._control_state_hz.get_hz(), 2)),
+            ),
+            KeyValue(key="cmd_hz", value=str(round(self._cmd_hz.get_hz(), 2))),
+            KeyValue(
+                key="control_latency_ms",
+                value=str(round(self._control_latency_ms, 2)),
+            ),
         ]
 
         msg = DiagnosticArray()
@@ -506,8 +395,6 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        if node._recording_state:
-            node._stop_recording()
         node.destroy_node()
         rclpy.shutdown()
 

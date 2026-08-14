@@ -14,6 +14,21 @@ from launch_ros.descriptions import ComposableNode
 PACKAGE_NAME = "hound_core"
 
 
+def lidar_uses_composite(lidar: dict) -> bool:
+    comp = lidar.get("composite") or {}
+    backend = str(lidar.get("backend", "unitree")).lower()
+    return bool(comp.get("enabled", False)) or backend in ("livox", "ouster")
+
+
+def lidar_composite_deskew_enabled(lidar: dict) -> bool:
+    """True when lidar composite runs in-process deskew (default on)."""
+    if not lidar_uses_composite(lidar):
+        return False
+    comp = lidar.get("composite") or {}
+    deskew = dict(comp.get("deskew") or lidar.get("deskew") or {})
+    return bool(deskew.get("enabled", deskew.get("enable", True)))
+
+
 def flatten_params(data: dict, prefix: str = "") -> dict:
     flat = {}
     for key, value in data.items():
@@ -148,6 +163,8 @@ def realsense_camera_params(
         "enable_color": enable_color,
         "enable_depth": enable_depth,
         "depth_module.emitter_enabled": int(cam.get("emitter_enabled", 0)),
+        # Match realsense2_camera initial_reset (USB hardware reset on open).
+        "initial_reset": bool(cam.get("initial_reset", False)),
         # realsense2_camera ≥4.55: depth_profile (not legacy "profile").
         "depth_module.infra_profile": module_profile,
         "depth_module.depth_profile": module_profile,
@@ -383,12 +400,15 @@ def build_nvblox_node(
     if people_mask and not people_mask.startswith("/"):
         people_mask = "/" + people_mask
 
-    # Prefer deskewed cloud when deskewer is on.
+    # Prefer deskewed cloud: composite in-process deskew publishes on cloud_topic;
+    # legacy unitree path may use a separate deskewer output topic.
     deskew = lidar.get("deskewer") or {}
     default_lidar_topic = str(lidar.get("cloud_topic", "/unilidar/cloud"))
     if not default_lidar_topic.startswith("/"):
         default_lidar_topic = "/" + default_lidar_topic
-    if bool(deskew.get("enabled", False)):
+    if lidar_composite_deskew_enabled(lidar):
+        pass  # canonical cloud_topic is already deskewed
+    elif bool(deskew.get("enabled", False)):
         default_lidar_topic = str(
             deskew.get("output_topic", "/unilidar/cloud_deskewed")
         )
@@ -499,8 +519,10 @@ def build_nvblox_node(
             "use_non_equal_vertical_fov_lidar_params": bool(
                 nvblox.get("use_non_equal_vertical_fov_lidar_params", False)
             ),
-            "use_lidar_motion_compensation": bool(
-                nvblox.get("use_lidar_motion_compensation", False)
+            "use_lidar_motion_compensation": (
+                False
+                if lidar_composite_deskew_enabled(lidar)
+                else bool(nvblox.get("use_lidar_motion_compensation", False))
             ),
             "pointcloud2_timestamps_are_relative": bool(
                 nvblox.get("pointcloud2_timestamps_are_relative", False)
@@ -509,6 +531,13 @@ def build_nvblox_node(
                 nvblox.get("integrate_lidar_rate_hz", 10.0)
             ),
         })
+        if lidar_composite_deskew_enabled(lidar) and bool(
+            nvblox.get("use_lidar_motion_compensation", False)
+        ):
+            print(
+                "[hound_core] nvblox: forcing use_lidar_motion_compensation=false "
+                "(lidar composite in-process deskew)"
+            )
 
     remappings = [
         ("camera_0/color/image", color_image),
@@ -615,7 +644,9 @@ def build_hound_mapping_node(
     default_lidar_topic = str(lidar.get("cloud_topic", "/unilidar/cloud"))
     if not default_lidar_topic.startswith("/"):
         default_lidar_topic = "/" + default_lidar_topic
-    if bool(deskew.get("enabled", False)):
+    if lidar_composite_deskew_enabled(lidar):
+        pass
+    elif bool(deskew.get("enabled", False)):
         default_lidar_topic = str(
             deskew.get("output_topic", "/unilidar/cloud_deskewed")
         )
@@ -643,6 +674,7 @@ def build_hound_mapping_node(
             nvblox.get("elevation_resolution", nvblox.get("voxel_size", 0.05))
         ),
         "map_clearing_radius_m": float(nvblox.get("map_clearing_radius_m", 32.0)),
+        "local_map_size_m": float(nvblox.get("local_map_size_m", 0.0)),
         "max_integration_distance_m": integ_max,
         "lidar_max_integration_distance_m": lidar_integ_max,
         "lethal_slope_deg": float(nvblox.get("lethal_slope_deg", 60.0)),
@@ -658,13 +690,15 @@ def build_hound_mapping_node(
         "use_color": use_color,
         "use_lidar": use_lidar,
         "use_people_mask": use_people_mask,
+        "depth_ignore_bottom_fraction": float(
+            nvblox.get("depth_ignore_bottom_fraction", 0.0)
+        ),
         "depth_topic": depth_image,
         "depth_info_topic": depth_info,
         "color_topic": color_image,
         "color_info_topic": color_info,
         "lidar_topic": lidar_topic,
         "people_mask_topic": people_mask,
-        "camera_names": [str(x) for x in (nvblox.get("camera_names") or [])],
         "color_topic_template": str(nvblox.get("color_topic_template", "")),
         "color_info_topic_template": str(
             nvblox.get("color_info_topic_template", "")
@@ -677,20 +711,83 @@ def build_hound_mapping_node(
                 lidar.get("lidar_vertical_fov_rad", 2.094395),
             )
         ),
+        # Mid-360 asymmetric FoV (deg). Prefer over symmetric vertical_fov.
+        "lidar_elevation_below_deg": float(
+            nvblox.get(
+                "lidar_elevation_below_deg",
+                lidar.get("lidar_elevation_below_deg", 0.0),
+            )
+        ),
+        "lidar_elevation_above_deg": float(
+            nvblox.get(
+                "lidar_elevation_above_deg",
+                lidar.get("lidar_elevation_above_deg", 0.0),
+            )
+        ),
         "lidar_min_valid_range_m": float(nvblox.get("lidar_min_valid_range_m", 0.3)),
-        "use_lidar_motion_compensation": bool(
-            nvblox.get("use_lidar_motion_compensation", False)
+        "use_lidar_motion_compensation": (
+            False
+            if lidar_composite_deskew_enabled(lidar)
+            else bool(nvblox.get("use_lidar_motion_compensation", False))
         ),
         "integrate_depth_rate_hz": float(nvblox.get("integrate_depth_rate_hz", 20.0)),
         "integrate_color_rate_hz": float(nvblox.get("integrate_color_rate_hz", 20.0)),
         "integrate_lidar_rate_hz": float(nvblox.get("integrate_lidar_rate_hz", 10.0)),
         "map_clear_rate_hz": float(nvblox.get("map_clear_rate_hz", 20.0)),
-        "publish_map_rate_hz": float(nvblox.get("publish_map_rate_hz", 5.0)),
+        "mapper_rate_hz": float(
+            nvblox.get(
+                "mapper_rate_hz",
+                nvblox.get("publish_map_rate_hz", 20.0),
+            )
+        ),
+        "publish_map_rate_hz": float(nvblox.get("publish_map_rate_hz", 20.0)),
+        "extract_on_depth": bool(nvblox.get("extract_on_depth", False)),
+        "dump_elev_dir": str(nvblox.get("dump_elev_dir", "") or ""),
+        "dump_elev_rate_hz": float(nvblox.get("dump_elev_rate_hz", 20.0)),
+        "dump_elev_n_frames": int(nvblox.get("dump_elev_n_frames", 0)),
+        "layer_cake_path": str(
+            nvblox.get(
+                "layer_cake_path",
+                "/root/colcon_ws/maps/hound_tsdf.layercake",
+            )
+            or "/root/colcon_ws/maps/hound_tsdf.layercake"
+        ),
+        "prior_layer_cake_path": str(
+            nvblox.get("prior_layer_cake_path", "") or ""
+        ),
+        "prior_xyz_yaw": [
+            float(x)
+            for x in (nvblox.get("prior_xyz_yaw") or [0.0, 0.0, 0.0, 0.0])
+        ],
+        "prior_fill_enabled": bool(nvblox.get("prior_fill_enabled", True)),
     }
+    # launch_ros rejects empty list for array params.
+    if len(params["prior_xyz_yaw"]) < 4:
+        params["prior_xyz_yaw"] = [0.0, 0.0, 0.0, 0.0]
+    # launch_ros rejects empty list/tuple for array params ("got '()'").
+    camera_names = [str(x) for x in (nvblox.get("camera_names") or [])]
+    if camera_names:
+        params["camera_names"] = camera_names
+        # Multi-cam depth must match stereo_composite align_depth (people-mask
+        # path forces aligned_depth_to_color — native image_rect_raw goes quiet).
+        if align:
+            params["depth_topic_template"] = (
+                "/{name}/aligned_depth_to_color/image_raw"
+            )
+            params["depth_info_topic_template"] = (
+                "/{name}/aligned_depth_to_color/camera_info"
+            )
+        else:
+            params["depth_topic_template"] = "/{name}/depth/image_rect_raw"
+            params["depth_info_topic_template"] = "/{name}/depth/camera_info"
 
     print(
         f"[hound_core] hound_mapping ENABLED: voxel={params['voxel_size']} "
         f"depth={use_depth} lidar={use_lidar} color={use_color} "
+        f"cams={camera_names or ['(legacy single)']} "
+        f"depth_tmpl={params.get('depth_topic_template') or params['depth_topic']} "
+        f"color_tmpl={params.get('color_topic_template') or '(per-cam RGB)'} "
+        f"mapper_hz={params['mapper_rate_hz']} "
         f"~/local_map + ~/elev_color, clear_r={params['map_clearing_radius_m']}"
     )
     return Node(
@@ -702,10 +799,45 @@ def build_hound_mapping_node(
     )
 
 
-def build_nav_node(nav: dict) -> Node:
-    """IGHA* + UW_mppi navigation (MPPI main thread, planner process)."""
-    params = {
-        "config_path": str(nav.get("config_path", "") or ""),
+def build_nav_dora_actions(nav: dict) -> list:
+    """Manager / planner / controller via ``dora run`` (HOUND_NAV_CONFIG JSON).
+
+    Embeds the full SSoT ``nav:`` stack (MPPI / Dynamics / Cost / Planner / …)
+    so nodes do not load a separate YAML.
+    """
+    import copy
+    import json
+    from pathlib import Path
+
+    from ament_index_python.packages import get_package_prefix
+    from launch.actions import ExecuteProcess
+
+    ctrl_hz = float(nav.get("control_rate_hz", 20.0))
+    planner_hz = float(nav.get("planner_hz", 5.0))
+    tick_hz = max(ctrl_hz, 50.0)
+    tick_ms = max(10, int(round(1000.0 / max(tick_hz, 1.0))))
+    dyn = nav.get("Dynamics_config") or {}
+    plan_traj_dt = float(
+        nav.get("plan_traj_dt_s", dyn.get("dt", 0.05) if isinstance(dyn, dict) else 0.05)
+    )
+    stack_keys = (
+        "MPPI_config",
+        "Map_config",
+        "Dynamics_config",
+        "Sampling_config",
+        "Cost_config",
+        "Planner_config",
+        "lookahead",
+        "wp_radius",
+    )
+    missing = [k for k in stack_keys if k not in nav]
+    if missing:
+        raise RuntimeError(
+            "SSoT nav: missing stack keys "
+            + ", ".join(missing)
+            + " (MPPI/planner params must live under nav: in SSoT.yaml)"
+        )
+    cfg = {
         "local_map_topic": str(
             nav.get("local_map_topic", "/hound_mapping/local_map")
         ),
@@ -713,37 +845,74 @@ def build_nav_node(nav: dict) -> Node:
             nav.get("state_topic", "/hound_fcu_control/control_state")
         ),
         "path_topic": str(nav.get("path_topic", "/mission/path")),
-        "inject_path_topic": str(
-            nav.get("inject_path_topic", "/hound_nav/inject_path")
-        ),
-        "skip_planner": bool(nav.get("skip_planner", False)),
         "cmd_topic": str(nav.get("cmd_topic", "/hound_nav/cmd_ackermann")),
         "plan_topic": str(nav.get("plan_topic", "/hound_nav/local_plan")),
-        "latency_topic": str(
-            nav.get("latency_topic", "/hound_nav/state_to_cmd_ms")
+        "control_rate_hz": ctrl_hz,
+        "planner_hz": planner_hz,
+        "cruise_speed_mps": float(nav.get("cruise_speed_mps", 10.0)),
+        "control_state_dims": int(nav.get("control_state_dims", 17)),
+        "track_ref_metric": str(nav.get("track_ref_metric", "screw")),
+        "screw_length_m": float(nav.get("screw_length_m", 1.0)),
+        "planning_margin_s": float(nav.get("planning_margin_s", 0.05)),
+        "plan_start_max_ref_dist_m": float(
+            nav.get("plan_start_max_ref_dist_m", 2.0)
         ),
-        "event_driven": bool(nav.get("event_driven", True)),
-        "async_bev": bool(nav.get("async_bev", True)),
-        "bev_hz": float(nav.get("bev_hz", 20.0)),
-        "control_rate_hz": float(nav.get("control_rate_hz", 20.0)),
-        "max_steer_rad": float(nav.get("max_steer_rad", 0.6)),
-        "max_speed_mps": float(nav.get("max_speed_mps", 20.0)),
+        "plan_traj_dt_s": plan_traj_dt,
     }
+    for k in stack_keys:
+        cfg[k] = copy.deepcopy(nav[k])
+    cfg_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_nav_", suffix=".json"
+    )
+    json.dump(cfg, cfg_tf, indent=2)
+    cfg_tf.close()
+
+    share = get_package_share_directory("hound_nav")
+    prefix = get_package_prefix("hound_nav")
+    lib = os.path.join(prefix, "lib", "hound_nav")
+    src_root = Path("/home/hound/colcon_ws/src/hound_nav")
+    if not src_root.is_dir():
+        src_root = Path("/root/colcon_ws/src/hound_nav")
+    src_mod = src_root / "hound_nav"
+    src_df = src_root / "dora" / "nav_dataflow.yml"
+    template = src_df if src_df.is_file() else (Path(share) / "dora" / "nav_dataflow.yml")
+
+    def _node_py(mod_name: str, exe_name: str) -> str:
+        cand = src_mod / mod_name
+        return str(cand) if cand.is_file() else os.path.join(lib, exe_name)
+
+    text = (
+        template.read_text(encoding="utf-8")
+        .replace("__MANAGER_PY__", _node_py("manager_dora_node.py", "nav_manager"))
+        .replace("__PLANNER_PY__", _node_py("planner_dora_node.py", "nav_planner"))
+        .replace("__CONTROLLER_PY__", _node_py("controller_dora_node.py", "nav_controller"))
+        .replace("__CTRL_TICK_MS__", str(tick_ms))
+    )
+    df_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_nav_df_", suffix=".yml"
+    )
+    df_tf.write(text)
+    df_tf.close()
+
     print(
-        f"[hound_core] nav ENABLED: map={params['local_map_topic']} "
-        f"state={params['state_topic']} cmd={params['cmd_topic']} "
-        f"skip_planner={params['skip_planner']} "
-        f"event_driven={params['event_driven']} "
-        f"async_bev={params['async_bev']}@{params['bev_hz']}Hz "
-        f"rate={params['control_rate_hz']} Hz"
+        f"[hound_core] nav ENABLED (dora): map={cfg['local_map_topic']} "
+        f"state={cfg['state_topic']} cmd={cfg['cmd_topic']} "
+        f"planner_hz={planner_hz} tick={tick_ms}ms (stack from SSoT nav:)"
     )
-    return Node(
-        package="hound_nav",
-        executable="nav_node",
-        name="hound_nav",
-        output="screen",
-        parameters=[params],
-    )
+    return [
+        ExecuteProcess(
+            cmd=["dora", "run", df_tf.name],
+            additional_env={"HOUND_NAV_CONFIG": cfg_tf.name},
+            output="screen",
+            name="hound_nav_dora",
+        )
+    ]
+
+
+def build_nav_node(nav: dict):
+    """Backward-compatible alias — nav is the 3-node Dora graph."""
+    acts = build_nav_dora_actions(nav)
+    return acts[0] if acts else None
 
 
 def build_viz_node(viz: dict) -> Node:
@@ -774,6 +943,7 @@ def build_viz_node(viz: dict) -> Node:
         "lidar_max_points": int(viz.get("lidar_max_points", 20000)),
         "lidar_min_period_s": float(viz.get("lidar_min_period_s", 0.2)),
         "camera_min_period_s": float(viz.get("camera_min_period_s", 0.2)),
+        "map_min_period_s": float(viz.get("map_min_period_s", 1.0)),
         "map_mesh_stride": int(viz.get("map_mesh_stride", 2)),
         "map_z_exaggeration": float(viz.get("map_z_exaggeration", 1.0)),
     }
@@ -833,17 +1003,36 @@ def apply_hal_camera_defaults(hal: dict, cam: dict) -> dict:
 
 
 def build_lidar_mesh_composite_node(lidar: dict) -> Node:
-    """In-process lidar SDK + constant-twist mesh PF (composite_sensing)."""
+    """In-process lidar SDK + static TF + optional deskew (composite_sensing)."""
     comp = dict(lidar.get("composite") or {})
+    deskew = dict(comp.get("deskew") or lidar.get("deskew") or {})
     xyz = lidar.get("xyz") or [0.0, 0.0, 0.1]
     rpy = lidar.get("rpy") or [180.0, -15.0, 0.0]
-    bb = dict(comp.get("init_bb") or {})
+    cloud_frame = str(lidar.get("cloud_frame", "unilidar_lidar"))
+    # Nested ROS params: deskew.enable / deskew.motion_frame / ...
+    deskew_enable = bool(deskew.get("enabled", deskew.get("enable", True)))
+    motion_frame = str(
+        deskew.get(
+            "motion_frame",
+            deskew.get("target_frame", "odom"),  # legacy alias
+        )
+    )
+    if motion_frame == cloud_frame:
+        print(
+            f"[hound_core] WARN: deskew.motion_frame={motion_frame!r} equals "
+            "cloud_frame — deskew will no-op; use odom"
+        )
+        motion_frame = "odom"
     params = {
         "lidar_backend": str(lidar.get("backend", "unitree")),
         "port": str(lidar.get("port", "/dev/ttyUSB0")),
-        "lidar_frame": str(lidar.get("cloud_frame", "unilidar_lidar")),
-        # Extrinsic xyz/rpy is base→lidar; static TF uses the same (parent should
-        # match base_frame for the mesh PF body frame).
+        "lidar_ip": str(lidar.get("lidar_ip", "")),
+        "local_ip": str(lidar.get("local_ip", "")),
+        "lidar_port": int(lidar.get("lidar_port", 0) or 0),
+        "local_port": int(lidar.get("local_port", 0) or 0),
+        "config_path": str(lidar.get("config_path", "") or ""),
+        "frame_time_ms": int(lidar.get("frame_time_ms", 100)),
+        "lidar_frame": cloud_frame,
         "base_frame": str(comp.get("base_frame", "base_link")),
         "parent_frame": str(
             comp.get("base_frame", lidar.get("parent_frame", "base_link"))
@@ -859,13 +1048,70 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
         "cloud_scan_num": int(lidar.get("cloud_scan_num", 18)),
         "publish_cloud": bool(comp.get("publish_cloud", True)),
         "cloud_topic": str(lidar.get("cloud_topic", "/unilidar/cloud")),
-        "map_file": str(comp.get("map_file", "")),
-        "map_frame": str(comp.get("map_frame", "map")),
-        "pose_topic": str(comp.get("pose_topic", "/localization/mesh_pose")),
-        "localize_hz": float(comp.get("localize_hz", 10.0)),
-        "num_particles": int(comp.get("num_particles", 2000)),
-        "beam_samples": int(comp.get("beam_samples", 64)),
-        "global_init_on_start": bool(comp.get("global_init_on_start", True)),
+        "publish_raw_cloud": bool(
+            deskew.get("publish_raw_cloud", comp.get("publish_raw_cloud", False))
+        ),
+        "raw_cloud_topic": str(
+            deskew.get("raw_cloud_topic", comp.get("raw_cloud_topic", "/livox/cloud_raw"))
+        ),
+        "core_temp_topic": str(lidar.get("core_temp_topic", "/livox/core_temp")),
+        "environment_temp_topic": str(
+            lidar.get("environment_temp_topic", "")
+        ),
+        "temp_query_period_s": float(lidar.get("temp_query_period_s", 2.0)),
+        "core_temp_warn_c": float(lidar.get("core_temp_warn_c", 55.0)),
+        "cloud_stale_warn_s": float(lidar.get("cloud_stale_warn_s", 5.0)),
+        "status_log_period_s": float(lidar.get("status_log_period_s", 60.0)),
+        "deskew.enable": deskew_enable,
+        "deskew.motion_frame": motion_frame,
+        "deskew.reference": str(
+            deskew.get("reference", deskew.get("deskew_reference", "end"))
+        ),
+        "deskew.tf_lookup_timeout_s": float(
+            deskew.get("tf_lookup_timeout_s", deskew.get("tf_lookup_timeout", 0.0))
+        ),
+        "deskew.warn_ms": float(deskew.get("warn_ms", 40.0)),
+        "deskew.tf_buffer_duration_s": float(
+            deskew.get("tf_buffer_duration_s", deskew.get("tf_buffer_duration", 10.0))
+        ),
+    }
+    print(
+        f"[hound_core] lidar_mesh_composite ENABLED: backend={params['lidar_backend']} "
+        f"lidar_ip={params['lidar_ip'] or '(n/a)'} "
+        f"cloud={params['cloud_topic']} deskew={'on' if deskew_enable else 'off'} "
+        f"motion={motion_frame}"
+    )
+    return Node(
+        package="composite_sensing",
+        executable="lidar_mesh_composite_node",
+        name="lidar_mesh_composite",
+        output="screen",
+        parameters=[params],
+    )
+
+
+def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
+    """Standalone Embree constant-twist mesh particle filter."""
+    lidar = lidar or {}
+    xyz = mesh_pf.get("xyz") or lidar.get("xyz") or [0.0, 0.0, 0.1]
+    rpy = mesh_pf.get("rpy") or lidar.get("rpy") or [180.0, -15.0, 0.0]
+    bb = dict(mesh_pf.get("init_bb") or {})
+    params = {
+        "cloud_topic": str(mesh_pf.get("cloud_topic", lidar.get("cloud_topic", "/livox/cloud"))),
+        "pose_topic": str(mesh_pf.get("pose_topic", "/localization/mesh_pose")),
+        "map_file": str(mesh_pf.get("map_file", "")),
+        "map_frame": str(mesh_pf.get("map_frame", "map")),
+        "base_frame": str(mesh_pf.get("base_frame", "base_link")),
+        "xyz.x": float(xyz[0]),
+        "xyz.y": float(xyz[1]),
+        "xyz.z": float(xyz[2]),
+        "rpy.roll": float(rpy[0]),
+        "rpy.pitch": float(rpy[1]),
+        "rpy.yaw": float(rpy[2]),
+        "localize_hz": float(mesh_pf.get("localize_hz", 10.0)),
+        "num_particles": int(mesh_pf.get("num_particles", 2000)),
+        "beam_samples": int(mesh_pf.get("beam_samples", 64)),
+        "global_init_on_start": bool(mesh_pf.get("global_init_on_start", True)),
         "init_bb.xmin": float(bb.get("xmin", -20.0)),
         "init_bb.ymin": float(bb.get("ymin", -20.0)),
         "init_bb.zmin": float(bb.get("zmin", 0.0)),
@@ -874,14 +1120,44 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
         "init_bb.zmax": float(bb.get("zmax", 2.0)),
     }
     print(
-        f"[hound_core] lidar_mesh_composite ENABLED: port={params['port']} "
-        f"map={params['map_file'] or '(none)'} pose={params['pose_topic']} "
-        f"hz={params['localize_hz']}"
+        f"[hound_core] mesh_pf ENABLED: cloud={params['cloud_topic']} "
+        f"map={params['map_file'] or '(missing)'} pose={params['pose_topic']}"
     )
     return Node(
         package="composite_sensing",
-        executable="lidar_mesh_composite_node",
-        name="lidar_mesh_composite",
+        executable="mesh_pf_node",
+        name="mesh_pf",
+        output="screen",
+        parameters=[params],
+    )
+
+
+def build_bag_recorder_node(bag: dict) -> Node:
+    params = {
+        "bagdir": str(bag.get("bagdir", "/root/colcon_ws/bags/")),
+        "record_topics_file": str(
+            bag.get(
+                "record_topics_file",
+                "/root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt",
+            )
+        ),
+        "record_split_duration_min": int(bag.get("record_split_duration_min", 5)),
+        "record_topic": str(bag.get("record_topic", "/hal/record")),
+        "recording_status_topic": str(
+            bag.get("recording_status_topic", "/hal/recording")
+        ),
+        "notification_topic": str(
+            bag.get("notification_topic", "/hound_fcu_control/play_tune")
+        ),
+    }
+    print(
+        f"[hound_core] bag_recorder ENABLED: trigger={params['record_topic']} "
+        f"bagdir={params['bagdir']}"
+    )
+    return Node(
+        package="hound_core",
+        executable="bag_recorder",
+        name="bag_recorder",
         output="screen",
         parameters=[params],
     )

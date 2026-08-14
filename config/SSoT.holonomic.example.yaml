@@ -22,6 +22,9 @@ fcu_control:
   fuse_gps: false
   vision_odom_topic: /visual_slam/tracking/odometry
   ekf_odom_topic: ekf/odometry
+  publish_ekf_tf: true
+  ekf_odom_frame: odom
+  ekf_base_frame: base_link
   ekf_odom_hz: 50
   mag_max_hz: 20.0
   baro_max_hz: 20.0
@@ -36,6 +39,17 @@ fcu_control:
     lat: 37.8715
     lon: -122.2730
     hgt: 0.0
+  ntrip:
+    enabled: false
+    server: ""
+    user: ""
+    password: ""
+    mountpoint: ""
+    gga: bus
+    static_gga: ""
+    gga_period_s: 10.0
+    reconnect_s: 2.0
+    rtcm_topic: ~/rtcm
   fcu_params:
     SR0_EXTRA1: 200
     SR0_RAW_SENS: 200
@@ -75,9 +89,7 @@ fcu_control:
       k_i: 0.0
       k_d: 0.0
       k_ff: 0.7
-
-mavros:
-  enabled: false
-
-vesc:
-  enabled: false
+  vesc:
+    enabled: false
+    port: /dev/ttyACM0
+    telemetry_hz: 200.0
