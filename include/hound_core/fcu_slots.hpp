@@ -15,13 +15,18 @@
 namespace hound_core
 {
 
-/** Latest-wins slot (RealSense-style). Writers bump seq; waiters use cv. */
+/** Latest-wins slot (RealSense-style). Writers bump seq; waiters use cv.
+ *
+ * `valid` = ever written (telemetry may always copy_latest).
+ * `fresh` = unused by EKF since last write; consume_fresh clears it without deleting data.
+ */
 template<typename T>
 struct LatestSlot
 {
   mutable std::mutex mu;
   std::condition_variable cv;
   bool valid{false};
+  bool fresh{false};
   uint64_t seq{0};
   T data{};
 
@@ -31,6 +36,7 @@ struct LatestSlot
       std::lock_guard<std::mutex> lock(mu);
       data = v;
       valid = true;
+      fresh = true;
       ++seq;
     }
     cv.notify_all();
@@ -46,6 +52,18 @@ struct LatestSlot
     if (seq_out) {
       *seq_out = seq;
     }
+    return true;
+  }
+
+  /** EKF path: take sample only if fresh, then clear fresh (data retained for ROS). */
+  bool consume_fresh(T & out)
+  {
+    std::lock_guard<std::mutex> lock(mu);
+    if (!valid || !fresh) {
+      return false;
+    }
+    out = data;
+    fresh = false;
     return true;
   }
 
@@ -90,6 +108,8 @@ struct BaroSample
 struct GpsSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  /** AP GPS_RAW_INT.time_usec (boot µs of last fix); used for freshness gating. */
+  uint64_t time_usec{0};
   double lat_deg{0}, lon_deg{0};
   float alt_m{0};
   float eph_m{0}, epv_m{0};

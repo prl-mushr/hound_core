@@ -128,6 +128,8 @@ private:
   std::chrono::steady_clock::time_point last_mode_request_{};
 
   uint8_t rtcm_seq_{0};
+  /** Last GPS_RAW_INT.time_usec written to the bus (freshness gate). */
+  uint64_t last_gps_time_usec_{0};
 };
 
 }  // namespace hound_core

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -26,6 +27,18 @@ public:
     int ekf_odom_hz{50};
     double mag_max_hz{20.0};
     double baro_max_hz{20.0};
+    /** Measurement→IMU time delays (ms) for state recall at fusion. */
+    uint32_t gps_pos_delay_ms{200};
+    uint32_t gps_vel_delay_ms{200};
+    uint32_t vslam_pos_delay_ms{100};
+    uint32_t vslam_vel_delay_ms{100};
+    uint32_t vslam_yaw_delay_ms{100};
+    /** Reserved for ICP absolute-pose fusion (align-only today). */
+    uint32_t icp_pos_delay_ms{80};
+    uint32_t icp_vel_delay_ms{80};
+    uint32_t icp_yaw_delay_ms{80};
+    uint32_t baro_delay_ms{50};
+    uint32_t mag_delay_ms{25};
     /** gps_compass | lidar_icp */
     std::string ext_nav_align{"gps_compass"};
     /** Used only for wait-for-ICP log messages. */
@@ -49,8 +62,11 @@ public:
   void start(FcuBus & bus, const Config & config, OdomCallback odom_cb);
   void stop();
 
-  /** Soft reset: next IMU step re-inits at ext_nav_origin and clears VSLAM align. */
-  void request_reset();
+  /**
+   * Hard reset: stop the IMU worker (destroys the in-loop estimator_ekf) and
+   * start a fresh thread — equivalent to killing and re-launching the EKF.
+   */
+  void hard_restart(FcuBus & bus);
 
 private:
   void loop(FcuBus & bus, std::atomic<bool> & running);
@@ -59,7 +75,6 @@ private:
   Config cfg_;
   OdomCallback odom_cb_;
   ImuPacedWorker worker_;
-  std::atomic<bool> reset_requested_{false};
 };
 
 }  // namespace hound_core

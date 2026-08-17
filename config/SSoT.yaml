@@ -26,16 +26,21 @@ stereo_composite:
   odom_topic: /visual_slam/tracking/odometry
   odom_frame: odom
   base_frame: base_link
-  publish_odom_tf: true
+  publish_odom_tf: false
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
   log_cuvslam_timing: false
+  # Periodic [sensor_rate] color/depth Hz logs (modular composite).
+  log_sensor_rates: false
   profile: false
   visual_preset: 3
-  clip_distance: 6.0
+  clip_distance: 4.0
   initial_reset: false
   align_depth: false
+  # Multi-cam color phase sync (POSIX shm, no ROS): front is master; left/right
+  # lock stride phase to the sensor frame nearest (front_publish_stamp + 1/pub_fps).
+  color_sync_master: camera_front
   cameras:
     camera_front:
       camera_name: camera_front
@@ -127,7 +132,7 @@ lidar:
   publish_static_tf: true
   parent_frame: base_link
   xyz: [0.0, 0.15, 0.15]
-  rpy: [180.0, -15.0, 0.0]
+  rpy: [180.0, -12.0, 0.0]
   imu_xyz: [0.0, 0.0, 0.0]
   imu_rpy: [0.0, 0.0, 0.0]
   composite:
@@ -165,10 +170,10 @@ launch:
 # In-process FCU: libmavconn + EKF + LL (+ optional VESC / NTRIP).
 # enabled is the master switch — nested vesc/ntrip/ll/ekf are ignored when false.
 fcu_control:
-  enabled: false
+  enabled: true
   ll_controller: ackermann
-  fcu_url: "/dev/ttyACM1:921600"
-  gcs_url: "udp://@10.11.62.219:14550"
+  fcu_url: "/dev/ttyACM0:921600"
+  gcs_url: "udp://@10.18.249.206:14550"
   ros_publish_hz: 50.0
   aux_publish_hz: 10.0
   gcs_block_stream_requests: true
@@ -177,9 +182,9 @@ fcu_control:
   send_vision_to_fcu: false
   enable_ekf: true
   enable_ll: true
-  enable_baro: true
+  enable_baro: false
   enable_mag: true
-  enable_gps: true
+  enable_gps: false
   fuse_gps: false
   vision_odom_topic: /visual_slam/tracking/odometry
   ekf_odom_topic: /ekf/odometry
@@ -189,6 +194,21 @@ fcu_control:
   ekf_odom_hz: 50
   mag_max_hz: 20.0
   baro_max_hz: 20.0
+  # GPS/VSLAM/ICP: stamp-gated bus write + EKF consume_fresh (no fuse rate cap).
+  # Mag/baro: rate-limited fusion (no usable independent freshness on RAW_IMU mag).
+  # EKF fusion delays (ms): state recalled at IMUmsec - delay. Per source — tune independently.
+  delays_ms:
+    gps_pos: 100
+    gps_vel: 100
+    vslam_pos: 20 # 16 ms for image + 4 ms for vslam
+    vslam_vel: 20
+    vslam_yaw: 20
+    # Reserved until ICP is fused as an ext-nav source (align-only today).
+    icp_pos: 80
+    icp_vel: 80
+    icp_yaw: 80
+    baro: 50
+    mag: 25
   ext_nav_align: gps_compass
   icp_origin_topic: /localization/icp_origin
   ekf_cpu: 2
@@ -238,38 +258,59 @@ fcu_control:
   # In-process VESC UART → FcuBus; edge republishes /sensors/core.
   vesc:
     enabled: true
-    port: /dev/ttyACM0
+    port: /dev/ttyACM2
     telemetry_hz: 200.0
 
 # hound_mapping LocalMap (TSDF → elev/cost/normals). SSoT key stays ``nvblox`` for launch.
 nvblox:
-  enabled: true
+  # Offline: use_sim_time + remap mapper pubs to /debug/hound_mapping/*
+  bag_replay_mode: false
+  bag_replay_topic_prefix: debug
+  enabled: false
   # Sensors
-  use_depth: true
+  use_depth: false
   use_color: true
-  use_lidar: false
+  use_lidar: true
+  # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
+  # (unobserved_luminance) so camera FOV coverage is visible.
+  debug_semantic_all_traversable: true
   use_people_mask: false
   people_mask_topic: "/segmentation/refined_people_mask"
   # Zero bottom of each depth image before TSDF integrate (lidar untouched).
-  depth_ignore_bottom_fraction: 0.5
+  depth_ignore_bottom_fraction: 0.0
   camera_names: ["camera_front", "camera_left", "camera_right"]
+  # color_topic_template: "/{name}/color/image_raw"
   color_topic_template: "/{name}/segmentation/refined_traversability"
   color_info_topic_template: "/{name}/color/camera_info"
   # Frames / TSDF volume
   global_frame: odom
-  map_clearing_frame_id: camera_front_link
+  map_clearing_frame_id: base_link
   map_clearing_radius_m: 32.0
-  voxel_size: 0.05
+  voxel_size: 0.1
   projective_integrator_max_integration_distance_m: 15.0
   lidar_projective_integrator_max_integration_distance_m: 40.0
   # LocalMap BEV (nav Map_config aliases these)
-  elevation_resolution: &local_map_res 0.05
-  local_map_size_m: &local_map_size 20.0
+  elevation_resolution: &local_map_res 0.1
+  local_map_size_m: &local_map_size 8.0
   elev_z_min_rel: -2.0
   elev_z_max_rel: 2.0
+  # BEV floor: distance <= this counts as occupied (0 = classic TSDF ≤0).
+  # Keep small: large values smear elev along slanted lidar rays (false
+  # floors above/below). 0.05 ≈ one voxel of free-side tolerance.
+  bev_occ_tsdf_max_m: 0.025
   robot_height_m: 0.4
-  lethal_slope_deg: 60.0
-  unobserved_luminance: 0.0
+  # 90° ⇒ cos≈0 ⇒ slope never marks lethal (semantic-only cost for debug).
+  lethal_slope_deg: 90.0
+  # Cost/luminance when no floor or no color: mid-gray so known white/black
+  # vs unknown are visible. Encoded in LocalMap.costmap (no separate observed).
+  # 255=free, 0=lethal, this value=unobserved. Change here only (no C++ edit).
+  unobserved_luminance: 128.0
+  # Vertical half-band (m) around elev when sampling TSDF color. 0 = 2×voxel.
+  # Wider helps Z-mismatch only. Remaining grey gaps are often NOT Z:
+  #   - color never integrated (sphere-trace fail on one-sided lidar TSDF)
+  #   - XY: sample is BEV cell center only (no neighbor search; elev res 0.25 vs voxel 0.1)
+  # Inpaint Telea fills elev+cost+lum on unobserved cells (same hole mask).
+  color_z_search_half_band_m: 0.05
   do_inpaint: true
   inpaint_resolution_m: 0.25
   inpaint_radius: 3
@@ -294,15 +335,21 @@ nvblox:
   prior_layer_cake_path: ""
   prior_xyz_yaw: [0.0, 0.0, 0.0, 0.0]
   prior_fill_enabled: true
+  # Debug pubs (off — were expensive when RViz subscribed)
+  publish_tsdf_color_mesh: false
+  tsdf_color_mesh_rate_hz: 1.0
+  publish_lidar_depth_image: false
+  publish_lidar_tsdf_probe: false
+  lidar_tsdf_probe_max_points: 4000
 
 viz:
-  enabled: true
+  enabled: false   # prefer RViz LocalMap display (hound_rviz_plugins)
   host: "0.0.0.0"
   port: 8080
   global_frame: odom
   base_frame: base_link
   local_map_topic: /hound_mapping/local_map
-  odom_topic: /visual_slam/tracking/odometry  # EKF off in this bring-up; use VSLAM
+  odom_topic: /ekf/odometry  # EKF off in this bring-up; use VSLAM
   lidar_topic: /livox/cloud
   camera_topic: /camera_front/color/image_raw
   path_topic: /hound_fcu_control/mission/path
@@ -317,7 +364,7 @@ viz:
   lidar_min_period_s: 0.2
   camera_min_period_s: 0.2
   map_min_period_s: 1.0   # Viser mesh push only; mapper publish rate unchanged
-  map_mesh_stride: 2
+  map_mesh_stride: 1
   map_z_exaggeration: 1.0
 
 # Dora manager / planner / controller (IGHA* + MPPI).
@@ -466,7 +513,7 @@ hal_monitor:
 
 # Bool /hal/record → ros2 bag record (latched status on /hal/recording).
 bag_recorder:
-  enabled: true
+  enabled: false
   record_topic: /hal/record
   recording_status_topic: /hal/recording
   bagdir: /root/colcon_ws/bags/
@@ -476,7 +523,7 @@ bag_recorder:
 
 # Dora CLIPSeg → NanoSAM refine.
 segmentation:
-  enabled: true
+  enabled: false
   replay_mode: false
   model: "CIDAS/clipseg-rd16"
   prompts:
@@ -502,6 +549,13 @@ segmentation:
     - "/camera_right/color/image_raw"
   camera_names: ["camera_front", "camera_left", "camera_right"]
   clipseg_batch_n: 3
+  # Multi-cam without HW genlock: latest-frame (not ApproxSync on now() stamps).
+  rgb_sync_mode: latest   # latest | approx
+  # Only used when rgb_sync_mode=approx (live 3-cam now() spans often ~50–80 ms).
+  rgb_sync_slop_s: 0.10
+  # Quiet Dora rate / e2e spam while debugging mapper.
+  rgb_sync_diag: false
+  e2e_log: false
   labels_topic: "/segmentation/labels"
   publish_coarse_traversability: false
   coarse_traversability_topic: "/segmentation/coarse_traversability"

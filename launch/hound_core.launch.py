@@ -1,11 +1,12 @@
 """Mission / algorithm tier for HOUND (composite sensing, EKF, control, seg).
 
 Bring-up is staggered (launch.stage_delay_s, default 5s between enabled stages):
-  HAL → mavros/fcu_control → stereo_composite → lidar → segmentation →
-  yolo_world → ekf → nvblox
+  HAL → bag_recorder → stereo_composite (VSLAM) → fcu_control (EKF+LL) →
+  lidar → segmentation → yolo_world → nvblox → …
 
 fcu_control.enabled is a master switch (nested vesc/ntrip/ll/ekf only when on).
 Camera + VSLAM come only from composite_sensing (stereo_composite).
+MAVROS / standalone EKF / standalone vesc_driver are not launched here.
 
 Usage:
   ros2 launch hound_core hound_core.launch.py
@@ -19,19 +20,14 @@ import yaml
 from launch import LaunchDescription
 from launch.actions import (
     ExecuteProcess,
-    IncludeLaunchDescription,
     LogInfo,
     TimerAction,
 )
-from launch.substitutions import PathJoinSubstitution
-from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hound_launch_common import (  # noqa: E402
     build_bag_recorder_node,
-    build_ekf_node,
     build_hal_monitor_node,
     build_lidar_mesh_composite_node,
     build_mesh_pf_node,
@@ -127,6 +123,12 @@ def _build_segmentation_dora_actions(seg: dict) -> list:
         "fanout_identical": bool(seg.get("fanout_identical", False)),
         "input_hz": float(seg.get("input_hz", 0) or 0),
         "clipseg_batch_n": int(seg.get("clipseg_batch_n", 1)),
+        "rgb_sync_slop_s": float(seg.get("rgb_sync_slop_s", 0.05) or 0.05),
+        "rgb_sync_mode": str(seg.get("rgb_sync_mode", "latest") or "latest"),
+        "rgb_sync_diag": bool(seg.get("rgb_sync_diag", True)),
+        "rgb_sync_diag_every_s": float(seg.get("rgb_sync_diag_every_s", 5.0) or 5.0),
+        "e2e_log": bool(seg.get("e2e_log", True)),
+        "e2e_log_every_s": float(seg.get("e2e_log_every_s", 60.0) or 60.0),
         "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
         "viz_overlay": bool(seg.get("viz_overlay", False)),
         "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
@@ -244,6 +246,8 @@ def _build_segmentation_dora_actions(seg: dict) -> list:
         f"({len(prompts_flat)} sub-prompts) sam={cfg['sam_node']} "
         f"coarse_trav={cfg['publish_coarse_traversability']} "
         f"streams={cfg['use_cuda_streams']} queue={queue_size} "
+        f"rgb_sync={cfg.get('rgb_sync_mode', 'latest')}/"
+        f"{cfg.get('rgb_sync_slop_s', 0.05)}s "
         f"dora_rgb_input={cfg.get('dora_rgb_input', True)}"
     )
     seg_env = {"HOUND_SEG_CONFIG": cfg_path}
@@ -509,8 +513,23 @@ def _cam_node_params(
         "slam_sync_mode": bool(sc.get("slam_sync_mode", False)),
         "warmup_frames": warmup,
         "log_cuvslam_timing": bool(sc.get("log_cuvslam_timing", False)),
+        "log_sensor_rates": bool(sc.get("log_sensor_rates", True)),
+        "sensor_rate_log_every_s": float(sc.get("sensor_rate_log_every_s", 5.0)),
         "profile": bool(cam.get("profile", sc.get("profile", False))),
     }
+    # Front = color sync master (shm stamp); others phase-lock stride to front+period.
+    master = str(sc.get("color_sync_master", "") or "").strip()
+    if master and camera_name:
+        # Must match composite_sensing::color_sync_shm_path()
+        shm = "/hound_csync_" + "".join(
+            (c if (c.isalnum() or c == "_") else "_") for c in master
+        )
+        if camera_name == master:
+            params["color_sync_role"] = "master"
+            params["color_sync_shm_name"] = shm
+        else:
+            params["color_sync_role"] = "follower"
+            params["color_sync_shm_name"] = shm
     if enable_vslam:
         params["xyz.x"] = float(xyz[0])
         params["xyz.y"] = float(xyz[1])
@@ -552,6 +571,7 @@ def _build_stereo_composite_node_from_params(
         f"IR {ir} "
         f"color={params['enable_color']}@{params['color_fps']}Hz "
         f"pub={params['color_publish_fps']}Hz "
+        f"color_sync={params.get('color_sync_role', 'standalone')} "
         f"depth={params['enable_depth']}@{params['depth_fps']}Hz "
         f"pub={params['depth_publish_fps']}Hz "
         f"align_depth={params['align_depth']} "
@@ -803,6 +823,16 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
         "ekf_odom_hz": int(fc.get("ekf_odom_hz", 50)),
         "mag_max_hz": float(fc.get("mag_max_hz", 20.0)),
         "baro_max_hz": float(fc.get("baro_max_hz", 20.0)),
+        "delays.gps_pos_ms": int((fc.get("delays_ms") or {}).get("gps_pos", 200)),
+        "delays.gps_vel_ms": int((fc.get("delays_ms") or {}).get("gps_vel", 200)),
+        "delays.vslam_pos_ms": int((fc.get("delays_ms") or {}).get("vslam_pos", 100)),
+        "delays.vslam_vel_ms": int((fc.get("delays_ms") or {}).get("vslam_vel", 100)),
+        "delays.vslam_yaw_ms": int((fc.get("delays_ms") or {}).get("vslam_yaw", 100)),
+        "delays.icp_pos_ms": int((fc.get("delays_ms") or {}).get("icp_pos", 80)),
+        "delays.icp_vel_ms": int((fc.get("delays_ms") or {}).get("icp_vel", 80)),
+        "delays.icp_yaw_ms": int((fc.get("delays_ms") or {}).get("icp_yaw", 80)),
+        "delays.baro_ms": int((fc.get("delays_ms") or {}).get("baro", 50)),
+        "delays.mag_ms": int((fc.get("delays_ms") or {}).get("mag", 25)),
         "ext_nav_align": str(fc.get("ext_nav_align", "gps_compass")),
         "icp_origin_topic": str(
             fc.get("icp_origin_topic", "/localization/icp_origin")
@@ -853,45 +883,6 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
     )
 
 
-def _build_mavros_actions(mav: dict) -> list:
-    fcu_url = str(mav.get("fcu_url", "/dev/ttyACM0:115200"))
-    gcs_url = str(mav.get("gcs_url", ""))
-    node_params = mav.get("node_params") or {}
-    fcu_params = mav.get("fcu_params") or {}
-    param_node = str(mav.get("param_node", "/mavros/param"))
-
-    launch_arguments = {"fcu_url": fcu_url, "gcs_url": gcs_url}
-    if node_params:
-        launch_arguments["params_file"] = dump_temp_yaml(node_params, "hound_mavros_node_")
-
-    actions = [
-        IncludeLaunchDescription(
-            XMLLaunchDescriptionSource([
-                PathJoinSubstitution(
-                    [FindPackageShare("mavros"), "launch", "apm.launch"]
-                )
-            ]),
-            launch_arguments=launch_arguments.items(),
-        )
-    ]
-
-    if fcu_params:
-        fcu_file = dump_temp_yaml(
-            {"/**": {"ros__parameters": fcu_params}}, "hound_mavros_fcu_"
-        )
-        load_cmd = (
-            'node="%s"; pf="%s"; '
-            'until ros2 node list 2>/dev/null | grep -Fxq "${node}"; do sleep 1; done; '
-            'ros2 service call /mavros/param/pull mavros_msgs/srv/ParamPull '
-            '"{force_pull: true}" >/dev/null 2>&1 || true; '
-            'sleep 3; '
-            'ros2 param load "${node}" "${pf}"'
-        ) % (param_node, fcu_file)
-        actions.append(ExecuteProcess(cmd=["bash", "-c", load_cmd], output="screen"))
-
-    return actions
-
-
 def generate_launch_description():
     ssot_file = find_ssot()
     print(f"[hound_core] Using SSoT file: {ssot_file}")
@@ -899,11 +890,9 @@ def generate_launch_description():
         ssot = yaml.safe_load(handle)
 
     sc = dict(ssot.get("stereo_composite") or {})
-    ekf = ssot.get("ekf", {})
     nvblox = ssot.get("nvblox", {})
     viz = ssot.get("viz", {})
     nav = ssot.get("nav", {})
-    mav = ssot.get("mavros", {})
     fcu = ssot.get("fcu_control", {})
     vesc = fcu.get("vesc") or {}
     hal = ssot.get("hal_monitor", {})
@@ -916,11 +905,9 @@ def generate_launch_description():
 
     sc_enabled = bool(sc.get("enabled", False))
     stage_delay_s = float(launch_cfg.get("stage_delay_s", 5.0))
-    ekf_enabled = bool(ekf.get("enabled", False))
     nvblox_enabled = bool(nvblox.get("enabled", False))
     viz_enabled = bool(viz.get("enabled", False))
     nav_enabled = bool(nav.get("enabled", False))
-    mavros_enabled = bool(mav.get("enabled", False))
     fcu_control_enabled = bool(fcu.get("enabled", False))
     # Nested under fcu_control: parent enabled is the master switch.
     vesc_enabled = fcu_control_enabled and bool(vesc.get("enabled", False))
@@ -930,21 +917,6 @@ def generate_launch_description():
     seg_enabled = bool(seg.get("enabled", False))
     yolo_enabled = bool(yw.get("enabled", False))
     lidar_enabled = bool(lidar.get("enabled", False))
-
-    # In-process FCU owner: exclusive tty — never also start mavros / standalone ekf.
-    if fcu_control_enabled:
-        if mavros_enabled:
-            print(
-                "[hound_core] fcu_control.enabled: forcing mavros.enabled=false "
-                "(exclusive FCU ownership)"
-            )
-            mavros_enabled = False
-        if ekf_enabled and bool(fcu.get("enable_ekf", True)):
-            print(
-                "[hound_core] fcu_control.enabled: forcing ekf.enabled=false "
-                "(in-process EKF)"
-            )
-            ekf_enabled = False
 
     # nvblox people mask needs depth aligned to color.
     if nvblox_enabled and bool(nvblox.get("use_people_mask", True)):
@@ -976,11 +948,7 @@ def generate_launch_description():
     hal_acts = []
     if hal_enabled:
         fcu_hal = hal.get("fcu") or hal.get("mavros") or {}
-        if (
-            mavros_enabled
-            or fcu_control_enabled
-            or not fcu_hal.get("monitor_enabled", True)
-        ):
+        if fcu_control_enabled or not fcu_hal.get("monitor_enabled", True):
             # HAL camera defaults use camera_name / fps from stereo_composite.
             hal_cam = {
                 "camera_name": sc.get("camera_name", "camera"),
@@ -1030,7 +998,7 @@ def generate_launch_description():
             hal_acts = [build_hal_monitor_node(hal_clean, hal_cam)]
         else:
             print(
-                "[hound_core] hal_monitor needs mavros/fcu_control or "
+                "[hound_core] hal_monitor needs fcu_control or "
                 "fcu.monitor_enabled=false"
             )
     else:
@@ -1042,31 +1010,7 @@ def generate_launch_description():
     else:
         print("[hound_core] bag_recorder DISABLED")
 
-    # 2) FCU path: in-process fcu_control XOR classic mavros
-    fcu_acts = []
-    mav_acts = []
-    if fcu_control_enabled:
-        fcu_acts = [_build_fcu_control_node(fcu, vesc)]
-        print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
-    elif mavros_enabled:
-        mav_acts = _build_mavros_actions(mav)
-    else:
-        print("[hound_core] mavros DISABLED (fcu_control also off)")
-
-    # 3) vesc — nested under fcu_control only (in-process; never standalone).
-    vesc_acts = []
-    if vesc_enabled:
-        print(
-            "[hound_core] fcu_control.vesc ENABLED in-process; "
-            "no standalone vesc_driver"
-        )
-    elif bool(vesc.get("enabled", False)) and not fcu_control_enabled:
-        print(
-            "[hound_core] fcu_control.vesc.enabled ignored "
-            "(fcu_control.enabled is the master switch)"
-        )
-
-    # 4) stereo_composite (composite_sensing) — front VSLAM + side RGBD
+    # stereo_composite first (VSLAM), then fcu_control (in-process EKF+LL+vesc)
     cam_acts = []
     if sc_enabled:
         cam_acts = _build_stereo_composite_actions(
@@ -1075,7 +1019,24 @@ def generate_launch_description():
     else:
         print("[hound_core] stereo_composite DISABLED")
 
-    # 5) LiDAR — composite (SDK+deskew+TF) XOR legacy unitree_lidar_ros2
+    fcu_acts = []
+    if fcu_control_enabled:
+        fcu_acts = [_build_fcu_control_node(fcu, vesc)]
+        print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
+        if vesc_enabled:
+            print(
+                "[hound_core] fcu_control.vesc ENABLED in-process "
+                "(no standalone vesc_driver stage)"
+            )
+    else:
+        print("[hound_core] fcu_control DISABLED")
+        if bool(vesc.get("enabled", False)):
+            print(
+                "[hound_core] fcu_control.vesc.enabled ignored "
+                "(fcu_control.enabled is the master switch)"
+            )
+
+    # LiDAR — composite (SDK+deskew+TF) XOR legacy unitree_lidar_ros2
     lidar_acts = []
     if lidar_enabled:
         if lidar_uses_composite(lidar):
@@ -1139,24 +1100,21 @@ def generate_launch_description():
     else:
         print("[hound_core] yolo_world DISABLED")
 
-    # 7) ekf (pose from stereo_composite odom topic)
-    ekf_acts = []
-    if ekf_enabled:
-        if not sc_enabled:
-            print(
-                "[hound_core] ekf requested but stereo_composite DISABLED -> skipping"
-            )
-        else:
-            ekf_acts.append(build_ekf_node(ekf))
-    else:
-        print("[hound_core] ekf DISABLED")
-
-    # 8) hound_mapping (SSoT key: nvblox)
+    # hound_mapping (SSoT key: nvblox)
     nvblox_acts = []
     if nvblox_enabled:
-        if not has_camera_source:
-            print("[hound_core] nvblox requested but stereo_composite DISABLED -> skipping")
+        bag_replay = bool(nvblox.get("bag_replay_mode", False))
+        if not has_camera_source and not bag_replay:
+            print(
+                "[hound_core] nvblox requested but stereo_composite DISABLED -> "
+                "skipping (set nvblox.bag_replay_mode=true for bag-only)"
+            )
         else:
+            if bag_replay and not has_camera_source:
+                print(
+                    "[hound_core] nvblox bag_replay_mode: starting mapper without "
+                    "stereo_composite (expect bag + --clock)"
+                )
             nvblox_acts = [build_hound_mapping_node(nvblox, sc, seg, lidar)]
     else:
         print("[hound_core] nvblox DISABLED")
@@ -1182,15 +1140,12 @@ def generate_launch_description():
     stages = [
         ("hal", hal_acts),
         ("bag_recorder", bag_acts),
-        ("fcu_control", fcu_acts),
-        ("mavros", mav_acts),
-        ("vesc", vesc_acts),
         ("stereo_composite", cam_acts),
+        ("fcu_control", fcu_acts),
         ("lidar", lidar_acts),
         ("mesh_pf", mesh_pf_acts),
         ("segmentation", seg_acts),
         ("yolo_world", yolo_acts),
-        ("ekf", ekf_acts),
         ("nvblox", nvblox_acts),
         ("nav", nav_acts),
         ("viz", viz_acts),

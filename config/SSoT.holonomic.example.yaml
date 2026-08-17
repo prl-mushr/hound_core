@@ -28,6 +28,17 @@ fcu_control:
   ekf_odom_hz: 50
   mag_max_hz: 20.0
   baro_max_hz: 20.0
+  delays_ms:
+    gps_pos: 200
+    gps_vel: 200
+    vslam_pos: 100
+    vslam_vel: 100
+    vslam_yaw: 100
+    icp_pos: 80
+    icp_vel: 80
+    icp_yaw: 80
+    baro: 50
+    mag: 25
   ext_nav_align: gps_compass
   ekf_cpu: 2
   ll_cpu: 3

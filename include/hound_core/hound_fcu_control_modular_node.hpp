@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -85,6 +86,16 @@ private:
   int ekf_odom_hz_{50};
   double mag_max_hz_{20.0};
   double baro_max_hz_{20.0};
+  uint32_t gps_pos_delay_ms_{200};
+  uint32_t gps_vel_delay_ms_{200};
+  uint32_t vslam_pos_delay_ms_{100};
+  uint32_t vslam_vel_delay_ms_{100};
+  uint32_t vslam_yaw_delay_ms_{100};
+  uint32_t icp_pos_delay_ms_{80};
+  uint32_t icp_vel_delay_ms_{80};
+  uint32_t icp_yaw_delay_ms_{80};
+  uint32_t baro_delay_ms_{50};
+  uint32_t mag_delay_ms_{25};
   std::string ext_nav_align_{"gps_compass"};
   std::string icp_origin_topic_{"/localization/icp_origin"};
   std::string vision_odom_topic_;
@@ -113,6 +124,7 @@ private:
   FcuBus bus_;
   std::unique_ptr<MavlinkBridge> bridge_;
   std::unique_ptr<EkfRunner> ekf_runner_;
+  std::mutex ekf_lifecycle_mutex_;
   std::unique_ptr<LlRunner> ll_runner_;
   std::unique_ptr<LowLevelController> ll_controller_;
   std::unique_ptr<VescRunner> vesc_runner_;
@@ -144,6 +156,10 @@ private:
 
   std::atomic<bool> aux_running_{false};
   std::thread aux_thread_;
+
+  /** Stamp gates: only write bus when source timestamp advances. */
+  int64_t last_ext_nav_stamp_ns_{-1};
+  int64_t last_icp_stamp_ns_{-1};
 };
 
 }  // namespace hound_core

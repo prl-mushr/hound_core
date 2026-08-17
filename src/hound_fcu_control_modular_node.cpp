@@ -108,6 +108,16 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     ekf_cfg.ekf_odom_hz = ekf_odom_hz_;
     ekf_cfg.mag_max_hz = mag_max_hz_;
     ekf_cfg.baro_max_hz = baro_max_hz_;
+    ekf_cfg.gps_pos_delay_ms = gps_pos_delay_ms_;
+    ekf_cfg.gps_vel_delay_ms = gps_vel_delay_ms_;
+    ekf_cfg.vslam_pos_delay_ms = vslam_pos_delay_ms_;
+    ekf_cfg.vslam_vel_delay_ms = vslam_vel_delay_ms_;
+    ekf_cfg.vslam_yaw_delay_ms = vslam_yaw_delay_ms_;
+    ekf_cfg.icp_pos_delay_ms = icp_pos_delay_ms_;
+    ekf_cfg.icp_vel_delay_ms = icp_vel_delay_ms_;
+    ekf_cfg.icp_yaw_delay_ms = icp_yaw_delay_ms_;
+    ekf_cfg.baro_delay_ms = baro_delay_ms_;
+    ekf_cfg.mag_delay_ms = mag_delay_ms_;
     ekf_cfg.ext_nav_align = ext_nav_align_;
     ekf_cfg.icp_origin_topic = icp_origin_topic_;
     ekf_cfg.ext_nav_origin_lat = ext_nav_origin_lat_;
@@ -223,8 +233,11 @@ HoundFcuControlModularNode::~HoundFcuControlModularNode()
   if (ll_runner_) {
     ll_runner_->stop();
   }
-  if (ekf_runner_) {
-    ekf_runner_->stop();
+  {
+    std::lock_guard<std::mutex> lock(ekf_lifecycle_mutex_);
+    if (ekf_runner_) {
+      ekf_runner_->stop();
+    }
   }
   bus_.imu.cv.notify_all();
   if (bridge_) {
@@ -268,6 +281,26 @@ void HoundFcuControlModularNode::declare_params()
   }
   mag_max_hz_ = declare_parameter<double>("mag_max_hz", 20.0);
   baro_max_hz_ = declare_parameter<double>("baro_max_hz", 20.0);
+  gps_pos_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.gps_pos_ms", 200));
+  gps_vel_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.gps_vel_ms", 200));
+  vslam_pos_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.vslam_pos_ms", 100));
+  vslam_vel_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.vslam_vel_ms", 100));
+  vslam_yaw_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.vslam_yaw_ms", 100));
+  icp_pos_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.icp_pos_ms", 80));
+  icp_vel_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.icp_vel_ms", 80));
+  icp_yaw_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.icp_yaw_ms", 80));
+  baro_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.baro_ms", 50));
+  mag_delay_ms_ = static_cast<uint32_t>(
+    declare_parameter<int64_t>("delays.mag_ms", 25));
   ext_nav_align_ = declare_parameter<std::string>("ext_nav_align", "gps_compass");
   if (ext_nav_align_ != "gps_compass" && ext_nav_align_ != "lidar_icp") {
     RCLCPP_WARN(
@@ -324,6 +357,13 @@ void HoundFcuControlModularNode::declare_params()
 
 void HoundFcuControlModularNode::vision_cb(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  const int64_t stamp_ns = static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+    static_cast<int64_t>(msg->header.stamp.nanosec);
+  if (stamp_ns == last_ext_nav_stamp_ns_) {
+    return;
+  }
+  last_ext_nav_stamp_ns_ = stamp_ns;
+
   ExtNavSample s;
   s.stamp = msg->header.stamp;
   s.pos_enu[0] = static_cast<float>(msg->pose.pose.position.x);
@@ -344,6 +384,13 @@ void HoundFcuControlModularNode::vision_cb(const nav_msgs::msg::Odometry::Shared
 void HoundFcuControlModularNode::icp_origin_cb(
   const geometry_msgs::msg::PoseStamped::SharedPtr msg)
 {
+  const int64_t stamp_ns = static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
+    static_cast<int64_t>(msg->header.stamp.nanosec);
+  if (stamp_ns == last_icp_stamp_ns_) {
+    return;
+  }
+  last_icp_stamp_ns_ = stamp_ns;
+
   IcpOriginSample s;
   s.stamp = msg->header.stamp;
   s.pos_enu[0] = static_cast<float>(msg->pose.position.x);
@@ -370,9 +417,13 @@ void HoundFcuControlModularNode::play_tune_cb(const std_msgs::msg::String::Share
 
 void HoundFcuControlModularNode::ekf_reset_cb(const std_msgs::msg::Empty::SharedPtr /*msg*/)
 {
-  if (ekf_runner_) {
-    ekf_runner_->request_reset();
+  std::lock_guard<std::mutex> lock(ekf_lifecycle_mutex_);
+  if (!ekf_runner_) {
+    return;
   }
+  // Kill the worker thread (stack estimator_ekf goes with it) and relaunch —
+  // same idea as stopping and ros-launching the EKF again.
+  ekf_runner_->hard_restart(bus_);
 }
 
 nav_msgs::msg::Path HoundFcuControlModularNode::mission_to_path(

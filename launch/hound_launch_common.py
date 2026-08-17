@@ -596,7 +596,7 @@ def build_nvblox_node(
 def build_hound_mapping_node(
     nvblox: dict, cam: dict, seg: dict, lidar: dict | None = None
 ) -> Node:
-    """In-house nvblox mapping: elevation/cost/esdf images + MapInfo (no GridMap)."""
+    """In-house nvblox mapping: LocalMap elev/cost (+ optional OccupancyGrid)."""
     camera_name = str(cam.get("camera_name", "camera"))
     lidar = lidar or {}
     use_people_mask = bool(nvblox.get("use_people_mask", False))
@@ -665,6 +665,7 @@ def build_hound_mapping_node(
     lidar_integ_max = float(
         nvblox.get("lidar_projective_integrator_max_integration_distance_m", integ_max)
     )
+    bag_replay = bool(nvblox.get("bag_replay_mode", False))
 
     params = {
         "global_frame": global_frame,
@@ -681,14 +682,21 @@ def build_hound_mapping_node(
         "do_inpaint": bool(nvblox.get("do_inpaint", True)),
         "inpaint_resolution_m": float(nvblox.get("inpaint_resolution_m", 0.25)),
         "inpaint_radius": int(nvblox.get("inpaint_radius", 3)),
-        "unobserved_luminance": float(nvblox.get("unobserved_luminance", 0.0)),
+        "unobserved_luminance": float(nvblox.get("unobserved_luminance", 128.0)),
         "color_weight_min": float(nvblox.get("color_weight_min", 0.001)),
+        "color_z_search_half_band_m": float(
+            nvblox.get("color_z_search_half_band_m", 0.0)
+        ),
+        "bev_occ_tsdf_max_m": float(nvblox.get("bev_occ_tsdf_max_m", 0.0)),
         "robot_height_m": float(nvblox.get("robot_height_m", 0.4)),
         "elev_z_min_rel": float(nvblox.get("elev_z_min_rel", -5.0)),
         "elev_z_max_rel": float(nvblox.get("elev_z_max_rel", 2.0)),
         "use_depth": use_depth,
         "use_color": use_color,
         "use_lidar": use_lidar,
+        "debug_semantic_all_traversable": bool(
+            nvblox.get("debug_semantic_all_traversable", False)
+        ),
         "use_people_mask": use_people_mask,
         "depth_ignore_bottom_fraction": float(
             nvblox.get("depth_ignore_bottom_fraction", 0.0)
@@ -760,6 +768,35 @@ def build_hound_mapping_node(
             for x in (nvblox.get("prior_xyz_yaw") or [0.0, 0.0, 0.0, 0.0])
         ],
         "prior_fill_enabled": bool(nvblox.get("prior_fill_enabled", True)),
+        "publish_tsdf_color_mesh": bool(
+            nvblox.get("publish_tsdf_color_mesh", False)
+        ),
+        "tsdf_color_mesh_rate_hz": float(
+            nvblox.get("tsdf_color_mesh_rate_hz", 1.0)
+        ),
+        "tsdf_color_mesh_max_triangles": int(
+            nvblox.get("tsdf_color_mesh_max_triangles", 500000)
+        ),
+        "publish_lidar_depth_image": bool(
+            nvblox.get("publish_lidar_depth_image", False)
+        ),
+        "publish_lidar_tsdf_probe": bool(
+            nvblox.get("publish_lidar_tsdf_probe", False)
+        ),
+        "lidar_tsdf_probe_max_points": int(
+            nvblox.get("lidar_tsdf_probe_max_points", 4000)
+        ),
+        "tf_lookup_timeout_s": float(
+            nvblox.get(
+                "tf_lookup_timeout_s",
+                0.2 if bag_replay else 0.1,
+            )
+        ),
+        # Lidar scan-start stamps are often tens of ms behind newest odom TF;
+        # fall back to latest instead of dropping the cloud.
+        "tf_fallback_to_latest": bool(
+            nvblox.get("tf_fallback_to_latest", True)
+        ),
     }
     # launch_ros rejects empty list for array params.
     if len(params["prior_xyz_yaw"]) < 4:
@@ -788,14 +825,44 @@ def build_hound_mapping_node(
         f"depth_tmpl={params.get('depth_topic_template') or params['depth_topic']} "
         f"color_tmpl={params.get('color_topic_template') or '(per-cam RGB)'} "
         f"mapper_hz={params['mapper_rate_hz']} "
-        f"~/local_map + ~/elev_color, clear_r={params['map_clearing_radius_m']}"
+        f"~/local_map + ~/costmap, clear_r={params['map_clearing_radius_m']}"
     )
+
+    remappings: list[tuple[str, str]] = []
+    if bag_replay:
+        # Isolate debug mapper outputs from any live stack topics in the bag.
+        prefix = str(nvblox.get("bag_replay_topic_prefix", "debug") or "debug").strip(
+            "/"
+        )
+        out_topics = (
+            "local_map",
+            "costmap",
+            "tsdf_color_cloud",
+            "tsdf_color_mesh",
+            "lidar_depth_image",
+            "lidar_depth_viz",
+            "lidar_depth_cloud",
+            "lidar_tsdf_probe",
+            "extract_timing_ms",
+            "save_layer_cake",
+        )
+        for t in out_topics:
+            remappings.append(
+                (f"/hound_mapping/{t}", f"/{prefix}/hound_mapping/{t}")
+            )
+        params["use_sim_time"] = True
+        print(
+            f"[hound_core] hound_mapping bag_replay_mode: use_sim_time=true, "
+            f"outputs → /{prefix}/hound_mapping/{{local_map,costmap,...}}"
+        )
+
     return Node(
         package="hound_mapping",
         executable="mapping_node",
         name="hound_mapping",
         output="screen",
         parameters=[params],
+        remappings=remappings,
     )
 
 

@@ -11,14 +11,10 @@ In `config/SSoT.yaml` (one file per robot):
 fcu_control:
   enabled: true
   ll_controller: ackermann   # or holonomic
-mavros:
-  enabled: false   # forced off by launch if both set
-ekf:
-  enabled: false
 ```
 
-Launch will refuse to co-start mavros / standalone EKF when `fcu_control`
-owns the FCU tty.
+Bring-up order: `stereo_composite` (VSLAM) then `fcu_control` (in-process EKF).
+This launch does not start MAVROS, standalone EKF, or standalone `vesc_driver`.
 
 `ll_controller` selects a self-registered controller (`ackermann` or
 `holonomic`). Tunables live under the shared `fcu_control.ll.*` namespace;
@@ -36,7 +32,8 @@ robot — see `config/SSoT.holonomic.example.yaml` for the mecanum layout.
 | `vesc` (if `fcu_control.vesc.enabled`) | — | UART `requestState` @ `vesc.telemetry_hz` → `FcuBus.vesc`; edge republishes `/sensors/core` |
 | `ntrip` (if `ntrip.enabled`) | — | Caster HTTP → complete RTCM3 frames on `FcuBus.rtcm` (FIFO, not latest-wins) |
 
-Hot path uses `LatestSlot` (`include/hound_core/fcu_slots.hpp`). No 200 Hz IMU on DDS.
+Hot path uses `LatestSlot` (`include/hound_core/fcu_slots.hpp`) with `fresh` /
+`consume_fresh` for GPS/VSLAM/ICP. No 200 Hz IMU on DDS.
 No `mavros_msgs` on the ROS edge — stock `std_msgs` / `nav_msgs` / `sensor_msgs` only.
 When VESC is embedded, launch does not start standalone `vesc_driver` (exclusive VESC tty).
 
@@ -99,9 +96,33 @@ Also:
 | Topic | Content |
 |-------|---------|
 | `~/play_tune` (sub) | `std_msgs/String` tune → MAVLink `PLAY_TUNE_V2` |
-| `~/ekf_reset` (sub) | `std_msgs/Empty` → soft-reset EKF at `ext_nav_origin` |
+| `~/ekf_reset` (sub) | `std_msgs/Empty` → hard-reset EKF (kill worker thread + relaunch fresh filter) |
 | `/low_level_diagnostics` | LL status |
 | `/control_limits` | Ackermann only (from AckermannLlController) |
+
+### EKF measurement delays (`fcu_control.delays_ms`)
+
+Per-source fusion delays (ms) for state recall at `IMUmsec - delay`. Tune independently — GPS, VSLAM, and ICP are not the same latency.
+
+| Key | Applied to |
+|-----|------------|
+| `gps_pos` / `gps_vel` | GPS fusion |
+| `vslam_pos` / `vslam_vel` / `vslam_yaw` | Ext-nav slot 0 (VSLAM) |
+| `icp_pos` / `icp_vel` / `icp_yaw` | Ext-nav slot 1 (reserved; ICP is align-only today) |
+| `baro` / `mag` | Baro height / magnetometer |
+
+### Bus freshness (GPS / VSLAM / ICP)
+
+Writers only `write()` when the source timestamp advances (`GPS_RAW_INT.time_usec`,
+odom/ICP `header.stamp`). `GPS_RAW_INT` is requested at **200 Hz** so stamp
+granularity is ≤ ~5 ms when AP updates a fix.
+
+`LatestSlot` keeps last data for ROS/NTRIP (`copy_latest`). EKF uses
+`consume_fresh()` — copies only if `fresh`, then clears `fresh` (data retained).
+So GPS/VSLAM fuse only on new measurements; no fuse rate cap.
+
+Mag/baro still use latest-wins + `mag_max_hz` / `baro_max_hz` (mag has no
+independent freshness on `RAW_IMU`).
 
 ## Compare AP vs onboard EKF
 

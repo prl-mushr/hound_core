@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
 
 // nav_filter macros collide with tf2 / angles headers.
 #ifdef deg2rad
@@ -16,6 +17,8 @@
 #include "inertial_nav_ros2/frame_conversions.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Transform.h"
+#include "tf2/LinearMath/Vector3.h"
 
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -49,48 +52,71 @@ bool accept_rate_limited(uint32_t stamp_ms_now, uint32_t & last_ms, float max_hz
   return true;
 }
 
-float yaw_from_quat_wxyz(float w, float x, float y, float z)
+tf2::Quaternion quat_from_wxyz(float w, float x, float y, float z)
 {
-  return std::atan2(2.0f * (w * z + x * y), 1.0f - 2.0f * (y * y + z * z));
+  tf2::Quaternion q(x, y, z, w);
+  q.normalize();
+  return q;
 }
 
-void yaw_quat_wxyz(float yaw, float q[4])
+void quat_to_wxyz(const tf2::Quaternion & q, float out_wxyz[4])
 {
-  const float h = 0.5f * yaw;
-  q[0] = std::cos(h);
-  q[1] = 0.0f;
-  q[2] = 0.0f;
-  q[3] = std::sin(h);
+  out_wxyz[0] = static_cast<float>(q.w());
+  out_wxyz[1] = static_cast<float>(q.x());
+  out_wxyz[2] = static_cast<float>(q.y());
+  out_wxyz[3] = static_cast<float>(q.z());
 }
 
-void quat_multiply_wxyz(const float a[4], const float b[4], float out[4])
+void rpy_from_tf2_quat(const tf2::Quaternion & q, float rpy[3])
 {
-  out[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
-  out[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
-  out[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
-  out[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+  double roll = 0.0, pitch = 0.0, yaw = 0.0;
+  tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+  rpy[0] = static_cast<float>(roll);
+  rpy[1] = static_cast<float>(pitch);
+  rpy[2] = static_cast<float>(yaw);
 }
 
-void align_ext_nav_enu(ExtNavSample & nav, float yaw_corr, const float t_enu[3])
+/**
+ * Rigid SE(3) map←vslam: T_align * T_vslam = T_target
+ * (full xyz + full rotation; replaces prior yaw-only XY+θ align).
+ */
+struct AlignTfEnu
 {
-  const float c = std::cos(yaw_corr);
-  const float s = std::sin(yaw_corr);
-  const float x = nav.pos_enu[0];
-  const float y = nav.pos_enu[1];
-  nav.pos_enu[0] = c * x - s * y + t_enu[0];
-  nav.pos_enu[1] = s * x + c * y + t_enu[1];
-  nav.pos_enu[2] = nav.pos_enu[2] + t_enu[2];
-  const float vx = nav.vel_enu[0];
-  const float vy = nav.vel_enu[1];
-  nav.vel_enu[0] = c * vx - s * vy;
-  nav.vel_enu[1] = s * vx + c * vy;
-  float q_yaw[4];
-  yaw_quat_wxyz(yaw_corr, q_yaw);
-  float q_out[4];
-  quat_multiply_wxyz(q_yaw, nav.quat_wxyz, q_out);
-  for (int i = 0; i < 4; ++i) {
-    nav.quat_wxyz[i] = q_out[i];
-  }
+  tf2::Transform T{tf2::Transform::getIdentity()};
+};
+
+AlignTfEnu compute_align_tf_enu(
+  const float p_tgt[3], const float q_tgt_wxyz[4],
+  const float p_src[3], const float q_src_wxyz[4])
+{
+  const tf2::Transform T_tgt(
+    quat_from_wxyz(q_tgt_wxyz[0], q_tgt_wxyz[1], q_tgt_wxyz[2], q_tgt_wxyz[3]),
+    tf2::Vector3(p_tgt[0], p_tgt[1], p_tgt[2]));
+  const tf2::Transform T_src(
+    quat_from_wxyz(q_src_wxyz[0], q_src_wxyz[1], q_src_wxyz[2], q_src_wxyz[3]),
+    tf2::Vector3(p_src[0], p_src[1], p_src[2]));
+  AlignTfEnu a;
+  a.T = T_tgt * T_src.inverse();
+  return a;
+}
+
+void apply_align_tf_enu(ExtNavSample & nav, const AlignTfEnu & a)
+{
+  const tf2::Vector3 p_out = a.T * tf2::Vector3(nav.pos_enu[0], nav.pos_enu[1], nav.pos_enu[2]);
+  nav.pos_enu[0] = static_cast<float>(p_out.x());
+  nav.pos_enu[1] = static_cast<float>(p_out.y());
+  nav.pos_enu[2] = static_cast<float>(p_out.z());
+
+  const tf2::Vector3 v_out =
+    a.T.getBasis() * tf2::Vector3(nav.vel_enu[0], nav.vel_enu[1], nav.vel_enu[2]);
+  nav.vel_enu[0] = static_cast<float>(v_out.x());
+  nav.vel_enu[1] = static_cast<float>(v_out.y());
+  nav.vel_enu[2] = static_cast<float>(v_out.z());
+
+  const tf2::Quaternion q_out =
+    a.T.getRotation() *
+    quat_from_wxyz(nav.quat_wxyz[0], nav.quat_wxyz[1], nav.quat_wxyz[2], nav.quat_wxyz[3]);
+  quat_to_wxyz(q_out.normalized(), nav.quat_wxyz);
 }
 
 void set_symmetric_cov3(
@@ -177,14 +203,17 @@ void EkfRunner::stop()
   odom_cb_ = nullptr;
 }
 
-void EkfRunner::request_reset()
+void EkfRunner::hard_restart(FcuBus & bus)
 {
-  reset_requested_.store(true, std::memory_order_relaxed);
   RCLCPP_WARN(
     logger_,
-    "EKF reset requested — re-initializing at ext_nav_origin "
-    "(lat=%.6f lon=%.6f hgt=%.1f) and clearing VSLAM align",
+    "EKF hard reset — tearing down filter thread and starting fresh "
+    "(ext_nav_origin lat=%.6f lon=%.6f hgt=%.1f)",
     cfg_.ext_nav_origin_lat, cfg_.ext_nav_origin_lon, cfg_.ext_nav_origin_hgt);
+  Config cfg = cfg_;
+  OdomCallback cb = odom_cb_;
+  stop();
+  start(bus, cfg, std::move(cb));
 }
 
 void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
@@ -214,22 +243,30 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
   cfg.ext_nav[0].fuse_yaw = true;
   cfg.ext_nav[0].fuse_vel = false;
   cfg.ext_nav[0].fuse_pos = true;
-  cfg.ext_nav[0].pos_delay_ms = 100;
-  cfg.ext_nav[0].yaw_delay_ms = 100;
+  cfg.ext_nav[0].pos_delay_ms = cfg_.vslam_pos_delay_ms;
+  cfg.ext_nav[0].vel_delay_ms = cfg_.vslam_vel_delay_ms;
+  cfg.ext_nav[0].yaw_delay_ms = cfg_.vslam_yaw_delay_ms;
+  // Slot 1 reserved for ICP absolute pose (disabled; delays ready when fused).
+  cfg.ext_nav[1].enabled = false;
+  cfg.ext_nav[1].pos_delay_ms = cfg_.icp_pos_delay_ms;
+  cfg.ext_nav[1].vel_delay_ms = cfg_.icp_vel_delay_ms;
+  cfg.ext_nav[1].yaw_delay_ms = cfg_.icp_yaw_delay_ms;
   cfg.mag[0].enabled = cfg_.enable_mag;
+  cfg.mag[0].delay_ms = cfg_.mag_delay_ms;
   cfg.gps[0].enabled = cfg_.enable_gps && cfg_.fuse_gps;
-  cfg.baro_delay_ms = 50;
+  cfg.gps[0].pos_delay_ms = cfg_.gps_pos_delay_ms;
+  cfg.gps[0].vel_delay_ms = cfg_.gps_vel_delay_ms;
+  cfg.baro_delay_ms = cfg_.baro_delay_ms;
   ekf.set_ekf_config(cfg);
   ekf.set_baro_enabled(cfg_.enable_baro);
   ekf.set_ext_nav_enabled(0, true);
   ekf.set_mag_enabled(0, cfg_.enable_mag);
-
-  RCLCPP_INFO(
-    logger_,
-    "EKF worker: align=%s init_ref=%s mag_max_hz=%.1f baro_max_hz=%.1f",
-    cfg_.ext_nav_align.c_str(),
-    align_gps_compass ? "imu_ahrs+compass" : "ext_nav+icp",
-    cfg_.mag_max_hz, cfg_.baro_max_hz);
+  ekf.setBaroFusionDelayMs(cfg_.baro_delay_ms);
+  ekf.setMagFusionDelayMs(0, cfg_.mag_delay_ms);
+  ekf.setExtNavFusionDelaysMs(
+    0, cfg_.vslam_pos_delay_ms, cfg_.vslam_vel_delay_ms, cfg_.vslam_yaw_delay_ms);
+  ekf.setExtNavFusionDelaysMs(
+    1, cfg_.icp_pos_delay_ms, cfg_.icp_vel_delay_ms, cfg_.icp_yaw_delay_ms);
 
   uint64_t last_seq = 0;
   ImuSample imu;
@@ -243,8 +280,7 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
   uint32_t last_baro_ms = 0;
 
   bool vslam_aligned = false;
-  float yaw_corr = 0.0f;
-  float t_corr_enu[3] = {0, 0, 0};
+  AlignTfEnu align_tf;
   bool logged_waiting_icp = false;
 
   while (running.load(std::memory_order_relaxed)) {
@@ -291,8 +327,8 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     }
 
     GpsSample gps;
-    if (cfg_.enable_gps && cfg.gps[0].enabled && bus.gps.copy_latest(gps) &&
-      gps.fix_type >= 3)
+    if (cfg_.enable_gps && cfg.gps[0].enabled &&
+      bus.gps.consume_fresh(gps) && gps.fix_type >= 3)
     {
       float vel_ned[3] = {0, 0, 0};
       const float course_rad = gps.cog_deg * static_cast<float>(M_PI / 180.0);
@@ -305,77 +341,80 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     }
 
     ExtNavSample nav;
-    bool have_nav = bus.ext_nav.copy_latest(nav);
-    if (have_nav && !vslam_aligned) {
-      if (align_gps_compass) {
-        if (ekf.is_initialized()) {
-          const AttPosEKF * core = ekf.ekf_core();
-          if (core != nullptr) {
-            geometry_msgs::msg::Quaternion q_map;
-            float q_ned[4] = {
-              core->states[0], core->states[1], core->states[2], core->states[3]};
-            ned_frd_quat_to_enu(q_ned, body_axes, q_map);
-            const float yaw_map = yaw_from_quat_wxyz(
-              static_cast<float>(q_map.w), static_cast<float>(q_map.x),
-              static_cast<float>(q_map.y), static_cast<float>(q_map.z));
-            const float yaw_v = yaw_from_quat_wxyz(
-              nav.quat_wxyz[0], nav.quat_wxyz[1], nav.quat_wxyz[2], nav.quat_wxyz[3]);
-            yaw_corr = yaw_map - yaw_v;
-            const float c = std::cos(yaw_corr);
-            const float s = std::sin(yaw_corr);
-            t_corr_enu[0] = -(c * nav.pos_enu[0] - s * nav.pos_enu[1]);
-            t_corr_enu[1] = -(s * nav.pos_enu[0] + c * nav.pos_enu[1]);
-            t_corr_enu[2] = -nav.pos_enu[2];
-            AttPosEKF * mutable_core = ekf.ekf_core();
-            if (mutable_core != nullptr) {
-              mutable_core->states[7] = 0.0f;
-              mutable_core->states[8] = 0.0f;
-              mutable_core->states[9] = 0.0f;
-              mutable_core->posNE[0] = 0.0f;
-              mutable_core->posNE[1] = 0.0f;
-              mutable_core->hgtMea = 0.0f;
-            }
-            vslam_aligned = true;
-            RCLCPP_INFO(
-              logger_,
-              "VSLAM aligned to compass/AHRS map at origin "
-              "(yaw_corr=%.2f deg, vslam_xy=(%.2f,%.2f))",
-              yaw_corr * 180.0f / static_cast<float>(M_PI),
-              nav.pos_enu[0], nav.pos_enu[1]);
-          }
+    bool have_nav = false;
+    // While waiting for ICP, do not consume VSLAM (keep fresh until align can finish).
+    if (!vslam_aligned && align_lidar_icp) {
+      IcpOriginSample icp;
+      if (!bus.icp_origin.copy_latest(icp) || !icp.valid) {
+        if (!logged_waiting_icp) {
+          RCLCPP_WARN(
+            logger_,
+            "ext_nav_align=lidar_icp: waiting for PoseStamped on %s",
+            cfg_.icp_origin_topic.c_str());
+          logged_waiting_icp = true;
         }
-      } else if (align_lidar_icp) {
-        IcpOriginSample icp;
-        if (!bus.icp_origin.copy_latest(icp) || !icp.valid) {
-          if (!logged_waiting_icp) {
-            RCLCPP_WARN(
-              logger_,
-              "ext_nav_align=lidar_icp: waiting for PoseStamped on %s",
-              cfg_.icp_origin_topic.c_str());
-            logged_waiting_icp = true;
+      } else if (bus.ext_nav.consume_fresh(nav)) {
+        have_nav = true;
+        align_tf = compute_align_tf_enu(
+          icp.pos_enu, icp.quat_wxyz, nav.pos_enu, nav.quat_wxyz);
+        vslam_aligned = true;
+        float align_rpy[3];
+        rpy_from_tf2_quat(align_tf.T.getRotation(), align_rpy);
+        const tf2::Vector3 & t = align_tf.T.getOrigin();
+        RCLCPP_INFO(
+          logger_,
+          "VSLAM SE(3) aligned to ICP origin "
+          "(align rpy=%.2f/%.2f/%.2f deg, t=(%.2f,%.2f,%.2f))",
+          align_rpy[0] * 180.0f / static_cast<float>(M_PI),
+          align_rpy[1] * 180.0f / static_cast<float>(M_PI),
+          align_rpy[2] * 180.0f / static_cast<float>(M_PI),
+          t.x(), t.y(), t.z());
+      }
+    } else if (bus.ext_nav.consume_fresh(nav)) {
+      have_nav = true;
+      if (!vslam_aligned && align_gps_compass && ekf.is_initialized()) {
+        const AttPosEKF * core = ekf.ekf_core();
+        if (core != nullptr) {
+          geometry_msgs::msg::Quaternion q_map;
+          float q_ned[4] = {
+            core->states[0], core->states[1], core->states[2], core->states[3]};
+          ned_frd_quat_to_enu(q_ned, body_axes, q_map);
+          const float q_tgt_wxyz[4] = {
+            static_cast<float>(q_map.w), static_cast<float>(q_map.x),
+            static_cast<float>(q_map.y), static_cast<float>(q_map.z)};
+          const float p_tgt[3] = {0.0f, 0.0f, 0.0f};
+          align_tf = compute_align_tf_enu(
+            p_tgt, q_tgt_wxyz, nav.pos_enu, nav.quat_wxyz);
+          AttPosEKF * mutable_core = ekf.ekf_core();
+          if (mutable_core != nullptr) {
+            mutable_core->states[7] = 0.0f;
+            mutable_core->states[8] = 0.0f;
+            mutable_core->states[9] = 0.0f;
+            mutable_core->posNE[0] = 0.0f;
+            mutable_core->posNE[1] = 0.0f;
+            mutable_core->hgtMea = 0.0f;
           }
-        } else {
-          const float yaw_map = yaw_from_quat_wxyz(
-            icp.quat_wxyz[0], icp.quat_wxyz[1], icp.quat_wxyz[2], icp.quat_wxyz[3]);
-          const float yaw_v = yaw_from_quat_wxyz(
-            nav.quat_wxyz[0], nav.quat_wxyz[1], nav.quat_wxyz[2], nav.quat_wxyz[3]);
-          yaw_corr = yaw_map - yaw_v;
-          const float c = std::cos(yaw_corr);
-          const float s = std::sin(yaw_corr);
-          t_corr_enu[0] = icp.pos_enu[0] - (c * nav.pos_enu[0] - s * nav.pos_enu[1]);
-          t_corr_enu[1] = icp.pos_enu[1] - (s * nav.pos_enu[0] + c * nav.pos_enu[1]);
-          t_corr_enu[2] = icp.pos_enu[2] - nav.pos_enu[2];
           vslam_aligned = true;
+          float align_rpy[3];
+          rpy_from_tf2_quat(align_tf.T.getRotation(), align_rpy);
+          const tf2::Vector3 & t = align_tf.T.getOrigin();
           RCLCPP_INFO(
             logger_,
-            "VSLAM aligned to ICP origin (yaw_corr=%.2f deg)",
-            yaw_corr * 180.0f / static_cast<float>(M_PI));
+            "VSLAM SE(3) aligned to compass/AHRS map at origin "
+            "(align rpy=%.2f/%.2f/%.2f deg, t=(%.2f,%.2f,%.2f), "
+            "vslam_xyz=(%.2f,%.2f,%.2f))",
+            align_rpy[0] * 180.0f / static_cast<float>(M_PI),
+            align_rpy[1] * 180.0f / static_cast<float>(M_PI),
+            align_rpy[2] * 180.0f / static_cast<float>(M_PI),
+            t.x(), t.y(), t.z(),
+            nav.pos_enu[0], nav.pos_enu[1], nav.pos_enu[2]);
         }
       }
     }
 
+    // Presence on the bus after consume_fresh means a new sample this tick.
     if (have_nav && vslam_aligned) {
-      align_ext_nav_enu(nav, yaw_corr, t_corr_enu);
+      apply_align_tf_enu(nav, align_tf);
       float pos_ned[3], vel_ned[3], q_ned[4];
       enu_position_to_ned(nav.pos_enu, pos_ned);
       enu_velocity_to_ned(nav.vel_enu, vel_ned);
@@ -388,13 +427,6 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       ekf.set_ext_nav_pose(pos_ned, vel_ned, q_ned, 0.1f, 0.1f, 0.2f, true, 0);
     }
 
-    if (reset_requested_.exchange(false, std::memory_order_relaxed)) {
-      filter_reset = true;
-      vslam_aligned = false;
-      yaw_corr = 0.0f;
-      t_corr_enu[0] = t_corr_enu[1] = t_corr_enu[2] = 0.0f;
-      logged_waiting_icp = false;
-    }
     ekf.run_filter(filter_reset);
     filter_reset = false;
 

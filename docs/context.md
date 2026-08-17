@@ -150,12 +150,19 @@ Minimum packages for the **currently enabled** SSoT set (stereo + mapping + seg 
 ONNX / `.pt` can be copied; **`.engine` must be rebuilt** on the new GPU/JetPack.
 
 ```bash
-# Copy portable weights if needed, then:
+# Default: FP16; uses DLA when TensorRT exposes cores, else GPU
 bash /root/colcon_ws/src/perception_models/scripts/build_all_engines.sh
+
+# Force GPU-only:
+USE_DLA=0 bash /root/colcon_ws/src/perception_models/scripts/build_all_engines.sh
 ```
 
 Point `SSoT.yaml` `segmentation.*_engine` / SAM paths at the engines that script writes (filenames may differ from `b3` / `_dyn` names on the reference robot).
 
+**JetPack 7.2 / L4T R39.2:** TensorRT reports `num_DLA_cores=0` even on Orin NX
+(HW + `/dev/nvhost-ctrl-nvdla*` present; cuDLA can see 2 devices). NVIDIA: DLA for
+TRT comes in a later release — scripts fall back to GPU FP16 automatically.
+When DLA works: vision/encoder → core 0; FiLM/decoder → core 1.
 Typical paths under `perception_models/data/`:
 
 - CLIPSeg vision + FiLM engines  

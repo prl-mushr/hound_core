@@ -327,8 +327,14 @@ void MavlinkBridge::handle_gps_raw(const mavlink::mavlink_message_t & msg)
   mavlink::common::msg::GPS_RAW_INT g{};
   mavlink::MsgMap map(&msg);
   g.deserialize(map);
+  // Stream may be 200 Hz; only publish a new fix when AP's fix time advances.
+  if (g.time_usec != 0 && g.time_usec == last_gps_time_usec_) {
+    return;
+  }
+  last_gps_time_usec_ = g.time_usec;
   GpsSample s;
   s.stamp = now();
+  s.time_usec = g.time_usec;
   s.lat_deg = g.lat * 1e-7;
   s.lon_deg = g.lon * 1e-7;
   s.alt_m = g.alt * 1e-3f;
@@ -500,7 +506,7 @@ void MavlinkBridge::request_data_streams()
   set_interval(mavlink::common::msg::RAW_IMU::MSG_ID, 200.0f);
   set_interval(mavlink::common::msg::ATTITUDE_QUATERNION::MSG_ID, 200.0f);
   set_interval(mavlink::common::msg::SCALED_PRESSURE::MSG_ID, 50.0f);
-  set_interval(mavlink::common::msg::GPS_RAW_INT::MSG_ID, 10.0f);
+  set_interval(mavlink::common::msg::GPS_RAW_INT::MSG_ID, 200.0f);
   set_interval(mavlink::common::msg::RC_CHANNELS::MSG_ID, 50.0f);
   set_interval(mavlink::common::msg::LOCAL_POSITION_NED::MSG_ID, 50.0f);
 }
