@@ -82,10 +82,14 @@ private:
   bool enable_baro_{true};
   bool enable_mag_{true};
   bool enable_gps_{true};
+  bool fuse_mag_{true};
   bool fuse_gps_{false};
   int ekf_odom_hz_{50};
   double mag_max_hz_{20.0};
   double baro_max_hz_{20.0};
+  double baro_sigma_m_{1.0};
+  double mag_sigma_{0.5};
+  double mag_interference_gain_{0.0};
   uint32_t gps_pos_delay_ms_{200};
   uint32_t gps_vel_delay_ms_{200};
   uint32_t vslam_pos_delay_ms_{100};
@@ -98,6 +102,7 @@ private:
   uint32_t mag_delay_ms_{25};
   std::string ext_nav_align_{"gps_compass"};
   std::string icp_origin_topic_{"/localization/icp_origin"};
+  double ext_nav_sticky_gate_nsigma_{5.0};
   std::string vision_odom_topic_;
   std::string ekf_odom_topic_;
   std::string ekf_reset_topic_{"~/ekf_reset"};

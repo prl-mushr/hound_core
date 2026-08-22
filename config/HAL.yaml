@@ -1,17 +1,25 @@
 # HAL monitor defaults (also available under hal_monitor in SSoT.yaml).
-# Recording is handled by bag_recorder_node (see bagdir / record_* below for shared defaults).
+# Recording process: bag_recorder_node. HAL publishes Bool /hal/record from RC.
 diagnostics_topic: /SOC_diagnostics
 startup_delay_s: 15.0
 usb_reset_on_start: true
 usb_reset_device: "ChibiOS/RT Virtual COM Port"
 
-# Shared bag_recorder defaults (hal_monitor no longer records).
+# RC → /hal/record (legacy HAL_9000 stick thresholds; 1-based channel).
+record_enabled: true
+record_topic: /hal/record
+record_rc_topic: /hound_fcu_control/rc/in
+record_rc_channel: 1
+record_on_threshold: 1900
+record_off_threshold: 1100
+
+# Shared bag_recorder defaults.
 # Trigger: std_msgs/Bool on /hal/record (true=start, false=stop).
 # Status: latched Bool on /hal/recording.
 bagdir: /root/colcon_ws/bags/
+record_all_topics: true
 record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
 record_split_duration_min: 5
-record_topic: /hal/record
 
 battery_voltage_threshold: 14.0
 gps_min_satellites: 16

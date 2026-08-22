@@ -104,6 +104,7 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     ekf_cfg.enable_baro = enable_baro_;
     ekf_cfg.enable_mag = enable_mag_;
     ekf_cfg.enable_gps = enable_gps_;
+    ekf_cfg.fuse_mag = fuse_mag_;
     ekf_cfg.fuse_gps = fuse_gps_;
     ekf_cfg.ekf_odom_hz = ekf_odom_hz_;
     ekf_cfg.mag_max_hz = mag_max_hz_;
@@ -118,8 +119,12 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     ekf_cfg.icp_yaw_delay_ms = icp_yaw_delay_ms_;
     ekf_cfg.baro_delay_ms = baro_delay_ms_;
     ekf_cfg.mag_delay_ms = mag_delay_ms_;
+    ekf_cfg.baro_sigma_m = static_cast<float>(baro_sigma_m_);
+    ekf_cfg.mag_sigma = static_cast<float>(mag_sigma_);
+    ekf_cfg.mag_interference_gain = static_cast<float>(mag_interference_gain_);
     ekf_cfg.ext_nav_align = ext_nav_align_;
     ekf_cfg.icp_origin_topic = icp_origin_topic_;
+    ekf_cfg.ext_nav_sticky_gate_nsigma = static_cast<float>(ext_nav_sticky_gate_nsigma_);
     ekf_cfg.ext_nav_origin_lat = ext_nav_origin_lat_;
     ekf_cfg.ext_nav_origin_lon = ext_nav_origin_lon_;
     ekf_cfg.ext_nav_origin_hgt = ext_nav_origin_hgt_;
@@ -261,6 +266,7 @@ void HoundFcuControlModularNode::declare_params()
   enable_baro_ = declare_parameter<bool>("enable_baro", true);
   enable_mag_ = declare_parameter<bool>("enable_mag", true);
   enable_gps_ = declare_parameter<bool>("enable_gps", true);
+  fuse_mag_ = declare_parameter<bool>("fuse_mag", true);
   fuse_gps_ = declare_parameter<bool>("fuse_gps", false);
   ekf_odom_hz_ = declare_parameter<int>("ekf_odom_hz", 50);
   {
@@ -281,6 +287,9 @@ void HoundFcuControlModularNode::declare_params()
   }
   mag_max_hz_ = declare_parameter<double>("mag_max_hz", 20.0);
   baro_max_hz_ = declare_parameter<double>("baro_max_hz", 20.0);
+  baro_sigma_m_ = declare_parameter<double>("baro_sigma_m", 1.0);
+  mag_sigma_ = declare_parameter<double>("mag_sigma", 0.5);
+  mag_interference_gain_ = declare_parameter<double>("mag_interference_gain", 0.0);
   gps_pos_delay_ms_ = static_cast<uint32_t>(
     declare_parameter<int64_t>("delays.gps_pos_ms", 200));
   gps_vel_delay_ms_ = static_cast<uint32_t>(
@@ -308,6 +317,8 @@ void HoundFcuControlModularNode::declare_params()
       ext_nav_align_.c_str());
     ext_nav_align_ = "gps_compass";
   }
+  ext_nav_sticky_gate_nsigma_ = declare_parameter<double>(
+    "ext_nav_sticky_gate_nsigma", 5.0);
   icp_origin_topic_ = declare_parameter<std::string>(
     "icp_origin_topic", "/localization/icp_origin");
   vision_odom_topic_ = declare_parameter<std::string>(

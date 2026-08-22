@@ -3,7 +3,7 @@
 #
 #   stereo_composite  cameras + cuVSLAM
 #   lidar             Livox composite (SDK + in-process deskew + TF)
-#   mesh_pf           Embree mesh particle filter (optional)
+#   mesh_pf           mesh particle filter (Vulkan RT / Embree, optional)
 #   fcu_control       MAVLink + EKF + LL + vesc + ntrip
 #   nvblox            hound_mapping LocalMap
 #   segmentation      Dora CLIPSeg + NanoSAM
@@ -18,6 +18,25 @@
 # In-process stereo + cuVSLAM (exclusive USB). Topics: /{camera_name}/color|depth/...
 # Extrinsics: parent_frame → {camera_name}_link (xyz m, rpy deg).
 # VSLAM measurement child = base_link; EKF owns odom → base_link TF.
+# Do not set a side cam parent to base_link just to run VSLAM — launch
+# composes the parent chain into T_base_cam for the VSLAM body mount.
+#
+# KNOWN LIMITATION — cuVSLAM overconfidence / glitches:
+#   cuVSLAM can lose orientation on large motions yet keep tracking in a new
+#   reference frame (high confidence, wrong attitude). With VSLAM as the sole
+#   positioning source, glitches are hard to detect (tilt re-align helps but
+#   is not a substitute for an independent pose). Prefer multi-cam VSLAM or
+#   an absolute aid (GPS / mesh ICP / mocap). GPS should make disagreement
+#   checks easier; mocap validation is planned when the setup is available.
+#
+# Update camera mounts from vlcal (uses lidar xyz/rpy below + calib.json per cam):
+#   cd colcon_ws/src/hound_core/scripts/vlcal
+#   ./run_vlcal.sh calibrate camera_front   # repeat left/right; see scripts/vlcal/README.md
+#   ./run_vlcal.sh apply_ssot               # dry-run
+#   ./run_vlcal.sh apply_ssot --write       # patch this file (backup *.bak_vlcal)
+# Or: python3 apply_vlcal_to_ssot.py --calib-root colcon_ws/calib/vlcal --no-tf [--write]
+# Maps: base_link→camera_front_link = stereo_composite.cameras.camera_front.xyz/rpy
+#       camera_front_link→camera_{left,right}_link = cameras.camera_{left,right}.xyz/rpy
 stereo_composite:
   enabled: true
   architecture: modular
@@ -27,6 +46,9 @@ stereo_composite:
   odom_frame: odom
   base_frame: base_link
   publish_odom_tf: false
+  # 0 = publish every successful track. Else stride = round(infra_fps / this).
+  # Tracking still runs every IR frame; only ROS odom (→ EKF) is gated.
+  odom_publish_hz: 60.0
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
@@ -47,26 +69,6 @@ stereo_composite:
       serial_number: "030422250301"
       infra_width: 640
       infra_height: 360
-      infra_fps: 60
-      emitter_enabled: 0
-      vslam_enabled: true
-      vslam_type: 2
-      color_width: 640
-      color_height: 360
-      color_fps: 30
-      depth_width: 640
-      depth_height: 360
-      depth_fps: 60
-      color_publish_fps: 10.0
-      depth_publish_fps: 10.0
-      parent_frame: base_link
-      xyz: [0.018281, 0.147877, 0.108529]
-      rpy: [0.416, 0.307, 0.231]
-    camera_left:
-      camera_name: camera_left
-      serial_number: "909512071675"
-      infra_width: 640
-      infra_height: 360
       infra_fps: 30
       emitter_enabled: 0
       vslam_enabled: false
@@ -79,6 +81,28 @@ stereo_composite:
       depth_fps: 30
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
+      parent_frame: base_link
+      xyz: [0.017165, 0.146315, 0.108163]
+      rpy: [-1.524, 1.806, -0.297]
+      # rpy: [0.0, 0.0, 0.0]
+    camera_left:
+      camera_name: camera_left
+      serial_number: "909512071675"
+      infra_width: 640
+      infra_height: 360
+      infra_fps: 60
+      emitter_enabled: 0
+      vslam_enabled: true
+      vslam_type: 2
+      color_width: 640
+      color_height: 360
+      color_fps: 30
+      depth_width: 640
+      depth_height: 360
+      depth_fps: 60
+      color_publish_fps: 10.0
+      depth_publish_fps: 10.0
+      
       xyz: [-0.079776, 0.040531, 0.088861]
       rpy: [-1.110, 0.916, 135.001]
     camera_right:
@@ -102,14 +126,15 @@ stereo_composite:
       rpy: [-0.960, 2.914, -134.380]
 
 # Livox Mid-360(S) via composite (SDK in-process). Host NIC on same subnet.
+# base_link → livox_frame (xyz/rpy) is the lidar anchor for vlcal → camera mounts above.
 lidar:
-  enabled: false
+  enabled: true
   backend: livox
   lidar_ip: "192.168.1.138"
   local_ip: "192.168.1.50"
   local_port: 56101
   config_path: ""
-  frame_time_ms: 100
+  frame_time_ms: 80
   range_max: 70.0
   range_min: 0.2
   organize_cloud: true
@@ -132,24 +157,30 @@ lidar:
   publish_static_tf: true
   parent_frame: base_link
   xyz: [0.0, 0.15, 0.15]
-  rpy: [180.0, -12.0, 0.0]
+  rpy: [178.0, -13.5, 0.0]
   imu_xyz: [0.0, 0.0, 0.0]
   imu_rpy: [0.0, 0.0, 0.0]
   composite:
     enabled: true
     publish_cloud: true
     base_frame: base_link
-    # In-process deskew off — nvblox owns lidar motion compensation.
+    # In-process odom-polyline deskew (nvblox lidar MC forced off when this is on).
     deskew:
-      enabled: false
+      enabled: true
       reference: end
       motion_frame: odom
-      tf_lookup_timeout_s: 0.0
+      odom_topic: /ekf/odometry
+      # odom_topic: /visual_slam/tracking/odometry
+      pose_buffer_s: 1.0
+      # Host receive → photon time (ms). Shifts cloud stamp (and deskew window)
+      # backward so scan_end is in the past of /ekf/odometry. Must exceed EKF
+      # odom age (~1 IMU period) or deskew skips with "do not cover scan interval".
+      wire_latency_ms: 20.0
       publish_raw_cloud: false
       raw_cloud_topic: /livox/cloud_raw
       warn_ms: 40.0
 
-# Embree constant-twist mesh PF (subscribes to deskewed cloud_topic).
+# Embree / Vulkan-RT constant-twist mesh PF (subscribes to deskewed cloud_topic).
 mesh_pf:
   enabled: false
   map_file: ""
@@ -161,6 +192,8 @@ mesh_pf:
   num_particles: 2000
   beam_samples: 64
   global_init_on_start: true
+  # auto = Vulkan rayQuery (Orin RT cores) then Embree CPU fallback
+  raycast_backend: auto
   init_bb: {xmin: -20.0, ymin: -20.0, zmin: 0.0, xmax: 20.0, ymax: 20.0, zmax: 2.0}
 
 launch:
@@ -169,6 +202,7 @@ launch:
 
 # In-process FCU: libmavconn + EKF + LL (+ optional VESC / NTRIP).
 # enabled is the master switch — nested vesc/ntrip/ll/ekf are ignored when false.
+# ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty
 fcu_control:
   enabled: true
   ll_controller: ackermann
@@ -182,8 +216,10 @@ fcu_control:
   send_vision_to_fcu: false
   enable_ekf: true
   enable_ll: true
-  enable_baro: false
+  enable_baro: true
   enable_mag: true
+  # Mag for AHRS heading at init; false = no continuous FuseMagnetometer.
+  fuse_mag: false
   enable_gps: false
   fuse_gps: false
   vision_odom_topic: /visual_slam/tracking/odometry
@@ -191,9 +227,15 @@ fcu_control:
   publish_ekf_tf: true
   ekf_odom_frame: odom
   ekf_base_frame: base_link
-  ekf_odom_hz: 50
+  ekf_odom_hz: 200
   mag_max_hz: 20.0
   baro_max_hz: 20.0
+  # Measurement noise (not in delays_ms). Defaults match prior hardcodes.
+  baro_sigma_m: 0.5         # height sigma (m) → R_hgt / BaroSigma
+  mag_sigma: 0.5             # scaled-field sigma → magMeasurementSigma
+  # Inflate R_MAG when |B| leaves expected earth field (µT). 0 = off.
+  # R *= (1 + gain * ((|B|/B0) - 1)^2); B0 from WMM (fallback 49 µT).
+  mag_interference_gain: 1.0
   # GPS/VSLAM/ICP: stamp-gated bus write + EKF consume_fresh (no fuse rate cap).
   # Mag/baro: rate-limited fusion (no usable independent freshness on RAW_IMU mag).
   # EKF fusion delays (ms): state recalled at IMUmsec - delay. Per source — tune independently.
@@ -210,6 +252,9 @@ fcu_control:
     baro: 50
     mag: 25
   ext_nav_align: gps_compass
+  # Ext-nav (VSLAM/ICP) sticky: Mahalanobis n-sigma on consecutive raw Δ
+  # (pos + att). Fail / first lock → retune sticky to EKF, drop that sample.
+  ext_nav_sticky_gate_nsigma: 5.0
   icp_origin_topic: /localization/icp_origin
   ekf_cpu: 2
   ll_cpu: 3
@@ -237,6 +282,8 @@ fcu_control:
     SR0_EXTRA1: 200
     SR0_RAW_SENS: 200
   ll:
+    # Must match nav.cmd_topic (MPPI publishes here; LL subscribes).
+    cmd_topic: /hound_nav/cmd_ackermann
     erpm_gain: 3166.6
     steering_max: &max_steer_rad 0.488
     wheelbase: 0.29
@@ -267,6 +314,11 @@ nvblox:
   bag_replay_mode: false
   bag_replay_topic_prefix: debug
   enabled: false
+  # KNOWN ISSUE — color projection into TSDF looks wrong (magenta / missing /
+  # misaligned color on occupied voxels). Root cause unclear (camera_info,
+  # TF timing, projective integrate vs LiDAR TSDF surface, QoS, etc.).
+  # Investigate when a second pose source / mocap is available for controlled
+  # replay; do not treat ~/tsdf_voxels color as ground truth yet.
   # Sensors
   use_depth: false
   use_color: true
@@ -279,19 +331,20 @@ nvblox:
   # Zero bottom of each depth image before TSDF integrate (lidar untouched).
   depth_ignore_bottom_fraction: 0.0
   camera_names: ["camera_front", "camera_left", "camera_right"]
-  # color_topic_template: "/{name}/color/image_raw"
-  color_topic_template: "/{name}/segmentation/refined_traversability"
+  # color_topic_template: "/{name}/segmentation/refined_traversability"
+  # color_info_topic_template: "/{name}/segmentation/camera_info"
+  color_topic_template: "/{name}/color/image_raw"
   color_info_topic_template: "/{name}/color/camera_info"
   # Frames / TSDF volume
   global_frame: odom
   map_clearing_frame_id: base_link
   map_clearing_radius_m: 32.0
-  voxel_size: 0.1
-  projective_integrator_max_integration_distance_m: 15.0
+  voxel_size: 0.05
+  projective_integrator_max_integration_distance_m: 40.0
   lidar_projective_integrator_max_integration_distance_m: 40.0
   # LocalMap BEV (nav Map_config aliases these)
-  elevation_resolution: &local_map_res 0.1
-  local_map_size_m: &local_map_size 8.0
+  elevation_resolution: &local_map_res 0.05
+  local_map_size_m: &local_map_size 16.0
   elev_z_min_rel: -2.0
   elev_z_max_rel: 2.0
   # BEV floor: distance <= this counts as occupied (0 = classic TSDF ≤0).
@@ -300,17 +353,17 @@ nvblox:
   bev_occ_tsdf_max_m: 0.025
   robot_height_m: 0.4
   # 90° ⇒ cos≈0 ⇒ slope never marks lethal (semantic-only cost for debug).
-  lethal_slope_deg: 90.0
+  lethal_slope_deg: 60.0
   # Cost/luminance when no floor or no color: mid-gray so known white/black
   # vs unknown are visible. Encoded in LocalMap.costmap (no separate observed).
   # 255=free, 0=lethal, this value=unobserved. Change here only (no C++ edit).
-  unobserved_luminance: 128.0
-  # Vertical half-band (m) around elev when sampling TSDF color. 0 = 2×voxel.
-  # Wider helps Z-mismatch only. Remaining grey gaps are often NOT Z:
-  #   - color never integrated (sphere-trace fail on one-sided lidar TSDF)
-  #   - XY: sample is BEV cell center only (no neighbor search; elev res 0.25 vs voxel 0.1)
-  # Inpaint Telea fills elev+cost+lum on unobserved cells (same hole mask).
+  unobserved_luminance: 252.0
+  # Vertical half-band (m) below elev when sampling TSDF color. 0 = 2×voxel.
+  # Cost takes the darkest (most lethal) luminance from elev-half_band up through
+  # color_z_column_above_m (0 = full BEV Z span). Needed because elev is the
+  # floor while person/wall paint sits higher in the same XY column.
   color_z_search_half_band_m: 0.05
+  color_z_column_above_m: 0.0
   do_inpaint: true
   inpaint_resolution_m: 0.25
   inpaint_radius: 3
@@ -320,7 +373,7 @@ nvblox:
   map_clear_rate_hz: 20.0
   integrate_depth_rate_hz: 20.0
   integrate_color_rate_hz: 20.0
-  integrate_lidar_rate_hz: 10.0
+  integrate_lidar_rate_hz: 20.0
   # Lidar (when use_lidar)
   lidar_topic: "/livox/cloud"
   lidar_width: 360
@@ -328,7 +381,7 @@ nvblox:
   lidar_elevation_below_deg: 7.0
   lidar_elevation_above_deg: 52.0
   lidar_vertical_fov_rad: 1.0297
-  lidar_min_valid_range_m: 0.2
+  lidar_min_valid_range_m: 0.3
   use_lidar_motion_compensation: true
   # LayerCake save / prior BEV
   layer_cake_path: "/root/colcon_ws/maps/hound_tsdf.layercake"
@@ -336,8 +389,15 @@ nvblox:
   prior_xyz_yaw: [0.0, 0.0, 0.0, 0.0]
   prior_fill_enabled: true
   # Debug pubs (off — were expensive when RViz subscribed)
-  publish_tsdf_color_mesh: false
+  publish_tsdf_color_mesh: true
   tsdf_color_mesh_rate_hz: 1.0
+  # Near-surface TSDF voxels (PointCloud2 xyz+rgb from ColorLayer). Magenta =
+  # geometry without color weight. Subscribe /hound_mapping/tsdf_voxels in RViz.
+  publish_tsdf_voxels: true
+  tsdf_voxel_rate_hz: 1.0
+  tsdf_voxel_min_weight: 0.2
+  tsdf_voxel_max_distance_m: 0.0   # 0 → 2×voxel_size
+  tsdf_voxel_max_points: 400000
   publish_lidar_depth_image: false
   publish_lidar_tsdf_probe: false
   lidar_tsdf_probe_max_points: 4000
@@ -369,11 +429,16 @@ viz:
 
 # Dora manager / planner / controller (IGHA* + MPPI).
 # Full stack lives here (SSoT). Live BEV size/res come from LocalMap, not Map_config.
+# Debug without the rest of hound_core:
+#   ros2 launch hound_core hound_nav.launch.py
+# Set enabled: false here if core launch is also running (avoids two Dora graphs).
 nav:
-  enabled: false   # leave off for this bring-up
+  enabled: false
   local_map_topic: /hound_mapping/local_map
   state_topic: /hound_fcu_control/control_state
   path_topic: /hound_fcu_control/mission/path
+  # RViz "2D Goal Pose" → one-waypoint mission (no mission_pose_builder needed).
+  goal_topic: /goal_pose
   cmd_topic: /hound_nav/cmd_ackermann
   plan_topic: /hound_nav/local_plan
   planner_hz: 5.0
@@ -382,12 +447,12 @@ nav:
   control_state_dims: 17
   track_ref_metric: screw  # screw | xy
   screw_length_m: 1.0
-  # planner_dt EMA + this margin → plan-start offset along timed traj
-  planning_margin_s: 0.05
-  plan_start_max_ref_dist_m: 2.0
-  plan_traj_dt_s: 0.05  # usually Dynamics_config.dt
   lookahead: 15.0
   wp_radius: 1.0
+  # OpenCV planner debug (IGHA* ROS example style); runs in manager bg thread.
+  planner_cv_viz: true
+  planner_cv_viz_window: hound_planner_vis
+  planner_cv_viz_size: 480
 
   MPPI_config:
     ROLLOUTS: 1024
@@ -451,13 +516,18 @@ nav:
     unstuck_expansions: 100000
     experiment_info_default:
       resolution: 2.0
-      epsilon: [2.0, 2.0, 1.57, 5.0]
+      epsilon: [0.5, 0.5, 0.785, 1.0]
       tolerance: 0.125
       max_level: 6
       division_factor: 2
-      max_expansions: 2000
+      max_expansions: 5000
       hysteresis: 100
-      bidirectional: false
+      bidirectional: true
+      # Optional GPU batching of successor expansions (IGHA*).
+      preemptive_expansion:
+        enabled: false
+        min_preemptive: 50
+        max_preemptive: 100
       node_info:
         node_type: "kinodynamic"
         length: 0.3
@@ -478,11 +548,10 @@ nav:
         gear_switch_time: 5.0
         hash_theta: false
 
-  lookahead: [15.0]
-  wp_radius: [4.0]
+  # lookahead / wp_radius are set above (do not redeclare as lists — YAML last-key wins).
 
 hal_monitor:
-  enabled: false
+  enabled: true
   diagnostics_topic: /SOC_diagnostics
   startup_delay_s: 15.0
   usb_reset_on_start: false
@@ -491,6 +560,14 @@ hal_monitor:
   gps_min_satellites: 16
   gps_max_h_acc_mm: 1000
   cmd_topic: /hound_nav/cmd_ackermann
+  # RC → Bool /hal/record (bag_recorder). 1-based channel index.
+  # Legacy HAL_9000.py used channels[3] (CH4); set to 1 for CH1 as requested.
+  record_enabled: true
+  record_topic: /hal/record
+  record_rc_topic: /hound_fcu_control/rc/in
+  record_rc_channel: 3
+  record_on_threshold: 1900
+  record_off_threshold: 1100
   fcu:
     monitor_enabled: true
     monitor_topic: /hound_fcu_control/imu
@@ -512,11 +589,14 @@ hal_monitor:
     gpu_freq_path: ""
 
 # Bool /hal/record → ros2 bag record (latched status on /hal/recording).
+# HAL RC (or any Bool publisher) starts/stops; record_all_topics records -a.
 bag_recorder:
-  enabled: false
+  enabled: true
   record_topic: /hal/record
   recording_status_topic: /hal/recording
   bagdir: /root/colcon_ws/bags/
+  record_all_topics: true
+  # Used only when record_all_topics is false (prune list later).
   record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
   record_split_duration_min: 5
   notification_topic: /hound_fcu_control/play_tune

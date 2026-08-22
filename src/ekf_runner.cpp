@@ -17,8 +17,6 @@
 #include "inertial_nav_ros2/frame_conversions.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
-#include "tf2/LinearMath/Transform.h"
-#include "tf2/LinearMath/Vector3.h"
 
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -50,73 +48,6 @@ bool accept_rate_limited(uint32_t stamp_ms_now, uint32_t & last_ms, float max_hz
   }
   last_ms = stamp_ms_now;
   return true;
-}
-
-tf2::Quaternion quat_from_wxyz(float w, float x, float y, float z)
-{
-  tf2::Quaternion q(x, y, z, w);
-  q.normalize();
-  return q;
-}
-
-void quat_to_wxyz(const tf2::Quaternion & q, float out_wxyz[4])
-{
-  out_wxyz[0] = static_cast<float>(q.w());
-  out_wxyz[1] = static_cast<float>(q.x());
-  out_wxyz[2] = static_cast<float>(q.y());
-  out_wxyz[3] = static_cast<float>(q.z());
-}
-
-void rpy_from_tf2_quat(const tf2::Quaternion & q, float rpy[3])
-{
-  double roll = 0.0, pitch = 0.0, yaw = 0.0;
-  tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-  rpy[0] = static_cast<float>(roll);
-  rpy[1] = static_cast<float>(pitch);
-  rpy[2] = static_cast<float>(yaw);
-}
-
-/**
- * Rigid SE(3) map←vslam: T_align * T_vslam = T_target
- * (full xyz + full rotation; replaces prior yaw-only XY+θ align).
- */
-struct AlignTfEnu
-{
-  tf2::Transform T{tf2::Transform::getIdentity()};
-};
-
-AlignTfEnu compute_align_tf_enu(
-  const float p_tgt[3], const float q_tgt_wxyz[4],
-  const float p_src[3], const float q_src_wxyz[4])
-{
-  const tf2::Transform T_tgt(
-    quat_from_wxyz(q_tgt_wxyz[0], q_tgt_wxyz[1], q_tgt_wxyz[2], q_tgt_wxyz[3]),
-    tf2::Vector3(p_tgt[0], p_tgt[1], p_tgt[2]));
-  const tf2::Transform T_src(
-    quat_from_wxyz(q_src_wxyz[0], q_src_wxyz[1], q_src_wxyz[2], q_src_wxyz[3]),
-    tf2::Vector3(p_src[0], p_src[1], p_src[2]));
-  AlignTfEnu a;
-  a.T = T_tgt * T_src.inverse();
-  return a;
-}
-
-void apply_align_tf_enu(ExtNavSample & nav, const AlignTfEnu & a)
-{
-  const tf2::Vector3 p_out = a.T * tf2::Vector3(nav.pos_enu[0], nav.pos_enu[1], nav.pos_enu[2]);
-  nav.pos_enu[0] = static_cast<float>(p_out.x());
-  nav.pos_enu[1] = static_cast<float>(p_out.y());
-  nav.pos_enu[2] = static_cast<float>(p_out.z());
-
-  const tf2::Vector3 v_out =
-    a.T.getBasis() * tf2::Vector3(nav.vel_enu[0], nav.vel_enu[1], nav.vel_enu[2]);
-  nav.vel_enu[0] = static_cast<float>(v_out.x());
-  nav.vel_enu[1] = static_cast<float>(v_out.y());
-  nav.vel_enu[2] = static_cast<float>(v_out.z());
-
-  const tf2::Quaternion q_out =
-    a.T.getRotation() *
-    quat_from_wxyz(nav.quat_wxyz[0], nav.quat_wxyz[1], nav.quat_wxyz[2], nav.quat_wxyz[3]);
-  quat_to_wxyz(q_out.normalized(), nav.quat_wxyz);
 }
 
 void set_symmetric_cov3(
@@ -228,7 +159,6 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
   using inertial_nav_ros2::frames::ros_body_vector_to_frd;
 
   const bool align_gps_compass = (cfg_.ext_nav_align == "gps_compass");
-  const bool align_lidar_icp = (cfg_.ext_nav_align == "lidar_icp");
 
   estimator_ekf ekf;
   ekf.set_ext_nav_origin(
@@ -263,10 +193,14 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
   ekf.set_mag_enabled(0, cfg_.enable_mag);
   ekf.setBaroFusionDelayMs(cfg_.baro_delay_ms);
   ekf.setMagFusionDelayMs(0, cfg_.mag_delay_ms);
+  ekf.set_baro_sigma(cfg_.baro_sigma_m);
+  ekf.set_mag_measurement_sigma(cfg_.mag_sigma);
+  ekf.set_mag_interference_gain(cfg_.mag_interference_gain);
   ekf.setExtNavFusionDelaysMs(
     0, cfg_.vslam_pos_delay_ms, cfg_.vslam_vel_delay_ms, cfg_.vslam_yaw_delay_ms);
   ekf.setExtNavFusionDelaysMs(
     1, cfg_.icp_pos_delay_ms, cfg_.icp_vel_delay_ms, cfg_.icp_yaw_delay_ms);
+  ekf.setExtNavStickyGateNStd(cfg_.ext_nav_sticky_gate_nsigma);
 
   uint64_t last_seq = 0;
   ImuSample imu;
@@ -279,9 +213,7 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
   uint32_t last_mag_ms = 0;
   uint32_t last_baro_ms = 0;
 
-  bool vslam_aligned = false;
-  AlignTfEnu align_tf;
-  bool logged_waiting_icp = false;
+  bool mag_disabled_after_init = false;
 
   while (running.load(std::memory_order_relaxed)) {
     if (!bus.imu.wait_new(last_seq, imu, running)) {
@@ -305,7 +237,9 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       static_cast<float>(static_cast<uint64_t>(t_ms) * 1000ULL));
 
     MagSample mag;
-    if (cfg_.enable_mag && bus.mag.copy_latest(mag)) {
+    const bool want_mag_sample =
+      cfg_.enable_mag && (!ekf.is_initialized() || cfg_.fuse_mag);
+    if (want_mag_sample && bus.mag.copy_latest(mag)) {
       const uint32_t m_ms = stamp_ms(mag.stamp);
       if (accept_rate_limited(m_ms, last_mag_ms, static_cast<float>(cfg_.mag_max_hz))) {
         float field_ut[3] = {
@@ -316,13 +250,23 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
         ekf.setMagData(field_frd, zero, true, 0);
       }
     }
+    // Init-only: once AHRS is up, turn off compass so mag is not fused.
+    if (cfg_.enable_mag && !cfg_.fuse_mag && ekf.is_initialized() &&
+      !mag_disabled_after_init)
+    {
+      ekf.set_mag_enabled(0, false);
+      mag_disabled_after_init = true;
+      RCLCPP_INFO(
+        logger_,
+        "mag: AHRS init done; fuse_mag=false — compass fusion disabled");
+    }
 
     BaroSample baro;
     if (cfg_.enable_baro && bus.baro.copy_latest(baro)) {
       const uint32_t b_ms = stamp_ms(baro.stamp);
       if (accept_rate_limited(b_ms, last_baro_ms, static_cast<float>(cfg_.baro_max_hz))) {
         const float h = isa_height_m(baro.pressure_pa);
-        ekf.setAirData(0.0f, h, 1.0f, imu_dt, true, false);
+        ekf.setAirData(0.0f, h, cfg_.baro_sigma_m, imu_dt, true, false);
       }
     }
 
@@ -341,80 +285,7 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     }
 
     ExtNavSample nav;
-    bool have_nav = false;
-    // While waiting for ICP, do not consume VSLAM (keep fresh until align can finish).
-    if (!vslam_aligned && align_lidar_icp) {
-      IcpOriginSample icp;
-      if (!bus.icp_origin.copy_latest(icp) || !icp.valid) {
-        if (!logged_waiting_icp) {
-          RCLCPP_WARN(
-            logger_,
-            "ext_nav_align=lidar_icp: waiting for PoseStamped on %s",
-            cfg_.icp_origin_topic.c_str());
-          logged_waiting_icp = true;
-        }
-      } else if (bus.ext_nav.consume_fresh(nav)) {
-        have_nav = true;
-        align_tf = compute_align_tf_enu(
-          icp.pos_enu, icp.quat_wxyz, nav.pos_enu, nav.quat_wxyz);
-        vslam_aligned = true;
-        float align_rpy[3];
-        rpy_from_tf2_quat(align_tf.T.getRotation(), align_rpy);
-        const tf2::Vector3 & t = align_tf.T.getOrigin();
-        RCLCPP_INFO(
-          logger_,
-          "VSLAM SE(3) aligned to ICP origin "
-          "(align rpy=%.2f/%.2f/%.2f deg, t=(%.2f,%.2f,%.2f))",
-          align_rpy[0] * 180.0f / static_cast<float>(M_PI),
-          align_rpy[1] * 180.0f / static_cast<float>(M_PI),
-          align_rpy[2] * 180.0f / static_cast<float>(M_PI),
-          t.x(), t.y(), t.z());
-      }
-    } else if (bus.ext_nav.consume_fresh(nav)) {
-      have_nav = true;
-      if (!vslam_aligned && align_gps_compass && ekf.is_initialized()) {
-        const AttPosEKF * core = ekf.ekf_core();
-        if (core != nullptr) {
-          geometry_msgs::msg::Quaternion q_map;
-          float q_ned[4] = {
-            core->states[0], core->states[1], core->states[2], core->states[3]};
-          ned_frd_quat_to_enu(q_ned, body_axes, q_map);
-          const float q_tgt_wxyz[4] = {
-            static_cast<float>(q_map.w), static_cast<float>(q_map.x),
-            static_cast<float>(q_map.y), static_cast<float>(q_map.z)};
-          const float p_tgt[3] = {0.0f, 0.0f, 0.0f};
-          align_tf = compute_align_tf_enu(
-            p_tgt, q_tgt_wxyz, nav.pos_enu, nav.quat_wxyz);
-          AttPosEKF * mutable_core = ekf.ekf_core();
-          if (mutable_core != nullptr) {
-            mutable_core->states[7] = 0.0f;
-            mutable_core->states[8] = 0.0f;
-            mutable_core->states[9] = 0.0f;
-            mutable_core->posNE[0] = 0.0f;
-            mutable_core->posNE[1] = 0.0f;
-            mutable_core->hgtMea = 0.0f;
-          }
-          vslam_aligned = true;
-          float align_rpy[3];
-          rpy_from_tf2_quat(align_tf.T.getRotation(), align_rpy);
-          const tf2::Vector3 & t = align_tf.T.getOrigin();
-          RCLCPP_INFO(
-            logger_,
-            "VSLAM SE(3) aligned to compass/AHRS map at origin "
-            "(align rpy=%.2f/%.2f/%.2f deg, t=(%.2f,%.2f,%.2f), "
-            "vslam_xyz=(%.2f,%.2f,%.2f))",
-            align_rpy[0] * 180.0f / static_cast<float>(M_PI),
-            align_rpy[1] * 180.0f / static_cast<float>(M_PI),
-            align_rpy[2] * 180.0f / static_cast<float>(M_PI),
-            t.x(), t.y(), t.z(),
-            nav.pos_enu[0], nav.pos_enu[1], nav.pos_enu[2]);
-        }
-      }
-    }
-
-    // Presence on the bus after consume_fresh means a new sample this tick.
-    if (have_nav && vslam_aligned) {
-      apply_align_tf_enu(nav, align_tf);
+    if (ekf.is_initialized() && bus.ext_nav.consume_fresh(nav)) {
       float pos_ned[3], vel_ned[3], q_ned[4];
       enu_position_to_ned(nav.pos_enu, pos_ned);
       enu_velocity_to_ned(nav.vel_enu, vel_ned);
@@ -425,6 +296,30 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       q.z = nav.quat_wxyz[3];
       enu_quat_to_ned_frd(q, body_axes, q_ned);
       ekf.set_ext_nav_pose(pos_ned, vel_ned, q_ned, 0.1f, 0.1f, 0.2f, true, 0);
+    }
+
+    ExtNavStickyGlitchEvent glitch;
+    if (ekf.take_ext_nav_sticky_glitch(glitch)) {
+      const char * reason = "mahalanobis";
+      if (glitch.reason == ExtNavStickyGlitchReason::NoPoseInit) {
+        reason = "no_pose_init";
+      } else if (glitch.reason == ExtNavStickyGlitchReason::FirstLock) {
+        reason = "first_lock";
+      } else if (glitch.reason == ExtNavStickyGlitchReason::RawStep) {
+        reason = "raw_step";
+      }
+      constexpr float kRad2Deg = 180.0f / static_cast<float>(M_PI);
+      RCLCPP_WARN(
+        logger_,
+        "ext-nav sticky glitch id=%u reason=%s "
+        "d_pos_ned=(%.2f,%.2f,%.2f) m  d_att_rpy=(%.1f,%.1f,%.1f) deg  "
+        "mahalanobis_d2=%.2f gate=%.2f",
+        static_cast<unsigned>(glitch.source_id), reason,
+        glitch.d_pos_ned[0], glitch.d_pos_ned[1], glitch.d_pos_ned[2],
+        glitch.d_att_rad[0] * kRad2Deg,
+        glitch.d_att_rad[1] * kRad2Deg,
+        glitch.d_att_rad[2] * kRad2Deg,
+        glitch.mahalanobis_d2, glitch.gate_threshold);
     }
 
     ekf.run_filter(filter_reset);

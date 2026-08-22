@@ -687,6 +687,9 @@ def build_hound_mapping_node(
         "color_z_search_half_band_m": float(
             nvblox.get("color_z_search_half_band_m", 0.0)
         ),
+        "color_z_column_above_m": float(
+            nvblox.get("color_z_column_above_m", 0.0)
+        ),
         "bev_occ_tsdf_max_m": float(nvblox.get("bev_occ_tsdf_max_m", 0.0)),
         "robot_height_m": float(nvblox.get("robot_height_m", 0.4)),
         "elev_z_min_rel": float(nvblox.get("elev_z_min_rel", -5.0)),
@@ -777,6 +780,17 @@ def build_hound_mapping_node(
         "tsdf_color_mesh_max_triangles": int(
             nvblox.get("tsdf_color_mesh_max_triangles", 500000)
         ),
+        "publish_tsdf_voxels": bool(nvblox.get("publish_tsdf_voxels", False)),
+        "tsdf_voxel_rate_hz": float(nvblox.get("tsdf_voxel_rate_hz", 1.0)),
+        "tsdf_voxel_min_weight": float(
+            nvblox.get("tsdf_voxel_min_weight", 0.1)
+        ),
+        "tsdf_voxel_max_distance_m": float(
+            nvblox.get("tsdf_voxel_max_distance_m", 0.0)
+        ),
+        "tsdf_voxel_max_points": int(
+            nvblox.get("tsdf_voxel_max_points", 400000)
+        ),
         "publish_lidar_depth_image": bool(
             nvblox.get("publish_lidar_depth_image", False)
         ),
@@ -839,6 +853,7 @@ def build_hound_mapping_node(
             "costmap",
             "tsdf_color_cloud",
             "tsdf_color_mesh",
+            "tsdf_voxels",
             "lidar_depth_image",
             "lidar_depth_viz",
             "lidar_depth_cloud",
@@ -883,10 +898,6 @@ def build_nav_dora_actions(nav: dict) -> list:
     planner_hz = float(nav.get("planner_hz", 5.0))
     tick_hz = max(ctrl_hz, 50.0)
     tick_ms = max(10, int(round(1000.0 / max(tick_hz, 1.0))))
-    dyn = nav.get("Dynamics_config") or {}
-    plan_traj_dt = float(
-        nav.get("plan_traj_dt_s", dyn.get("dt", 0.05) if isinstance(dyn, dict) else 0.05)
-    )
     stack_keys = (
         "MPPI_config",
         "Map_config",
@@ -912,6 +923,7 @@ def build_nav_dora_actions(nav: dict) -> list:
             nav.get("state_topic", "/hound_fcu_control/control_state")
         ),
         "path_topic": str(nav.get("path_topic", "/mission/path")),
+        "goal_topic": str(nav.get("goal_topic", "/goal_pose")),
         "cmd_topic": str(nav.get("cmd_topic", "/hound_nav/cmd_ackermann")),
         "plan_topic": str(nav.get("plan_topic", "/hound_nav/local_plan")),
         "control_rate_hz": ctrl_hz,
@@ -920,11 +932,11 @@ def build_nav_dora_actions(nav: dict) -> list:
         "control_state_dims": int(nav.get("control_state_dims", 17)),
         "track_ref_metric": str(nav.get("track_ref_metric", "screw")),
         "screw_length_m": float(nav.get("screw_length_m", 1.0)),
-        "planning_margin_s": float(nav.get("planning_margin_s", 0.05)),
-        "plan_start_max_ref_dist_m": float(
-            nav.get("plan_start_max_ref_dist_m", 2.0)
+        "planner_cv_viz": bool(nav.get("planner_cv_viz", True)),
+        "planner_cv_viz_window": str(
+            nav.get("planner_cv_viz_window", "hound_planner_vis")
         ),
-        "plan_traj_dt_s": plan_traj_dt,
+        "planner_cv_viz_size": int(nav.get("planner_cv_viz_size", 480)),
     }
     for k in stack_keys:
         cfg[k] = copy.deepcopy(nav[k])
@@ -1131,22 +1143,19 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
         "status_log_period_s": float(lidar.get("status_log_period_s", 60.0)),
         "deskew.enable": deskew_enable,
         "deskew.motion_frame": motion_frame,
+        "deskew.odom_topic": str(deskew.get("odom_topic", "/ekf/odometry")),
+        "deskew.pose_buffer_s": float(deskew.get("pose_buffer_s", 1.0)),
         "deskew.reference": str(
             deskew.get("reference", deskew.get("deskew_reference", "end"))
         ),
-        "deskew.tf_lookup_timeout_s": float(
-            deskew.get("tf_lookup_timeout_s", deskew.get("tf_lookup_timeout", 0.0))
-        ),
         "deskew.warn_ms": float(deskew.get("warn_ms", 40.0)),
-        "deskew.tf_buffer_duration_s": float(
-            deskew.get("tf_buffer_duration_s", deskew.get("tf_buffer_duration", 10.0))
-        ),
+        "deskew.wire_latency_ms": float(deskew.get("wire_latency_ms", 20.0)),
     }
     print(
         f"[hound_core] lidar_mesh_composite ENABLED: backend={params['lidar_backend']} "
         f"lidar_ip={params['lidar_ip'] or '(n/a)'} "
         f"cloud={params['cloud_topic']} deskew={'on' if deskew_enable else 'off'} "
-        f"motion={motion_frame}"
+        f"odom={params['deskew.odom_topic']} motion={motion_frame}"
     )
     return Node(
         package="composite_sensing",
@@ -1158,7 +1167,7 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
 
 
 def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
-    """Standalone Embree constant-twist mesh particle filter."""
+    """Standalone constant-twist mesh particle filter (Vulkan RT / Embree)."""
     lidar = lidar or {}
     xyz = mesh_pf.get("xyz") or lidar.get("xyz") or [0.0, 0.0, 0.1]
     rpy = mesh_pf.get("rpy") or lidar.get("rpy") or [180.0, -15.0, 0.0]
@@ -1179,6 +1188,7 @@ def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
         "num_particles": int(mesh_pf.get("num_particles", 2000)),
         "beam_samples": int(mesh_pf.get("beam_samples", 64)),
         "global_init_on_start": bool(mesh_pf.get("global_init_on_start", True)),
+        "raycast_backend": str(mesh_pf.get("raycast_backend", "auto")),
         "init_bb.xmin": float(bb.get("xmin", -20.0)),
         "init_bb.ymin": float(bb.get("ymin", -20.0)),
         "init_bb.zmin": float(bb.get("zmin", 0.0)),
@@ -1202,6 +1212,7 @@ def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
 def build_bag_recorder_node(bag: dict) -> Node:
     params = {
         "bagdir": str(bag.get("bagdir", "/root/colcon_ws/bags/")),
+        "record_all_topics": bool(bag.get("record_all_topics", True)),
         "record_topics_file": str(
             bag.get(
                 "record_topics_file",
@@ -1217,9 +1228,10 @@ def build_bag_recorder_node(bag: dict) -> Node:
             bag.get("notification_topic", "/hound_fcu_control/play_tune")
         ),
     }
+    mode = "all (-a)" if params["record_all_topics"] else "topics file"
     print(
         f"[hound_core] bag_recorder ENABLED: trigger={params['record_topic']} "
-        f"bagdir={params['bagdir']}"
+        f"bagdir={params['bagdir']} mode={mode}"
     )
     return Node(
         package="hound_core",

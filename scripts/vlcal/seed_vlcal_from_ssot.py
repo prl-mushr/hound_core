@@ -7,7 +7,7 @@ Skips the manual picking GUI when mounts are already in SSoT. Computes
 
 Chain:
   base_link → lidar          (lidar.xyz/rpy)
-  base_link → camera_front   (hal_monitor.camera pos/rot)
+  base_link → camera_front   (stereo_composite.cameras.camera_front xyz/rpy)
   camera_front → side cams   (stereo_composite.cameras.* xyz/rpy)
 
 Examples:
@@ -28,7 +28,6 @@ import yaml
 from apply_vlcal_to_ssot import (
     CAMERAS,
     R_to_quat_xyzw,
-    T_from_xyz_quat,
     T_from_xyz_rpy_deg,
     T_inv,
     default_T_link_optical,
@@ -51,16 +50,19 @@ def T_lidar_camera_from_ssot(ssot: dict, camera: str, *, use_tf: bool) -> "objec
         list(lidar.get("rpy") or [0.0, 0.0, 0.0]),
     )
 
-    hal = (ssot.get("hal_monitor") or {}).get("camera") or {}
-    if not hal.get("pos") or not hal.get("rot"):
-        raise ValueError("hal_monitor.camera pos/rot required in SSoT")
-
-    T_base_front = T_from_xyz_quat(list(hal["pos"]), list(hal["rot"]))
+    cams = (ssot.get("stereo_composite") or {}).get("cameras") or {}
+    front = cams.get("camera_front")
+    if not front:
+        raise ValueError("stereo_composite.cameras.camera_front missing in SSoT")
+    T_base_front = T_from_xyz_rpy_deg(
+        list(front.get("xyz") or [0.0, 0.0, 0.0]),
+        list(front.get("rpy") or [0.0, 0.0, 0.0]),
+    )
 
     if camera == "camera_front":
         T_base_cam = T_base_front
     else:
-        side = (ssot.get("stereo_composite") or {}).get("cameras", {}).get(camera)
+        side = cams.get(camera)
         if not side:
             raise ValueError(f"stereo_composite.cameras.{camera} missing in SSoT")
         T_front_side = T_from_xyz_rpy_deg(

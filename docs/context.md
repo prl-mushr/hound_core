@@ -210,13 +210,23 @@ Offline (no HW): `bash /root/colcon_ws/src/hound_core/scripts/smoke_dataset_pipe
 
 ---
 
+## 7b. Known limitations (also noted in `SSoT.yaml`)
+
+**cuVSLAM overconfidence / glitches.** On large motions, cuVSLAM can lose orientation yet keep tracking in a new reference frame (still high confidence). With VSLAM as the only positioning source, those jumps are hard to detect (EKF tilt re-align helps but is not a second pose). Prefer multi-cam VSLAM or an absolute aid (GPS / mesh ICP). GPS disagreement checks should be easier once fused; **mocap validation is planned** when the setup is available.
+
+**nvblox color projection.** Color into the TSDF often looks wrong (missing / magenta / misaligned on occupied voxels). Root cause unclear (`camera_info`, TF timing, projective integrate vs LiDAR surface, QoS, …). Do not treat `~/tsdf_voxels` color as ground truth until investigated under controlled replay.
+
+**Bag recording.** `hal_monitor` publishes `Bool` on `/hal/record` from RC (1-based `record_rc_channel`, thresholds like [legacy HAL_9000](https://github.com/prl-mushr/hound_core/blob/main/src/HAL_9000.py)). `bag_recorder` runs `ros2 bag record -a` when `record_all_topics: true` (storage-heavy; prune via topics file later).
+
+---
+
 ## 8. SSoT block → package map
 
 | SSoT key | Packages / notes |
 |----------|------------------|
 | `stereo_composite` | `composite_sensing` (cuVSLAM + RealSense) |
 | `lidar` | `composite_sensing` + built `Livox-SDK2` (or Unitree path) |
-| `mesh_pf` | `composite_sensing` + Embree |
+| `mesh_pf` | `composite_sensing` (Vulkan RT / Embree) |
 | `fcu_control` | `hound_core` FCU node; embeds VESC via `vesc_ros2`; EKF via `inertial_nav_*` |
 | `nvblox` | `hound_mapping` (`mapping_node`) — SSoT key name is historical |
 | `segmentation` / `yolo_world` | `perception_models` (Dora) + `nanosam-src` |

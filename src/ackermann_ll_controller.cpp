@@ -316,8 +316,10 @@ float AckermannLlController::steering_limiter(float steering_setpoint, bool & in
 
 void AckermannLlController::setup_subscriptions(rclcpp::Node & node)
 {
+  const std::string cmd_topic = node.declare_parameter<std::string>(
+    "ll.cmd_topic", "/hound_nav/cmd_ackermann");
   auto_sub_ = node.create_subscription<ackermann_msgs::msg::AckermannDriveStamped>(
-    "hound/control", 10,
+    cmd_topic, rclcpp::SensorDataQoS(),
     [this](const ackermann_msgs::msg::AckermannDriveStamped::SharedPtr msg) {
       update_auto(
         static_cast<float>(msg->drive.steering_angle),

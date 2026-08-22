@@ -352,6 +352,99 @@ def _iter_ssot_cameras(sc: dict) -> list[tuple[str, dict]]:
     return []
 
 
+def _rpy_deg_to_R(rpy_deg):
+    """tf2 / static_transform_publisher: R = Rz(yaw) Ry(pitch) Rx(roll)."""
+    roll, pitch, yaw = (math.radians(float(v)) for v in rpy_deg)
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return (
+        (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+        (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+        (-sp, cp * sr, cp * cr),
+    )
+
+
+def _R_to_rpy_deg(R):
+    r20 = max(-1.0, min(1.0, R[2][0]))
+    pitch = math.asin(-r20)
+    if abs(r20) < 0.999999:
+        roll = math.atan2(R[2][1], R[2][2])
+        yaw = math.atan2(R[1][0], R[0][0])
+    else:
+        roll = 0.0
+        yaw = math.atan2(-R[0][1], R[1][1])
+    return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
+
+
+def _matmul3(a, b):
+    return tuple(
+        tuple(a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] for j in range(3))
+        for i in range(3)
+    )
+
+
+def _compose_se3(xyz_ab, rpy_ab, xyz_bc, rpy_bc):
+    """T_ac = T_ab * T_bc. xyz m, rpy deg."""
+    Rab = _rpy_deg_to_R(rpy_ab)
+    Rbc = _rpy_deg_to_R(rpy_bc)
+    Rac = _matmul3(Rab, Rbc)
+    tbc = (float(xyz_bc[0]), float(xyz_bc[1]), float(xyz_bc[2]))
+    tab = (float(xyz_ab[0]), float(xyz_ab[1]), float(xyz_ab[2]))
+    tac = (
+        Rab[0][0] * tbc[0] + Rab[0][1] * tbc[1] + Rab[0][2] * tbc[2] + tab[0],
+        Rab[1][0] * tbc[0] + Rab[1][1] * tbc[1] + Rab[1][2] * tbc[2] + tab[1],
+        Rab[2][0] * tbc[0] + Rab[2][1] * tbc[1] + Rab[2][2] * tbc[2] + tab[2],
+    )
+    return [tac[0], tac[1], tac[2]], _R_to_rpy_deg(Rac)
+
+
+def _cam_link_frame(key: str, cam: dict) -> str:
+    name = str(cam.get("camera_name") or cam.get("name") or key).strip()
+    return str(cam.get("link_frame") or f"{name}_link")
+
+
+def _resolve_vslam_body_mount(
+    cams: list[tuple[str, dict]],
+    cam: dict,
+    *,
+    camera_name: str,
+    body_frame: str,
+    default_parent: str,
+) -> tuple[list[float], list[float]]:
+    """Compose SSoT parent-chain TFs into T_body_cam (xyz m, rpy deg).
+
+    Side cams store xyz/rpy as parent→cam (usually camera_front_link).
+    VSLAM body mount must be base_link←cam.
+    """
+    xyz = [float(v) for v in (cam.get("xyz") or [0.0, 0.0, 0.0])]
+    rpy = [float(v) for v in (cam.get("rpy") or [0.0, 0.0, 0.0])]
+    parent = str(cam.get("parent_frame") or default_parent)
+    by_link = {_cam_link_frame(k, c): c for k, c in cams}
+    seen = set()
+    while parent and parent != body_frame:
+        if parent in seen:
+            print(f"[hound_core] VSLAM mount: parent cycle at {parent}")
+            break
+        seen.add(parent)
+        pcam = by_link.get(parent)
+        if pcam is None:
+            print(
+                f"[hound_core] VSLAM mount: cannot walk {parent} → {body_frame} "
+                f"for {camera_name}; using partial compose"
+            )
+            break
+        p_xyz = pcam.get("xyz") or [0.0, 0.0, 0.0]
+        p_rpy = pcam.get("rpy") or [0.0, 0.0, 0.0]
+        xyz, rpy = _compose_se3(p_xyz, p_rpy, xyz, rpy)
+        parent = str(pcam.get("parent_frame") or default_parent)
+    print(
+        f"[hound_core] VSLAM body mount {body_frame} ← {camera_name} "
+        f"xyz={[round(v, 6) for v in xyz]} rpy_deg={[round(v, 3) for v in rpy]}"
+    )
+    return xyz, rpy
+
+
 def _camera_extrinsic_tf(
     cam: dict,
     *,
@@ -411,6 +504,8 @@ def _cam_node_params(
     need_color: bool,
     need_depth: bool,
     camera_backend: str,
+    all_cams: list[tuple[str, dict]] | None = None,
+    default_parent: str | None = None,
 ) -> dict:
     """Merge top-level stereo_composite defaults with one cameras.* entry."""
     serial = str(
@@ -506,6 +601,7 @@ def _cam_node_params(
             cam.get("initial_reset", sc.get("initial_reset", False))
         ),
         "odom_topic": str(sc.get("odom_topic", "/visual_slam/tracking/odometry")),
+        "odom_publish_hz": float(sc.get("odom_publish_hz", 0.0)),
         "odom_frame": str(sc.get("odom_frame", "odom")),
         "base_frame": base_frame,
         "publish_odom_tf": bool(sc.get("publish_odom_tf", False)),
@@ -531,12 +627,23 @@ def _cam_node_params(
             params["color_sync_role"] = "follower"
             params["color_sync_shm_name"] = shm
     if enable_vslam:
-        params["xyz.x"] = float(xyz[0])
-        params["xyz.y"] = float(xyz[1])
-        params["xyz.z"] = float(xyz[2])
-        params["rpy.roll"] = float(rpy_deg[0])
-        params["rpy.pitch"] = float(rpy_deg[1])
-        params["rpy.yaw"] = float(rpy_deg[2])
+        mount_xyz, mount_rpy = xyz, rpy_deg
+        if all_cams:
+            mount_xyz, mount_rpy = _resolve_vslam_body_mount(
+                all_cams,
+                cam,
+                camera_name=camera_name,
+                body_frame=body_frame,
+                default_parent=str(
+                    default_parent or sc.get("parent_frame") or body_frame
+                ),
+            )
+        params["xyz.x"] = float(mount_xyz[0])
+        params["xyz.y"] = float(mount_xyz[1])
+        params["xyz.z"] = float(mount_xyz[2])
+        params["rpy.roll"] = float(mount_rpy[0])
+        params["rpy.pitch"] = float(mount_rpy[1])
+        params["rpy.yaw"] = float(mount_rpy[2])
     return params
 
 
@@ -606,15 +713,15 @@ def _build_stereo_composite_node(
         names = [
             str(c.get("camera_name") or c.get("name") or k) for k, c in cams
         ]
-        print(
+    print(
             f"[hound_core] stereo_composite dataset_replay: {dataset} "
             f"cameras={names or ['front', 'left', 'right']}"
-        )
-        return Node(
+    )
+    return Node(
             package="composite_sensing",
             executable="multicam_rail_replay",
             name="multicam_rail_replay",
-            output="screen",
+        output="screen",
             parameters=[
                 {
                     "dataset": dataset,
@@ -721,6 +828,8 @@ def _build_stereo_composite_actions(
             need_color=need_color,
             need_depth=need_depth,
             camera_backend=camera_backend,
+            all_cams=cams,
+            default_parent=parent,
         )
         safe = camera_name.replace("/", "_")
         actions.append(
@@ -728,13 +837,11 @@ def _build_stereo_composite_actions(
                 sc, params, node_name=f"stereo_composite_{safe}"
             )
         )
-        is_vslam_cam = vslam_link is not None and f"{camera_name}_link" == vslam_link
         tf = _camera_extrinsic_tf(
             cam,
             camera_name=camera_name,
             default_parent=parent,
             skip_child=(vslam_odom_child if publish_odom_tf else None),
-            body_frame=(body_frame if is_vslam_cam else None),
         )
         if tf is not None:
             actions.append(tf)
@@ -790,7 +897,9 @@ def _build_vesc_actions(vesc: dict) -> list:
     return nodes
 
 
-def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
+def _build_fcu_control_node(
+    fc: dict, vesc: dict | None = None, nav_cmd_topic: str | None = None
+) -> Node:
     """In-process MAVLink router + EKF + pluggable LL (+ optional VESC / NTRIP)."""
     origin = fc.get("ext_nav_origin") or {}
     fcu_params = fc.get("fcu_params") or {}
@@ -811,6 +920,7 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
         "enable_baro": bool(fc.get("enable_baro", True)),
         "enable_mag": bool(fc.get("enable_mag", True)),
         "enable_gps": bool(fc.get("enable_gps", True)),
+        "fuse_mag": bool(fc.get("fuse_mag", True)),
         "fuse_gps": bool(fc.get("fuse_gps", False)),
         "vision_odom_topic": str(
             fc.get("vision_odom_topic", "/visual_slam/tracking/odometry")
@@ -823,6 +933,9 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
         "ekf_odom_hz": int(fc.get("ekf_odom_hz", 50)),
         "mag_max_hz": float(fc.get("mag_max_hz", 20.0)),
         "baro_max_hz": float(fc.get("baro_max_hz", 20.0)),
+        "baro_sigma_m": float(fc.get("baro_sigma_m", 1.0)),
+        "mag_sigma": float(fc.get("mag_sigma", 0.5)),
+        "mag_interference_gain": float(fc.get("mag_interference_gain", 0.0)),
         "delays.gps_pos_ms": int((fc.get("delays_ms") or {}).get("gps_pos", 200)),
         "delays.gps_vel_ms": int((fc.get("delays_ms") or {}).get("gps_vel", 200)),
         "delays.vslam_pos_ms": int((fc.get("delays_ms") or {}).get("vslam_pos", 100)),
@@ -834,6 +947,9 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
         "delays.baro_ms": int((fc.get("delays_ms") or {}).get("baro", 50)),
         "delays.mag_ms": int((fc.get("delays_ms") or {}).get("mag", 25)),
         "ext_nav_align": str(fc.get("ext_nav_align", "gps_compass")),
+        "ext_nav_sticky_gate_nsigma": float(
+            fc.get("ext_nav_sticky_gate_nsigma", 5.0)
+        ),
         "icp_origin_topic": str(
             fc.get("icp_origin_topic", "/localization/icp_origin")
         ),
@@ -873,6 +989,9 @@ def _build_fcu_control_node(fc: dict, vesc: dict | None = None) -> Node:
                 params[f"ll.{key}.{nested_key}"] = nested_value
         else:
             params[f"ll.{key}"] = value
+    params["ll.cmd_topic"] = str(
+        nav_cmd_topic or ll_cfg.get("cmd_topic") or "/hound_nav/cmd_ackermann"
+    )
     print(f"[hound_core] fcu_control ll_controller={ll_controller}")
     return Node(
         package="hound_core",
@@ -968,7 +1087,7 @@ def generate_launch_description():
                             front.get("color_fps", hal_cam["fps"]),
                         )
                     )
-            # Drop legacy bag/RC/TF keys so undeclared params are not passed.
+            # Drop bag_recorder-only keys; keep RC→/hal/record params for HAL.
             hal_clean = {
                 k: v
                 for k, v in hal.items()
@@ -978,10 +1097,7 @@ def generate_launch_description():
                     "bagdir",
                     "record_topics_file",
                     "record_split_duration_min",
-                    "record_rc_channel",
-                    "record_on_threshold",
-                    "record_off_threshold",
-                    "record_topic",
+                    "record_all_topics",
                 )
             }
             if isinstance(hal_clean.get("fcu"), dict):
@@ -1021,7 +1137,7 @@ def generate_launch_description():
 
     fcu_acts = []
     if fcu_control_enabled:
-        fcu_acts = [_build_fcu_control_node(fcu, vesc)]
+        fcu_acts = [_build_fcu_control_node(fcu, vesc, nav.get("cmd_topic"))]
         print("[hound_core] fcu_control ENABLED (mavlink+ekf+ll in-process)")
         if vesc_enabled:
             print(
@@ -1057,7 +1173,7 @@ def generate_launch_description():
     else:
         print("[hound_core] lidar DISABLED")
 
-    # 5b) Mesh PF (Embree) — subscribes to deskewed /livox/cloud
+    # 5b) Mesh PF (Vulkan RT / Embree) — subscribes to deskewed /livox/cloud
     mesh_pf_acts = []
     if mesh_pf_enabled:
         mesh_pf_acts = [build_mesh_pf_node(mesh_pf, lidar)]

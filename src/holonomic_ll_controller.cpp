@@ -264,8 +264,10 @@ LlStatus HolonomicLlController::tick_imu(const ImuSample & imu)
 
 void HolonomicLlController::setup_subscriptions(rclcpp::Node & node)
 {
+  const std::string cmd_topic = node.declare_parameter<std::string>(
+    "ll.cmd_topic", "/hound_nav/cmd_ackermann");
   auto_sub_ = node.create_subscription<geometry_msgs::msg::Twist>(
-    "hound/control", 10,
+    cmd_topic, rclcpp::SensorDataQoS(),
     [this, &node](const geometry_msgs::msg::Twist::SharedPtr msg) {
       update_auto_cmd_vel(
         static_cast<float>(msg->linear.x),

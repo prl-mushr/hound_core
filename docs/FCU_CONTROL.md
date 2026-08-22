@@ -99,6 +99,7 @@ Also:
 | `~/ekf_reset` (sub) | `std_msgs/Empty` → hard-reset EKF (kill worker thread + relaunch fresh filter) |
 | `/low_level_diagnostics` | LL status |
 | `/control_limits` | Ackermann only (from AckermannLlController) |
+| `nav.cmd_topic` (sub, ackermann) | `AckermannDriveStamped` from MPPI — param `ll.cmd_topic`, default `/hound_nav/cmd_ackermann` |
 
 ### EKF measurement delays (`fcu_control.delays_ms`)
 
@@ -110,6 +111,14 @@ Per-source fusion delays (ms) for state recall at `IMUmsec - delay`. Tune indepe
 | `vslam_pos` / `vslam_vel` / `vslam_yaw` | Ext-nav slot 0 (VSLAM) |
 | `icp_pos` / `icp_vel` / `icp_yaw` | Ext-nav slot 1 (reserved; ICP is align-only today) |
 | `baro` / `mag` | Baro height / magnetometer |
+
+### EKF measurement noise (`fcu_control`)
+
+| Key | Default | Applied to |
+|-----|---------|------------|
+| `baro_sigma_m` | 1.0 | Baro height sigma (m) → `BaroSigma` / `R_hgt` |
+| `mag_sigma` | 0.5 | Mag observation sigma (scaled field) → `magMeasurementSigma` |
+| `mag_interference_gain` | 0.0 | Inflate `R_MAG` by `(1 + gain * ((|B|/B0)-1)^2)` when `|B|` leaves expected earth field (µT). `0` disables. |
 
 ### Bus freshness (GPS / VSLAM / ICP)
 

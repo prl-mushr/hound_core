@@ -32,6 +32,7 @@ class BagRecorderNode(Node):
             "record_topics_file",
             "/root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt",
         )
+        self.declare_parameter("record_all_topics", True)
         self.declare_parameter("record_split_duration_min", 5)
         self.declare_parameter("record_topic", "/hal/record")
         self.declare_parameter("recording_status_topic", "/hal/recording")
@@ -42,6 +43,7 @@ class BagRecorderNode(Node):
         self._recording_state = False
         self._rosbag_proc: Optional[subprocess.Popen] = None
         self._record_cmd: List[str] = []
+        self._record_all = bool(self.get_parameter("record_all_topics").value)
         self._load_record_topics()
 
         latch_qos = QoSProfile(
@@ -63,17 +65,25 @@ class BagRecorderNode(Node):
             self._record_cb,
             10,
         )
+        mode = (
+            "ALL topics (-a)"
+            if self._record_all
+            else f"{len(self._record_topics)} topics from file"
+        )
         self.get_logger().info(
-            f"Bag recorder online (trigger={self.get_parameter('record_topic').value})"
+            f"Bag recorder online (trigger={self.get_parameter('record_topic').value}, "
+            f"{mode})"
         )
 
     def _load_record_topics(self) -> None:
+        self._record_topics: List[str] = []
+        if self._record_all:
+            return
         topics_file = Path(str(self.get_parameter("record_topics_file").value))
         if not topics_file.is_file():
             self.get_logger().warning(
                 f"Record topics file not found: {topics_file}"
             )
-            self._record_topics: List[str] = []
             return
         self._record_topics = [
             line.strip()
@@ -109,8 +119,16 @@ class BagRecorderNode(Node):
             output,
             "--max-bag-duration",
             str(split_min * 60),
-            *self._record_topics,
         ]
+        if self._record_all:
+            self._record_cmd.append("-a")
+        else:
+            if not self._record_topics:
+                self.get_logger().error(
+                    "record_all_topics=false and topic list empty; not starting"
+                )
+                return
+            self._record_cmd.extend(self._record_topics)
         self.get_logger().info(f"Starting bag record: {' '.join(self._record_cmd)}")
         self._rosbag_proc = subprocess.Popen(self._record_cmd)
         self._publish_notification("record start")

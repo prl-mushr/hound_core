@@ -4,8 +4,7 @@
 Reads each camera's preprocessed/calib.json ``results.T_lidar_camera``
 (x, y, z, qx, qy, qz, qw) where p_lidar = T_lidar_camera * p_camera and
 camera = color optical frame. Emits base_link→{cam}_link as xyz (m) + rpy (deg)
-into hal_monitor + stereo_composite.cameras.camera_front, and side mounts
-relative to camera_front_link.
+into stereo_composite.cameras.* (and legacy hal_monitor.camera pos/rot if present).
 
 Default: dry-run print. Pass --write to patch SSoT.yaml.
 
@@ -249,6 +248,7 @@ def patch_ssot_text(
 def _replace_hal_camera_pose(
     text: str, xyz: List[float], quat_xyzw: List[float]
 ) -> str:
+    """Patch hal_monitor.camera pos/rot if present; no-op when HAL only monitors FPS."""
     lines = text.splitlines(keepends=True)
     out: List[str] = []
     in_hal = False
@@ -258,12 +258,14 @@ def _replace_hal_camera_pose(
         if line.startswith("hal_monitor:"):
             in_hal = True
             in_cam = False
-        elif in_hal and line.startswith("segmentation:"):
+        elif in_hal and line and not line.startswith(" ") and not line.startswith("#"):
+            # Top-level key after hal_monitor
             in_hal = False
             in_cam = False
         elif in_hal and line.startswith("  camera:"):
             in_cam = True
-        elif in_hal and in_cam and line.startswith("  vesc:"):
+        elif in_hal and in_cam and line.startswith("  ") and not line.startswith("    ") and line.strip().endswith(":"):
+            # Sibling of camera under hal_monitor (e.g. vesc:)
             in_cam = False
         elif in_hal and in_cam and not replaced_pos and line.lstrip().startswith("pos:"):
             indent = line[: len(line) - len(line.lstrip())]
@@ -276,9 +278,11 @@ def _replace_hal_camera_pose(
             replaced_rot = True
             continue
         out.append(line)
-    if not (replaced_pos and replaced_rot):
-        raise RuntimeError("Failed to patch hal_monitor.camera pos/rot")
-    return "".join(out)
+    if replaced_pos and replaced_rot:
+        return "".join(out)
+    if not replaced_pos and not replaced_rot:
+        return text
+    raise RuntimeError("Failed to patch hal_monitor.camera pos/rot (partial match)")
 
 
 def _replace_camera_mount(
@@ -402,7 +406,7 @@ def main() -> int:
     front_quat = list(R_to_quat_xyzw(T_base_front[:3, :3]))
 
     print("\n=== SSoT mapping ===")
-    print("hal_monitor.camera + stereo_composite.cameras.camera_front")
+    print("stereo_composite.cameras.camera_front")
     print("  (base_link → camera_front_link; EKF owns odom→base_link TF):")
     print(f"  pos/xyz: {fmt_list(front_xyz)}")
     print(f"  rot: {fmt_list(front_quat)}  # xyzw")

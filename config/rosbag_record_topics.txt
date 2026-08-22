@@ -1,4 +1,8 @@
-# Topics recorded when HAL starts a bag from RC (ros2 bag record).
+# Optional topic allow-list when bag_recorder.record_all_topics is false.
+# With record_all_topics: true (default in SSoT), ros2 bag record -a is used
+# and this file is ignored — prune storage later by switching to a list here.
+#
+# Legacy (mavros / single-cam) reference list:
 /camera/color/camera_info
 /camera/color/image_raw
 /camera/infra1/camera_info
@@ -9,7 +13,7 @@
 /low_level_controller/hound/control
 /low_level_diagnostics
 /mavros/battery
-/mavros/global_position/raw/fix
+/mavros/global_position/raw/gps
 /mavros/global_position/raw/satellites
 /mavros/imu/data
 /mavros/imu/data_raw

@@ -121,7 +121,7 @@ RealSense `inverse_plumb_bob` → `plumb_bob` after preprocess.
 
 | Result | SSoT field |
 |--------|------------|
-| `base_link` → `camera_front_link` | `hal_monitor.camera.pos` / `rot` (xyzw) and `stereo_composite.cameras.camera_front.xyz/rpy` |
+| `base_link` → `camera_front_link` | `stereo_composite.cameras.camera_front.xyz/rpy` |
 | `camera_front_link` → `camera_left_link` | `stereo_composite.cameras.camera_left.xyz/rpy` |
 | `camera_front_link` → `camera_right_link` | `stereo_composite.cameras.camera_right.xyz/rpy` |
 

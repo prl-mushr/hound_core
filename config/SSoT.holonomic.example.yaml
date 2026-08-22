@@ -28,6 +28,9 @@ fcu_control:
   ekf_odom_hz: 50
   mag_max_hz: 20.0
   baro_max_hz: 20.0
+  baro_sigma_m: 1.0
+  mag_sigma: 0.5
+  mag_interference_gain: 1.0
   delays_ms:
     gps_pos: 200
     gps_vel: 200

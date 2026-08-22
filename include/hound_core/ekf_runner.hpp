@@ -23,6 +23,8 @@ public:
     bool enable_baro{true};
     bool enable_mag{true};
     bool enable_gps{true};
+    /** Continuous mag fusion after AHRS init. false = mag heading at init only. */
+    bool fuse_mag{true};
     bool fuse_gps{false};
     int ekf_odom_hz{50};
     double mag_max_hz{20.0};
@@ -39,10 +41,24 @@ public:
     uint32_t icp_yaw_delay_ms{80};
     uint32_t baro_delay_ms{50};
     uint32_t mag_delay_ms{25};
-    /** gps_compass | lidar_icp */
+    /** Baro height measurement sigma (m) → AttPosEKF::BaroSigma / R_hgt. */
+    float baro_sigma_m{1.0f};
+    /** Mag measurement sigma (scaled field units) → magMeasurementSigma. */
+    float mag_sigma{0.5f};
+    /**
+     * Inflate R_MAG by (1 + gain * sq(|B|/B0 - 1)) when |B| leaves expected
+     * earth field (µT). 0 disables interference inflation.
+     */
+    float mag_interference_gain{0.0f};
+    /** gps_compass | lidar_icp — selects init_ref only (IMU_AHRS vs EXT_NAV). */
     std::string ext_nav_align{"gps_compass"};
     /** Used only for wait-for-ICP log messages. */
     std::string icp_origin_topic{"/localization/icp_origin"};
+    /**
+     * Ext-nav sticky Mahalanobis n-sigma on consecutive raw pose Δ.
+     * Fail → retune sticky to EKF and drop that sample. Default 5.
+     */
+    float ext_nav_sticky_gate_nsigma{5.0f};
     double ext_nav_origin_lat{0.0};
     double ext_nav_origin_lon{0.0};
     double ext_nav_origin_hgt{0.0};

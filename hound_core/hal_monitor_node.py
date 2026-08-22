@@ -1,7 +1,8 @@
 """Diagnostics monitor for HOUND: health checks, tunes, and control latency.
 
-ROS 2 port of the legacy HAL_9000.py monitor node (recording and TF removed;
-rosbag lives in bag_recorder_node).
+ROS 2 port of the legacy HAL_9000.py monitor node (TF removed).
+Rosbag process lives in bag_recorder_node; this node publishes Bool
+start/stop on /hal/record from an RC channel (legacy stick thresholds).
 Talks to fcu_control via stock ROS messages (no mavros_msgs).
 """
 
@@ -24,7 +25,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, Imu
-from std_msgs.msg import Bool, Float64MultiArray, String, UInt8, UInt32
+from std_msgs.msg import Bool, Float64MultiArray, String, UInt8, UInt16MultiArray, UInt32
 from vesc_msgs.msg import VescStateStamped
 
 _LEGACY_GPU_FREQ_PATHS = (
@@ -84,6 +85,7 @@ class HalMonitorNode(Node):
         self._last_h_acc_mm: Optional[int] = None
         self._last_map_clear = time.time()
         self._gpu_freq_path: Optional[str] = None
+        self._recording_request = False
 
         # Receive-time latency: control_state arrival → cmd arrival (monotonic).
         self._last_control_state_mono: Optional[float] = None
@@ -140,6 +142,23 @@ class HalMonitorNode(Node):
             10,
         )
 
+        self._record_enabled = bool(self.get_parameter("record_enabled").value)
+        if self._record_enabled:
+            self._record_pub = self.create_publisher(
+                Bool, str(self.get_parameter("record_topic").value), 10
+            )
+            self.create_subscription(
+                UInt16MultiArray,
+                str(self.get_parameter("record_rc_topic").value),
+                self._rc_record_cb,
+                10,
+            )
+            self.get_logger().info(
+                "HAL RC record armed: "
+                f"ch={int(self.get_parameter('record_rc_channel').value)} "
+                f"(1-based) → {self.get_parameter('record_topic').value}"
+            )
+
         startup_delay_s = float(self.get_parameter("startup_delay_s").value)
         if startup_delay_s > 0.0:
             self.get_logger().info(
@@ -157,7 +176,7 @@ class HalMonitorNode(Node):
             subprocess.run(shlex.split(failure_action), check=False)
 
         self.create_timer(2.0, self._main_loop_tick)
-        self.get_logger().info("HAL monitor online (diagnostics-only)")
+        self.get_logger().info("HAL monitor online")
 
     def _p(self, name: str):
         return self.get_parameter(name).value
@@ -213,6 +232,40 @@ class HalMonitorNode(Node):
             "jetson_diagnostics.gpu_freq_path",
             "",
         )
+
+        # Legacy HAL_9000.py: channels[3] high→start, low→stop.
+        self.declare_parameter("record_enabled", True)
+        self.declare_parameter("record_topic", "/hal/record")
+        self.declare_parameter("record_rc_topic", "/hound_fcu_control/rc/in")
+        self.declare_parameter("record_rc_channel", 1)  # 1-based
+        self.declare_parameter("record_on_threshold", 1900)
+        self.declare_parameter("record_off_threshold", 1100)
+
+    def _rc_record_cb(self, msg: UInt16MultiArray) -> None:
+        """Mirror legacy HAL_9000 channel stick → bag start/stop Bool."""
+        ch_1based = int(self.get_parameter("record_rc_channel").value)
+        idx = ch_1based - 1
+        if idx < 0 or idx >= len(msg.data):
+            return
+        stick = int(msg.data[idx])
+        on_thr = int(self.get_parameter("record_on_threshold").value)
+        off_thr = int(self.get_parameter("record_off_threshold").value)
+        if not self._recording_request and stick > on_thr:
+            self.get_logger().info(
+                f"RC CH{ch_1based}={stick} → record start"
+            )
+            out = Bool()
+            out.data = True
+            self._record_pub.publish(out)
+            self._recording_request = True
+        elif self._recording_request and stick < off_thr:
+            self.get_logger().info(
+                f"RC CH{ch_1based}={stick} → record stop"
+            )
+            out = Bool()
+            out.data = False
+            self._record_pub.publish(out)
+            self._recording_request = False
 
     def _resolve_gpu_freq_path(self) -> Optional[str]:
         configured = str(self.get_parameter("jetson_diagnostics.gpu_freq_path").value)
@@ -346,6 +399,10 @@ class HalMonitorNode(Node):
             KeyValue(key="gpu_freq_path", value=gpu_path),
             KeyValue(key="fcu_init", value=str(self._fcu_init)),
             KeyValue(key="camera_init", value=str(self._camera_init)),
+            KeyValue(
+                key="recording_request",
+                value=str(self._recording_request),
+            ),
             KeyValue(
                 key="control_state_hz",
                 value=str(round(self._control_state_hz.get_hz(), 2)),
