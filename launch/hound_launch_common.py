@@ -596,7 +596,7 @@ def build_nvblox_node(
 def build_hound_mapping_node(
     nvblox: dict, cam: dict, seg: dict, lidar: dict | None = None
 ) -> Node:
-    """In-house nvblox mapping: LocalMap elev/cost (+ optional OccupancyGrid)."""
+    """In-house nvblox mapping: LocalMap elev/cost."""
     camera_name = str(cam.get("camera_name", "camera"))
     lidar = lidar or {}
     use_people_mask = bool(nvblox.get("use_people_mask", False))
@@ -682,6 +682,7 @@ def build_hound_mapping_node(
         "do_inpaint": bool(nvblox.get("do_inpaint", True)),
         "inpaint_resolution_m": float(nvblox.get("inpaint_resolution_m", 0.25)),
         "inpaint_radius": int(nvblox.get("inpaint_radius", 3)),
+        "elev_median_ksize": int(nvblox.get("elev_median_ksize", 5)),
         "unobserved_luminance": float(nvblox.get("unobserved_luminance", 128.0)),
         "color_weight_min": float(nvblox.get("color_weight_min", 0.001)),
         "color_z_search_half_band_m": float(
@@ -745,6 +746,7 @@ def build_hound_mapping_node(
         "integrate_color_rate_hz": float(nvblox.get("integrate_color_rate_hz", 20.0)),
         "integrate_lidar_rate_hz": float(nvblox.get("integrate_lidar_rate_hz", 10.0)),
         "map_clear_rate_hz": float(nvblox.get("map_clear_rate_hz", 20.0)),
+        "map_clear_topic": str(nvblox.get("map_clear_topic", "~/map_clear")),
         "mapper_rate_hz": float(
             nvblox.get(
                 "mapper_rate_hz",
@@ -839,36 +841,22 @@ def build_hound_mapping_node(
         f"depth_tmpl={params.get('depth_topic_template') or params['depth_topic']} "
         f"color_tmpl={params.get('color_topic_template') or '(per-cam RGB)'} "
         f"mapper_hz={params['mapper_rate_hz']} "
-        f"~/local_map + ~/costmap, clear_r={params['map_clearing_radius_m']}"
+        f"~/local_map, clear_r={params['map_clearing_radius_m']}"
     )
 
-    remappings: list[tuple[str, str]] = []
+    extra: dict = {}
     if bag_replay:
-        # Isolate debug mapper outputs from any live stack topics in the bag.
+        # Namespace moves ~/ pubs (local_map, mesh, voxels, …) under
+        # /debug/hound_mapping/*. Sensor params stay absolute, so bag inputs
+        # are unchanged.
         prefix = str(nvblox.get("bag_replay_topic_prefix", "debug") or "debug").strip(
             "/"
         )
-        out_topics = (
-            "local_map",
-            "costmap",
-            "tsdf_color_cloud",
-            "tsdf_color_mesh",
-            "tsdf_voxels",
-            "lidar_depth_image",
-            "lidar_depth_viz",
-            "lidar_depth_cloud",
-            "lidar_tsdf_probe",
-            "extract_timing_ms",
-            "save_layer_cake",
-        )
-        for t in out_topics:
-            remappings.append(
-                (f"/hound_mapping/{t}", f"/{prefix}/hound_mapping/{t}")
-            )
+        extra["namespace"] = prefix
         params["use_sim_time"] = True
         print(
             f"[hound_core] hound_mapping bag_replay_mode: use_sim_time=true, "
-            f"outputs → /{prefix}/hound_mapping/{{local_map,costmap,...}}"
+            f"outputs → /{prefix}/hound_mapping/{{local_map,...}}"
         )
 
     return Node(
@@ -877,7 +865,7 @@ def build_hound_mapping_node(
         name="hound_mapping",
         output="screen",
         parameters=[params],
-        remappings=remappings,
+        **extra,
     )
 
 
@@ -926,6 +914,9 @@ def build_nav_dora_actions(nav: dict) -> list:
         "goal_topic": str(nav.get("goal_topic", "/goal_pose")),
         "cmd_topic": str(nav.get("cmd_topic", "/hound_nav/cmd_ackermann")),
         "plan_topic": str(nav.get("plan_topic", "/hound_nav/local_plan")),
+        "plan_markers_topic": str(
+            nav.get("plan_markers_topic", "/hound_nav/local_plan_arrows")
+        ),
         "control_rate_hz": ctrl_hz,
         "planner_hz": planner_hz,
         "cruise_speed_mps": float(nav.get("cruise_speed_mps", 10.0)),
@@ -976,7 +967,8 @@ def build_nav_dora_actions(nav: dict) -> list:
     print(
         f"[hound_core] nav ENABLED (dora): map={cfg['local_map_topic']} "
         f"state={cfg['state_topic']} cmd={cfg['cmd_topic']} "
-        f"planner_hz={planner_hz} tick={tick_ms}ms (stack from SSoT nav:)"
+        f"planner_hz={planner_hz} tick={tick_ms}ms "
+        f"cv_viz={cfg['planner_cv_viz']} (stack from SSoT nav:)"
     )
     return [
         ExecuteProcess(

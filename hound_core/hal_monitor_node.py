@@ -86,6 +86,9 @@ class HalMonitorNode(Node):
         self._last_map_clear = time.time()
         self._gpu_freq_path: Optional[str] = None
         self._recording_request = False
+        self._rc_seen = False
+        self._rc_oob_warned = False
+        self._last_rc_log_stick: Optional[int] = None
 
         # Receive-time latency: control_state arrival → cmd arrival (monotonic).
         self._last_control_state_mono: Optional[float] = None
@@ -176,6 +179,8 @@ class HalMonitorNode(Node):
             subprocess.run(shlex.split(failure_action), check=False)
 
         self.create_timer(2.0, self._main_loop_tick)
+        if self._record_enabled:
+            self.create_timer(10.0, self._rc_watchdog)
         self.get_logger().info("HAL monitor online")
 
     def _p(self, name: str):
@@ -241,15 +246,46 @@ class HalMonitorNode(Node):
         self.declare_parameter("record_on_threshold", 1900)
         self.declare_parameter("record_off_threshold", 1100)
 
+    def _rc_watchdog(self) -> None:
+        if self._rc_seen:
+            return
+        topic = str(self.get_parameter("record_rc_topic").value)
+        self.get_logger().warn(
+            f"no RC on {topic} yet — bag start/stop will not fire "
+            f"(waiting for /hound_fcu_control/rc/in after FCU is up)"
+        )
+
     def _rc_record_cb(self, msg: UInt16MultiArray) -> None:
         """Mirror legacy HAL_9000 channel stick → bag start/stop Bool."""
         ch_1based = int(self.get_parameter("record_rc_channel").value)
         idx = ch_1based - 1
+        if not self._rc_seen:
+            dump = ",".join(str(int(v)) for v in msg.data)
+            self.get_logger().info(
+                f"RC first sample n={len(msg.data)} ch=[{dump}] "
+                f"(watch 1-based CH{ch_1based})"
+            )
+            self._rc_seen = True
         if idx < 0 or idx >= len(msg.data):
+            if not self._rc_oob_warned:
+                self.get_logger().error(
+                    f"record_rc_channel={ch_1based} out of range "
+                    f"(nchan={len(msg.data)}); bag RC ignored"
+                )
+                self._rc_oob_warned = True
             return
         stick = int(msg.data[idx])
         on_thr = int(self.get_parameter("record_on_threshold").value)
         off_thr = int(self.get_parameter("record_off_threshold").value)
+        if (
+            self._last_rc_log_stick is None
+            or abs(stick - self._last_rc_log_stick) >= 80
+        ):
+            self.get_logger().info(
+                f"RC CH{ch_1based}={stick} on>{on_thr} off<{off_thr} "
+                f"recording={self._recording_request}"
+            )
+            self._last_rc_log_stick = stick
         if not self._recording_request and stick > on_thr:
             self.get_logger().info(
                 f"RC CH{ch_1based}={stick} → record start"

@@ -43,6 +43,10 @@ public:
     uint32_t mag_delay_ms{25};
     /** Baro height measurement sigma (m) → AttPosEKF::BaroSigma / R_hgt. */
     float baro_sigma_m{1.0f};
+    /** VSLAM / ext-nav measurement sigmas → set_ext_nav_pose R. */
+    float vslam_pos_sigma_m{0.1f};
+    float vslam_yaw_sigma_rad{0.1f};
+    float vslam_vel_sigma_mps{0.2f};
     /** Mag measurement sigma (scaled field units) → magMeasurementSigma. */
     float mag_sigma{0.5f};
     /**

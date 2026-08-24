@@ -359,10 +359,13 @@ void MavlinkBridge::handle_rc_channels(const mavlink::mavlink_message_t & msg)
       m.chan1_raw, m.chan2_raw, m.chan3_raw, m.chan4_raw, m.chan5_raw, m.chan6_raw,
       m.chan7_raw, m.chan8_raw, m.chan9_raw, m.chan10_raw, m.chan11_raw, m.chan12_raw,
       m.chan13_raw, m.chan14_raw, m.chan15_raw, m.chan16_raw, m.chan17_raw, m.chan18_raw};
-    rc.nchan = std::min<uint8_t>(m.chancount, 18);
-    for (uint8_t i = 0; i < rc.nchan; ++i) {
+    // chancount is 0 on some stacks; still copy all 18 raw fields so HAL
+    // can index a configured switch (silent empty ~/rc/in otherwise).
+    rc.nchan = 18;
+    for (uint8_t i = 0; i < 18; ++i) {
       rc.channels[i] = static_cast<float>(chans[i]);
     }
+    (void)m.chancount;
   } else {
     mavlink::common::msg::RC_CHANNELS_RAW m{};
     mavlink::MsgMap map(&msg);

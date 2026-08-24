@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import signal
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -65,6 +66,7 @@ class BagRecorderNode(Node):
             self._record_cb,
             10,
         )
+        self.create_timer(1.0, self._watch_proc)
         mode = (
             "ALL topics (-a)"
             if self._record_all
@@ -106,11 +108,27 @@ class BagRecorderNode(Node):
         msg.data = recording
         self._recording_pub.publish(msg)
 
-    def _start_recording(self) -> None:
+    def _watch_proc(self) -> None:
+        if not self._recording_state or self._rosbag_proc is None:
+            return
+        code = self._rosbag_proc.poll()
+        if code is None:
+            return
+        self.get_logger().error(
+            f"ros2 bag record exited early (code={code}); "
+            "clearing recording state so RC can start again. "
+            "If the dest dir already existed, that is why."
+        )
+        self._rosbag_proc = None
+        self._recording_state = False
+        self._publish_recording_status(False)
+
+    def _start_recording(self) -> bool:
         bagdir = Path(str(self.get_parameter("bagdir").value))
         bagdir.mkdir(parents=True, exist_ok=True)
         split_min = int(self.get_parameter("record_split_duration_min").value)
-        output = str(bagdir / "temp")
+        stamp = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        output = str(bagdir / f"hound_{stamp}")
         self._record_cmd = [
             "ros2",
             "bag",
@@ -127,11 +145,12 @@ class BagRecorderNode(Node):
                 self.get_logger().error(
                     "record_all_topics=false and topic list empty; not starting"
                 )
-                return
+                return False
             self._record_cmd.extend(self._record_topics)
         self.get_logger().info(f"Starting bag record: {' '.join(self._record_cmd)}")
         self._rosbag_proc = subprocess.Popen(self._record_cmd)
         self._publish_notification("record start")
+        return True
 
     def _stop_recording(self) -> None:
         if self._rosbag_proc is not None and self._rosbag_proc.poll() is None:
@@ -143,22 +162,13 @@ class BagRecorderNode(Node):
         self._rosbag_proc = None
         self._publish_notification("record stop")
 
-        bagdir = Path(str(self.get_parameter("bagdir").value))
-        if not bagdir.is_dir():
-            return
-        candidates = sorted(
-            (p for p in bagdir.iterdir() if p.name.startswith("temp")),
-            key=lambda p: p.stat().st_mtime,
-        )
-        for i, path in enumerate(candidates):
-            path.rename(bagdir / f"hound_{i}")
-
     def _record_cb(self, msg: Bool) -> None:
         if msg.data:
             if self._recording_state:
                 return
             self.get_logger().info("Record request: start")
-            self._start_recording()
+            if not self._start_recording():
+                return
             self._recording_state = True
             self._publish_recording_status(True)
         else:

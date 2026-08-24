@@ -360,7 +360,7 @@ def main() -> None:
     )
     sync.registerCallback(on_sync_pair)
     node.create_subscription(
-        LocalMap, args.local_map, on_map, 10  # reliable, match mapping_node
+        LocalMap, args.local_map, on_map, qos_profile_sensor_data
     )
 
     print(

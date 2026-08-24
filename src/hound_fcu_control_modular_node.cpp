@@ -120,6 +120,9 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
     ekf_cfg.baro_delay_ms = baro_delay_ms_;
     ekf_cfg.mag_delay_ms = mag_delay_ms_;
     ekf_cfg.baro_sigma_m = static_cast<float>(baro_sigma_m_);
+    ekf_cfg.vslam_pos_sigma_m = static_cast<float>(vslam_pos_sigma_m_);
+    ekf_cfg.vslam_yaw_sigma_rad = static_cast<float>(vslam_yaw_sigma_rad_);
+    ekf_cfg.vslam_vel_sigma_mps = static_cast<float>(vslam_vel_sigma_mps_);
     ekf_cfg.mag_sigma = static_cast<float>(mag_sigma_);
     ekf_cfg.mag_interference_gain = static_cast<float>(mag_interference_gain_);
     ekf_cfg.ext_nav_align = ext_nav_align_;
@@ -288,6 +291,9 @@ void HoundFcuControlModularNode::declare_params()
   mag_max_hz_ = declare_parameter<double>("mag_max_hz", 20.0);
   baro_max_hz_ = declare_parameter<double>("baro_max_hz", 20.0);
   baro_sigma_m_ = declare_parameter<double>("baro_sigma_m", 1.0);
+  vslam_pos_sigma_m_ = declare_parameter<double>("vslam_pos_sigma_m", 0.1);
+  vslam_yaw_sigma_rad_ = declare_parameter<double>("vslam_yaw_sigma_rad", 0.1);
+  vslam_vel_sigma_mps_ = declare_parameter<double>("vslam_vel_sigma_mps", 0.2);
   mag_sigma_ = declare_parameter<double>("mag_sigma", 0.5);
   mag_interference_gain_ = declare_parameter<double>("mag_interference_gain", 0.0);
   gps_pos_delay_ms_ = static_cast<uint32_t>(

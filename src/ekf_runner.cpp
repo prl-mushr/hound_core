@@ -104,6 +104,13 @@ void fill_ekf_odom_covariance(
   odom.pose.covariance[21] = att_var;
   odom.pose.covariance[28] = att_var;
   odom.pose.covariance[35] = att_var;
+
+  for (double & c : odom.pose.covariance) {
+    c = std::fabs(c);
+  }
+  for (double & c : odom.twist.covariance) {
+    c = std::fabs(c);
+  }
 }
 
 }  // namespace
@@ -295,7 +302,10 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
       q.y = nav.quat_wxyz[2];
       q.z = nav.quat_wxyz[3];
       enu_quat_to_ned_frd(q, body_axes, q_ned);
-      ekf.set_ext_nav_pose(pos_ned, vel_ned, q_ned, 0.1f, 0.1f, 0.2f, true, 0);
+      ekf.set_ext_nav_pose(
+        pos_ned, vel_ned, q_ned,
+        cfg_.vslam_pos_sigma_m, cfg_.vslam_yaw_sigma_rad,
+        cfg_.vslam_vel_sigma_mps, true, 0);
     }
 
     ExtNavStickyGlitchEvent glitch;
@@ -307,6 +317,8 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
         reason = "first_lock";
       } else if (glitch.reason == ExtNavStickyGlitchReason::RawStep) {
         reason = "raw_step";
+      } else if (glitch.reason == ExtNavStickyGlitchReason::FilterReset) {
+        reason = "filter_reset";
       }
       constexpr float kRad2Deg = 180.0f / static_cast<float>(M_PI);
       RCLCPP_WARN(

@@ -88,6 +88,9 @@ private:
   double mag_max_hz_{20.0};
   double baro_max_hz_{20.0};
   double baro_sigma_m_{1.0};
+  double vslam_pos_sigma_m_{0.1};
+  double vslam_yaw_sigma_rad_{0.1};
+  double vslam_vel_sigma_mps_{0.2};
   double mag_sigma_{0.5};
   double mag_interference_gain_{0.0};
   uint32_t gps_pos_delay_ms_{200};
