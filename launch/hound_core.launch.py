@@ -913,7 +913,7 @@ def _build_fcu_control_node(
         "ros_publish_hz": float(fc.get("ros_publish_hz", 50.0)),
         "gcs_block_stream_requests": bool(fc.get("gcs_block_stream_requests", True)),
         "gcs_throttle_hz": float(fc.get("gcs_throttle_hz", 10.0)),
-        "gcs_throttle_msgids": list(fc.get("gcs_throttle_msgids", [27, 30, 31, 32, 33, 65])),
+        "gcs_throttle_msgids": list(fc.get("gcs_throttle_msgids", [26, 30, 31, 32, 33, 65])),
         "send_vision_to_fcu": bool(fc.get("send_vision_to_fcu", True)),
         "enable_ekf": bool(fc.get("enable_ekf", True)),
         "enable_ll": bool(fc.get("enable_ll", True)),

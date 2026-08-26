@@ -678,6 +678,40 @@ def build_hound_mapping_node(
         "local_map_size_m": float(nvblox.get("local_map_size_m", 0.0)),
         "max_integration_distance_m": integ_max,
         "lidar_max_integration_distance_m": lidar_integ_max,
+        "truncation_distance_vox": float(
+            nvblox.get("projective_integrator_truncation_distance_vox", 4.0)
+        ),
+        "projective_max_weight": float(
+            nvblox.get("projective_integrator_max_weight", 5.0)
+        ),
+        "weighting_mode": str(
+            nvblox.get("projective_integrator_weighting_mode", "inverse_square")
+        ),
+        "invalid_depth_decay_factor": float(
+            nvblox.get(
+                "projective_tsdf_integrator_invalid_depth_decay_factor", -1.0
+            )
+        ),
+        "raycast_subsampling_factor": int(
+            nvblox.get("raycast_subsampling_factor", 4)
+        ),
+        "color_max_integration_distance_m": float(
+            nvblox.get("color_integrator_max_integration_distance_m", integ_max)
+        ),
+        "color_sphere_tracer_max_ray_length_m": float(
+            nvblox.get(
+                "color_integrator_sphere_tracer_max_ray_length_m",
+                nvblox.get("color_integrator_max_integration_distance_m", integ_max),
+            )
+        ),
+        "color_sphere_tracing_ray_subsampling_factor": int(
+            nvblox.get(
+                "color_integrator_sphere_tracing_ray_subsampling_factor", 4
+            )
+        ),
+        "color_measurement_weight": float(
+            nvblox.get("color_integrator_measurement_weight", 0.8)
+        ),
         "lethal_slope_deg": float(nvblox.get("lethal_slope_deg", 60.0)),
         "do_inpaint": bool(nvblox.get("do_inpaint", True)),
         "inpaint_resolution_m": float(nvblox.get("inpaint_resolution_m", 0.25)),
@@ -813,6 +847,23 @@ def build_hound_mapping_node(
         "tf_fallback_to_latest": bool(
             nvblox.get("tf_fallback_to_latest", True)
         ),
+        "odom_topic": str(
+            nvblox.get("odom_topic")
+            or ((lidar.get("composite") or {}).get("deskew") or {}).get(
+                "odom_topic"
+            )
+            or (lidar.get("deskew") or {}).get("odom_topic")
+            or "/ekf/odometry"
+        ),
+        "pose_buffer_s": float(
+            nvblox.get(
+                "pose_buffer_s",
+                ((lidar.get("composite") or {}).get("deskew") or {}).get(
+                    "pose_buffer_s", 1.0
+                ),
+            )
+        ),
+        "base_frame": str(nvblox.get("base_frame", "base_link")),
     }
     # launch_ros rejects empty list for array params.
     if len(params["prior_xyz_yaw"]) < 4:
@@ -964,6 +1015,13 @@ def build_nav_dora_actions(nav: dict) -> list:
     df_tf.write(text)
     df_tf.close()
 
+    py_path = os.environ.get("PYTHONPATH", "")
+    env = {
+        "HOUND_NAV_CONFIG": cfg_tf.name,
+        "PYTHONPATH": (
+            str(src_root) + (os.pathsep + py_path if py_path else "")
+        ),
+    }
     print(
         f"[hound_core] nav ENABLED (dora): map={cfg['local_map_topic']} "
         f"state={cfg['state_topic']} cmd={cfg['cmd_topic']} "
@@ -973,7 +1031,7 @@ def build_nav_dora_actions(nav: dict) -> list:
     return [
         ExecuteProcess(
             cmd=["dora", "run", df_tf.name],
-            additional_env={"HOUND_NAV_CONFIG": cfg_tf.name},
+            additional_env=env,
             output="screen",
             name="hound_nav_dora",
         )

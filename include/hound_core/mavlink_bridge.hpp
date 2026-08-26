@@ -36,7 +36,7 @@ public:
     std::string gcs_url;
     bool gcs_block_stream_requests{true};
     double gcs_throttle_hz{10.0};
-    std::vector<int64_t> gcs_throttle_msgids{27, 30, 31, 32, 33, 65};
+    std::vector<int64_t> gcs_throttle_msgids{26, 30, 31, 32, 33, 65};
     bool send_vision_to_fcu{true};
     std::map<std::string, double> fcu_params;
     uint8_t system_id{255};
@@ -81,7 +81,6 @@ private:
   void maybe_forward_to_gcs(const mavlink::mavlink_message_t & msg);
 
   void handle_heartbeat(const mavlink::mavlink_message_t & msg);
-  void handle_raw_imu(const mavlink::mavlink_message_t & msg);
   void handle_scaled_imu(const mavlink::mavlink_message_t & msg);
   void handle_attitude_quat(const mavlink::mavlink_message_t & msg);
   void handle_scaled_pressure(const mavlink::mavlink_message_t & msg);
@@ -91,6 +90,9 @@ private:
   void handle_mission_count(const mavlink::mavlink_message_t & msg);
   void handle_mission_item(const mavlink::mavlink_message_t & msg);
   void handle_param_value(const mavlink::mavlink_message_t & msg);
+  void handle_timesync(const mavlink::mavlink_message_t & msg);
+  void send_timesync();
+  rclcpp::Time stamp_from_fcu_boot_ms(uint32_t time_boot_ms) const;
 
   void push_fcu_params();
   void request_data_streams();
@@ -130,6 +132,10 @@ private:
   uint8_t rtcm_seq_{0};
   /** Last GPS_RAW_INT.time_usec written to the bus (freshness gate). */
   uint64_t last_gps_time_usec_{0};
+
+  /** host_ns - fcu_boot_ns from MAVLink TIMESYNC (ArduPilot tc1 is boot ns). */
+  std::atomic<int64_t> tsync_offset_ns_{0};
+  std::atomic<bool> tsync_valid_{false};
 };
 
 }  // namespace hound_core

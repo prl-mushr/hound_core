@@ -12,7 +12,7 @@ fcu_control:
   ros_publish_hz: 50.0
   gcs_block_stream_requests: true
   gcs_throttle_hz: 5.0
-  gcs_throttle_msgids: [27, 30, 31, 32, 33, 65]
+  gcs_throttle_msgids: [26, 30, 31, 32, 33, 65]
   send_vision_to_fcu: false
   enable_ekf: true
   enable_ll: true

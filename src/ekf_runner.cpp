@@ -226,10 +226,14 @@ void EkfRunner::loop(FcuBus & bus, std::atomic<bool> & running)
     if (!bus.imu.wait_new(last_seq, imu, running)) {
       break;
     }
-    const uint32_t t_ms = stamp_ms(imu.stamp);
+    const uint32_t t_ms =
+      (imu.time_boot_ms != 0U) ? imu.time_boot_ms : stamp_ms(imu.stamp);
     float imu_dt = 0.005f;
     if (have_prev && t_ms > prev_ms && (t_ms - prev_ms) < 100U) {
       imu_dt = static_cast<float>(t_ms - prev_ms) * 0.001f;
+      if (imu_dt < 0.003f) {
+        RCLCPP_WARN(logger_, "imu_dt is less than 0.003s: %f", imu_dt);
+      }
     }
     prev_ms = t_ms;
     have_prev = true;

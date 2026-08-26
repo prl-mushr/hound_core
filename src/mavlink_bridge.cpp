@@ -148,11 +148,11 @@ void MavlinkBridge::on_fcu_message(
     case mavlink::minimal::msg::HEARTBEAT::MSG_ID:
       handle_heartbeat(*msg);
       break;
-    case mavlink::common::msg::RAW_IMU::MSG_ID:
-      handle_raw_imu(*msg);
-      break;
     case mavlink::common::msg::SCALED_IMU::MSG_ID:
       handle_scaled_imu(*msg);
+      break;
+    case mavlink::common::msg::TIMESYNC::MSG_ID:
+      handle_timesync(*msg);
       break;
     case mavlink::common::msg::ATTITUDE_QUATERNION::MSG_ID:
       handle_attitude_quat(*msg);
@@ -221,23 +221,25 @@ void MavlinkBridge::handle_heartbeat(const mavlink::mavlink_message_t & msg)
   bus_->state.write(st);
 }
 
-void MavlinkBridge::handle_raw_imu(const mavlink::mavlink_message_t & msg)
+void MavlinkBridge::handle_scaled_imu(const mavlink::mavlink_message_t & msg)
 {
-  mavlink::common::msg::RAW_IMU raw{};
+  mavlink::common::msg::SCALED_IMU raw{};
   mavlink::MsgMap map(&msg);
   raw.deserialize(map);
 
-  const float gx_frd = static_cast<float>(raw.xgyro * kMilliRsToRadSec);
-  const float gy_frd = static_cast<float>(raw.ygyro * kMilliRsToRadSec);
-  const float gz_frd = static_cast<float>(raw.zgyro * kMilliRsToRadSec);
-  const float ax_frd = static_cast<float>(raw.xacc * kMilliGToMs2);
-  const float ay_frd = static_cast<float>(raw.yacc * kMilliGToMs2);
-  const float az_frd = static_cast<float>(raw.zacc * kMilliGToMs2);
-
   ImuSample s;
-  s.stamp = now();
-  frd_to_flu(gx_frd, gy_frd, gz_frd, s.gx, s.gy, s.gz);
-  frd_to_flu(ax_frd, ay_frd, az_frd, s.ax, s.ay, s.az);
+  s.time_boot_ms = raw.time_boot_ms;
+  s.stamp = stamp_from_fcu_boot_ms(raw.time_boot_ms);
+  frd_to_flu(
+    static_cast<float>(raw.xgyro * kMilliRsToRadSec),
+    static_cast<float>(raw.ygyro * kMilliRsToRadSec),
+    static_cast<float>(raw.zgyro * kMilliRsToRadSec),
+    s.gx, s.gy, s.gz);
+  frd_to_flu(
+    static_cast<float>(raw.xacc * kMilliGToMs2),
+    static_cast<float>(raw.yacc * kMilliGToMs2),
+    static_cast<float>(raw.zacc * kMilliGToMs2),
+    s.ax, s.ay, s.az);
   {
     std::lock_guard<std::mutex> lock(att_mu_);
     if (att_valid_) {
@@ -262,37 +264,6 @@ void MavlinkBridge::handle_raw_imu(const mavlink::mavlink_message_t & msg)
   m.my = my;
   m.mz = mz;
   bus_->mag.write(m);
-}
-
-void MavlinkBridge::handle_scaled_imu(const mavlink::mavlink_message_t & msg)
-{
-  mavlink::common::msg::SCALED_IMU raw{};
-  mavlink::MsgMap map(&msg);
-  raw.deserialize(map);
-
-  ImuSample s;
-  s.stamp = now();
-  frd_to_flu(
-    static_cast<float>(raw.xgyro * kMilliRsToRadSec),
-    static_cast<float>(raw.ygyro * kMilliRsToRadSec),
-    static_cast<float>(raw.zgyro * kMilliRsToRadSec),
-    s.gx, s.gy, s.gz);
-  frd_to_flu(
-    static_cast<float>(raw.xacc * kMilliGToMs2),
-    static_cast<float>(raw.yacc * kMilliGToMs2),
-    static_cast<float>(raw.zacc * kMilliGToMs2),
-    s.ax, s.ay, s.az);
-  {
-    std::lock_guard<std::mutex> lock(att_mu_);
-    if (att_valid_) {
-      s.qw = att_qw_;
-      s.qx = att_qx_;
-      s.qy = att_qy_;
-      s.qz = att_qz_;
-      s.has_orientation = true;
-    }
-  }
-  bus_->imu.write(s);
 }
 
 void MavlinkBridge::handle_attitude_quat(const mavlink::mavlink_message_t & msg)
@@ -471,6 +442,62 @@ void MavlinkBridge::handle_param_value(const mavlink::mavlink_message_t & /*msg*
   // Ack path reserved for future param verify
 }
 
+void MavlinkBridge::handle_timesync(const mavlink::mavlink_message_t & msg)
+{
+  mavlink::common::msg::TIMESYNC t{};
+  mavlink::MsgMap map(&msg);
+  t.deserialize(map);
+
+  if (t.tc1 == 0) {
+    mavlink::common::msg::TIMESYNC reply{};
+    reply.tc1 = static_cast<int64_t>(now().nanoseconds());
+    reply.ts1 = t.ts1;
+    send_to_fcu(reply);
+    return;
+  }
+
+  const int64_t now_ns = static_cast<int64_t>(now().nanoseconds());
+  const int64_t rtt_ns = now_ns - t.ts1;
+  if (rtt_ns < 0 || rtt_ns > 50000000) {
+    return;
+  }
+  // host_ns - fcu_boot_ns; ArduPilot tc1 is AP_HAL::micros64()*1000 (boot ns).
+  const int64_t offset_ns = (t.ts1 + now_ns) / 2 - t.tc1;
+  if (!tsync_valid_.load(std::memory_order_relaxed)) {
+    tsync_offset_ns_.store(offset_ns, std::memory_order_relaxed);
+    tsync_valid_.store(true, std::memory_order_release);
+    RCLCPP_INFO(
+      logger_, "FCU TIMESYNC locked: offset=%.3f ms RTT=%.3f ms",
+      static_cast<double>(offset_ns) * 1.0e-6,
+      static_cast<double>(rtt_ns) * 1.0e-6);
+    return;
+  }
+  const int64_t prev = tsync_offset_ns_.load(std::memory_order_relaxed);
+  tsync_offset_ns_.store(prev + (offset_ns - prev) / 8, std::memory_order_relaxed);
+}
+
+void MavlinkBridge::send_timesync()
+{
+  mavlink::common::msg::TIMESYNC t{};
+  t.tc1 = 0;
+  t.ts1 = static_cast<int64_t>(now().nanoseconds());
+  send_to_fcu(t);
+}
+
+rclcpp::Time MavlinkBridge::stamp_from_fcu_boot_ms(uint32_t time_boot_ms) const
+{
+  if (time_boot_ms == 0U || !tsync_valid_.load(std::memory_order_acquire)) {
+    return now();
+  }
+  const int64_t ns =
+    static_cast<int64_t>(time_boot_ms) * 1000000LL +
+    tsync_offset_ns_.load(std::memory_order_relaxed);
+  if (ns <= 0) {
+    return now();
+  }
+  return rclcpp::Time(static_cast<uint64_t>(ns), RCL_ROS_TIME);
+}
+
 void MavlinkBridge::boot_configure()
 {
   if (boot_done_.exchange(true)) {
@@ -480,6 +507,7 @@ void MavlinkBridge::boot_configure()
   push_fcu_params();
   request_data_streams();
   request_mission_list();
+  send_timesync();
 }
 
 void MavlinkBridge::push_fcu_params()
@@ -506,7 +534,8 @@ void MavlinkBridge::request_data_streams()
       cmd.param2 = (hz > 0.0f) ? (1.0e6f / hz) : -1.0f;
       send_to_fcu(cmd);
     };
-  set_interval(mavlink::common::msg::RAW_IMU::MSG_ID, 200.0f);
+  set_interval(mavlink::common::msg::SCALED_IMU::MSG_ID, 200.0f);
+  set_interval(mavlink::common::msg::RAW_IMU::MSG_ID, 0.0f);
   set_interval(mavlink::common::msg::ATTITUDE_QUATERNION::MSG_ID, 200.0f);
   set_interval(mavlink::common::msg::SCALED_PRESSURE::MSG_ID, 50.0f);
   set_interval(mavlink::common::msg::GPS_RAW_INT::MSG_ID, 200.0f);
@@ -532,6 +561,7 @@ void MavlinkBridge::send_heartbeat()
   hb.custom_mode = 0;
   hb.system_status = static_cast<uint8_t>(mavlink::minimal::MAV_STATE::ACTIVE);
   send_to_fcu(hb);
+  send_timesync();
 }
 
 void MavlinkBridge::send_vision(const ExtNavSample & nav)

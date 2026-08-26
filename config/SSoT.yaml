@@ -57,7 +57,7 @@ stereo_composite:
   log_sensor_rates: false
   profile: false
   visual_preset: 3
-  clip_distance: 4.0
+  clip_distance: 3.0
   initial_reset: false
   align_depth: false
   # Multi-cam color phase sync (POSIX shm, no ROS): front is master; left/right
@@ -207,20 +207,20 @@ fcu_control:
   enabled: true
   ll_controller: ackermann
   fcu_url: "/dev/ttyACM0:921600"
-  # gcs_url: "udp://@10.3.26.77:14550"
+  gcs_url: "udp://@10.18.249.206:14550"
   ros_publish_hz: 50.0
   aux_publish_hz: 10.0
   gcs_block_stream_requests: true
   gcs_throttle_hz: 5.0
-  gcs_throttle_msgids: [27, 30, 31, 32, 33, 65]
+  gcs_throttle_msgids: [26, 30, 31, 32, 33, 65]
   send_vision_to_fcu: false
   enable_ekf: true
   enable_ll: true
   # Height: offset = baroHgt - hgtRef at InitialiseFilter. Fuses with VSLAM Z.
   enable_baro: false
-  enable_mag: true
+  enable_mag: false
   # Mag for AHRS heading at init; false = no continuous FuseMagnetometer.
-  fuse_mag: false
+  fuse_mag: true
   enable_gps: false
   fuse_gps: false
   vision_odom_topic: /visual_slam/tracking/odometry
@@ -232,7 +232,7 @@ fcu_control:
   mag_max_hz: 20.0
   baro_max_hz: 20.0
   # Measurement noise (not in delays_ms). Defaults match prior hardcodes.
-  baro_sigma_m: 0.5         # height sigma (m) → R_hgt / BaroSigma
+  baro_sigma_m: 1.0         # height sigma (m) → R_hgt / BaroSigma
   mag_sigma: 0.5             # scaled-field sigma → magMeasurementSigma
   # VSLAM / ext-nav R (was hardcoded 0.1 / 0.1 / 0.2). vel unused while fuse_vel=false.
   vslam_pos_sigma_m: 0.1     # XYZ + height (m)
@@ -242,7 +242,7 @@ fcu_control:
   # R *= (1 + gain * ((|B|/B0) - 1)^2); B0 from WMM (fallback 49 µT).
   mag_interference_gain: 1.0
   # GPS/VSLAM/ICP: stamp-gated bus write + EKF consume_fresh (no fuse rate cap).
-  # Mag/baro: rate-limited fusion (no usable independent freshness on RAW_IMU mag).
+  # Mag/baro: rate-limited fusion (no independent freshness on SCALED_IMU mag).
   # EKF fusion delays (ms): state recalled at IMUmsec - delay. Per source — tune independently.
   delays_ms:
     gps_pos: 100
@@ -319,13 +319,12 @@ nvblox:
   bag_replay_mode: false
   bag_replay_topic_prefix: debug
   enabled: true
-  # KNOWN ISSUE — color projection into TSDF looks wrong (magenta / missing /
-  # misaligned color on occupied voxels). Root cause unclear (camera_info,
-  # TF timing, projective integrate vs LiDAR TSDF surface, QoS, etc.).
-  # Investigate when a second pose source / mocap is available for controlled
-  # replay; do not treat ~/tsdf_voxels color as ground truth yet.
+  # Color paint range used to follow nvblox library 7 m (TSDF was 40 m).
+  # color_integrator_* below now match camera TSDF range.
+  # Remaining color issues (misaligned / magenta in FOV) may still be camera_info,
+  # TF timing, or projective vs LiDAR TSDF surface.
   # Sensors
-  use_depth: false
+  use_depth: true
   use_color: true
   use_lidar: true
   # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
@@ -342,7 +341,11 @@ nvblox:
   color_info_topic_template: "/{name}/color/camera_info"
   # Frames / TSDF volume
   global_frame: odom
+  base_frame: base_link
   map_clearing_frame_id: base_link
+  # Local T_odom_base ring (same pattern as lidar composite deskew). No /tf lookups.
+  odom_topic: /ekf/odometry
+  pose_buffer_s: 1.0
   map_clearing_radius_m: 32.0
   # Drop live TSDF (new empty mapper). Prior BEV stays.
   # ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty
@@ -350,9 +353,22 @@ nvblox:
   voxel_size: 0.05
   projective_integrator_max_integration_distance_m: 40.0
   lidar_projective_integrator_max_integration_distance_m: 40.0
+  # TSDF fusion (camera + lidar). Library defaults unless noted.
+  projective_integrator_truncation_distance_vox: 5.0
+  projective_integrator_max_weight: 1.0
+  # constant | constant_dropoff | inverse_square | inverse_square_dropoff
+  # | inverse_square_tsdf_distance_penalty | linear_with_max
+  projective_integrator_weighting_mode: linear_with_max
+  projective_tsdf_integrator_invalid_depth_decay_factor: -1.0  # <0 disables
+  raycast_subsampling_factor: 1
+  # Color paint. Was library 7 m / 15 m tracer (TSDF went to 40 m → magenta far voxels).
+  color_integrator_max_integration_distance_m: 40.0
+  color_integrator_sphere_tracer_max_ray_length_m: 40.0
+  color_integrator_sphere_tracing_ray_subsampling_factor: 1
+  color_integrator_measurement_weight: 0.8
   # LocalMap BEV (nav Map_config aliases these)
   elevation_resolution: &local_map_res 0.05
-  local_map_size_m: &local_map_size 16.0
+  local_map_size_m: &local_map_size 20.0
   elev_z_min_rel: -2.0
   elev_z_max_rel: 2.0
   # BEV floor: distance <= this counts as occupied (0 = classic TSDF ≤0).
@@ -377,9 +393,10 @@ nvblox:
   inpaint_radius: 3
   # Median on elev before slope/normals (OpenCV 32F: 3 or 5). 0 = off.
   elev_median_ksize: 5
-  # Rates. Integrate is event-driven (latest frame per sensor, no Hz gate).
-  # mapper/publish/integrate_*_hz are unused leftovers; map_clear is radius trim.
-  mapper_rate_hz: 10.0
+  # Rates. mapper_rate_hz locks the worker (integrate + BEV + sleep) and LocalMap.
+  # Latest sensor frame is taken each tick (no per-sensor Hz gate).
+  # publish/integrate_*_hz are unused leftovers; map_clear is radius trim.
+  mapper_rate_hz: 12.5
   publish_map_rate_hz: 10.0
   map_clear_rate_hz: 10.0
   integrate_depth_rate_hz: 10.0
@@ -400,11 +417,11 @@ nvblox:
   prior_xyz_yaw: [0.0, 0.0, 0.0, 0.0]
   prior_fill_enabled: true
   # Debug pubs (off — were expensive when RViz subscribed)
-  publish_tsdf_color_mesh: true
+  publish_tsdf_color_mesh: false
   tsdf_color_mesh_rate_hz: 1.0
   # Near-surface TSDF voxels (PointCloud2 xyz+rgb from ColorLayer). Magenta =
   # geometry without color weight. Subscribe /hound_mapping/tsdf_voxels in RViz.
-  publish_tsdf_voxels: true
+  publish_tsdf_voxels: false
   tsdf_voxel_rate_hz: 1.0
   tsdf_voxel_min_weight: 0.2
   tsdf_voxel_max_distance_m: 0.0   # 0 → 2×voxel_size

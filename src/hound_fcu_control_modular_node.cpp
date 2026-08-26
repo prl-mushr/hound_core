@@ -262,7 +262,7 @@ void HoundFcuControlModularNode::declare_params()
   gcs_block_stream_requests_ = declare_parameter<bool>("gcs_block_stream_requests", true);
   gcs_throttle_hz_ = declare_parameter<double>("gcs_throttle_hz", 10.0);
   gcs_throttle_msgids_ = declare_parameter<std::vector<int64_t>>(
-    "gcs_throttle_msgids", {27, 30, 31, 32, 33, 65});
+    "gcs_throttle_msgids", {26, 30, 31, 32, 33, 65});
   send_vision_to_fcu_ = declare_parameter<bool>("send_vision_to_fcu", true);
   enable_ekf_ = declare_parameter<bool>("enable_ekf", true);
   enable_ll_ = declare_parameter<bool>("enable_ll", true);

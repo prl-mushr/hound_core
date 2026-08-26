@@ -86,6 +86,8 @@ struct LatestSlot
 struct ImuSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  /** ArduPilot SCALED_IMU.time_boot_ms (FCU boot clock). Used for EKF dt. */
+  uint32_t time_boot_ms{0};
   float gx{0}, gy{0}, gz{0};
   float ax{0}, ay{0}, az{0};
   float qw{1}, qx{0}, qy{0}, qz{0};

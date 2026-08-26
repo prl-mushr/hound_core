@@ -1,0 +1,40 @@
+# HOUND container ROS env. From /root/.bashrc:
+#   source /root/colcon_ws/src/hound_core/config/bashrc_common
+#
+# Compose / docker exec -e still need RMW_IMPLEMENTATION=rmw_zenoh_cpp for
+# non-interactive commands that never source this file.
+
+if [ -f /opt/ros/jazzy/setup.bash ]; then
+  # shellcheck source=/dev/null
+  source /opt/ros/jazzy/setup.bash
+fi
+
+export ROS_WORKSPACE=/root/colcon_ws
+export ISAAC_ROS_WS=/root/colcon_ws
+export HOUND_SSOT=/root/colcon_ws/src/hound_core/config/SSoT.yaml
+export ROS_DOMAIN_ID=0
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+unset CYCLONEDDS_URI
+export HF_HUB_OFFLINE=1
+
+if [ -d /opt/ros/jazzy/share/gxf_isaac_optimizer/gxf/lib ]; then
+  case ":${LD_LIBRARY_PATH:-}:" in
+    *:/opt/ros/jazzy/share/gxf_isaac_optimizer/gxf/lib:*) ;;
+    *) export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/opt/ros/jazzy/share/gxf_isaac_optimizer/gxf/lib" ;;
+  esac
+fi
+
+if [ -f "$ROS_WORKSPACE/install/setup.bash" ]; then
+  # shellcheck source=/dev/null
+  source "$ROS_WORKSPACE/install/setup.bash"
+fi
+
+if command -v ros2 >/dev/null 2>&1 && ! pgrep -x rmw_zenohd >/dev/null 2>&1; then
+  nohup ros2 run rmw_zenoh_cpp rmw_zenohd >/tmp/rmw_zenohd.log 2>&1 &
+  disown
+fi
+
+alias cs='cd "$ROS_WORKSPACE" && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers "$(nproc)" && source "$ROS_WORKSPACE/install/setup.bash"'
+alias clear_map='ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty'
+alias clear_state='ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty'
