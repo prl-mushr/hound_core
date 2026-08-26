@@ -290,7 +290,7 @@ fcu_control:
     # Must match nav.cmd_topic (MPPI publishes here; LL subscribes).
     cmd_topic: /hound_nav/cmd_ackermann
     erpm_gain: 3166.6
-    steering_max: &max_steer_rad 0.488
+    steering_max: &max_steer_rad 0.388
     wheelbase: 0.29
     cg_height: 0.125
     track_width: 0.25
@@ -325,7 +325,7 @@ nvblox:
   # TF timing, or projective vs LiDAR TSDF surface.
   # Sensors
   use_depth: true
-  use_color: true
+  use_color: false
   use_lidar: true
   # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
   # (unobserved_luminance) so camera FOV coverage is visible.
@@ -360,11 +360,11 @@ nvblox:
   # | inverse_square_tsdf_distance_penalty | linear_with_max
   projective_integrator_weighting_mode: linear_with_max
   projective_tsdf_integrator_invalid_depth_decay_factor: -1.0  # <0 disables
-  raycast_subsampling_factor: 1
+  raycast_subsampling_factor: 4
   # Color paint. Was library 7 m / 15 m tracer (TSDF went to 40 m → magenta far voxels).
   color_integrator_max_integration_distance_m: 40.0
   color_integrator_sphere_tracer_max_ray_length_m: 40.0
-  color_integrator_sphere_tracing_ray_subsampling_factor: 1
+  color_integrator_sphere_tracing_ray_subsampling_factor: 4
   color_integrator_measurement_weight: 0.8
   # LocalMap BEV (nav Map_config aliases these)
   elevation_resolution: &local_map_res 0.05
@@ -396,7 +396,7 @@ nvblox:
   # Rates. mapper_rate_hz locks the worker (integrate + BEV + sleep) and LocalMap.
   # Latest sensor frame is taken each tick (no per-sensor Hz gate).
   # publish/integrate_*_hz are unused leftovers; map_clear is radius trim.
-  mapper_rate_hz: 12.5
+  mapper_rate_hz: 10.0
   publish_map_rate_hz: 10.0
   map_clear_rate_hz: 10.0
   integrate_depth_rate_hz: 10.0
@@ -471,7 +471,7 @@ nav:
   plan_topic: /hound_nav/local_plan
   # Timed poses + green/blue arrows (fwd/back). Bag this to replay planner viz.
   plan_markers_topic: /hound_nav/local_plan_arrows
-  planner_hz: 5.0
+  planner_hz: 4.0
   control_rate_hz: 25.0
   cruise_speed_mps: 3.0  # IGHA* goal speed when not stopping
   control_state_dims: 17
@@ -491,7 +491,7 @@ nav:
     u_per_command: 1
     n_iter: 1
 
-  # Init-only; aliases nvblox LocalMap extent/res (live values still from LocalMap msg).
+  # Fixed BEV extent/res (aliases nvblox LocalMap). MPPI reads these at construct.
   Map_config:
     map_size: *local_map_size
     map_res: *local_map_res
@@ -546,12 +546,12 @@ nav:
     unstuck_expansions: 2000
     experiment_info_default:
       resolution: 2.0
-      epsilon: [2.0, 2.0, 1.57, 1.0]
+      epsilon: [0.5, 0.5, 1.57, 1.0]
       LCR: [0.5, 0.5, 0.3925, 1.0]
       tolerance: 0.125
       max_level: 6
       division_factor: 2
-      max_expansions: 300
+      max_expansions: 1000
       hysteresis: 100
       bidirectional: true
       # Optional GPU batching of successor expansions (IGHA*).
@@ -571,7 +571,7 @@ nav:
         throttle_list: [-4.0, -2.0, 0, 2.0, 4.0]
         del_theta: 90.0
         del_vel: 1.0
-        RI: 0.5
+        RI: 0.7
         max_vert_acc: 5.0
         min_vel: 0.0
         max_vel: 4.0

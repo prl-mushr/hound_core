@@ -935,7 +935,7 @@ def build_nav_dora_actions(nav: dict) -> list:
 
     ctrl_hz = float(nav.get("control_rate_hz", 20.0))
     planner_hz = float(nav.get("planner_hz", 5.0))
-    tick_hz = max(ctrl_hz, 50.0)
+    tick_hz = ctrl_hz
     tick_ms = max(10, int(round(1000.0 / max(tick_hz, 1.0))))
     stack_keys = (
         "MPPI_config",
