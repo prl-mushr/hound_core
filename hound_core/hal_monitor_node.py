@@ -18,7 +18,6 @@ from collections import deque
 from pathlib import Path
 from typing import Deque, Optional
 
-import numpy as np
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
@@ -327,6 +326,35 @@ class HalMonitorNode(Node):
         except (OSError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _read_sysfs_mean_scaled(pattern: str, scale: float) -> float:
+        """Average readable sysfs values; skip nodes that return ENODATA."""
+        vals: list[float] = []
+        for path in glob.glob(pattern):
+            try:
+                raw = Path(path).read_text().strip()
+            except OSError:
+                continue
+            if not raw:
+                continue
+            try:
+                vals.append(float(raw) * scale)
+            except ValueError:
+                continue
+        if not vals:
+            return 0.0
+        return float(sum(vals) / len(vals))
+
+    def _read_avg_soc_temp_c(self) -> float:
+        avg = self._read_sysfs_mean_scaled(
+            "/sys/class/thermal/thermal_zone*/temp", 1e-3
+        )
+        if avg > 0.0:
+            return avg
+        return self._read_sysfs_mean_scaled(
+            "/sys/class/hwmon/hwmon*/temp*_input", 1e-3
+        )
+
     def _publish_notification(self, message: str) -> None:
         tune = self.TUNES.get(message)
         if tune is None:
@@ -407,19 +435,10 @@ class HalMonitorNode(Node):
         ):
             return
 
-        temps = os.popen(
-            "cat /sys/devices/virtual/thermal/thermal_zone*/temp"
-        ).readlines()
-        avg_temp = 0.0
-        if temps:
-            avg_temp = float(np.mean([float(t.strip()) * 1e-3 for t in temps]))
-
-        freqs = os.popen(
-            "cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq"
-        ).readlines()
-        avg_cpu = 0.0
-        if freqs:
-            avg_cpu = float(np.mean([float(t.strip()) * 1e-6 for t in freqs]))
+        avg_temp = self._read_avg_soc_temp_c()
+        avg_cpu = self._read_sysfs_mean_scaled(
+            "/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq", 1e-6
+        )
 
         avg_gpu = self._read_gpu_freq_ghz()
         gpu_path = self._gpu_freq_path or ""

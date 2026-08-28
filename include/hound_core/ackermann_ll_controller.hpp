@@ -37,6 +37,9 @@ public:
     float wheelspeed_max{17.0f};
     float nominal_voltage{14.8f};
     float motor_kv{3930.0f};
+    float kv_correction_factor{0.69f};
+    /** EMA weight on measured drag: K_drag = alpha*Kd_meas + (1-alpha)*K_drag. */
+    float kd_alpha{0.2f};
     float speed_control_kp{1.0f};
     float speed_control_ki{1.0f};
     bool safe_mode{true};
@@ -48,6 +51,10 @@ public:
     float throttle_delta{0.02f};
     bool liftoff_oversteer{true};
     float control_dt{0.02f};
+    /** RC ch2 PWM at 0 m/s (semi + auto speed limit). Typical stick-low = 1000. */
+    float throttle_pwm_zero{1500.0f};
+    /** RC ch2 PWM at wheelspeed_max. Typical stick-high = 2000. */
+    float throttle_pwm_full{2000.0f};
   };
 
   struct ManualCommand
@@ -58,22 +65,18 @@ public:
     bool intervention{false};
     float wheelspeed_setpoint{0.0f};
     float steering_setpoint{0.0f};
+    float k_drag{0.0f};
+    float wheelspeed_error{0.0f};
   };
 
   AckermannLlController(MavlinkBridge & bridge, const Params & params);
 
-  void set_params(const Params & params);
-
-  void update_vesc(float erpm, float voltage_input, float duty_cycle, float current_input);
   void update_vesc(const VescSample & vesc) override;
   void update_rc(const RcSample & rc) override;
   void update_mode(const FcuStateSample & state) override;
   void update_auto(float steering_rad, float speed_mps);
   LlStatus tick_imu(const ImuSample & imu) override;
   bool plant_feedback(float & steering_rad, float & wheelspeed_mps) const override;
-
-  float auto_wheelspeed_limit() const;
-  float max_rated_speed() const {return max_rated_speed_;}
 
   /** Wire autonomy + /control_limits (VESC comes from FcuBus). */
   void setup_subscriptions(rclcpp::Node & node);

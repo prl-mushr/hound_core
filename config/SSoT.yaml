@@ -82,8 +82,8 @@ stereo_composite:
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
       parent_frame: base_link
-      xyz: [0.017165, 0.146315, 0.108163]
-      rpy: [-1.524, 1.806, -0.297]
+      xyz: [0.016455, 0.147877, 0.107771]
+      rpy: [0.426, 2.807, 0.232]
       # rpy: [0.0, 0.0, 0.0]
     camera_left:
       camera_name: camera_left
@@ -128,7 +128,7 @@ stereo_composite:
 # Livox Mid-360(S) via composite (SDK in-process). Host NIC on same subnet.
 # base_link → livox_frame (xyz/rpy) is the lidar anchor for vlcal → camera mounts above.
 lidar:
-  enabled: true
+  enabled: false
   backend: livox
   lidar_ip: "192.168.1.138"
   local_ip: "192.168.1.50"
@@ -156,8 +156,10 @@ lidar:
   enable_imu: false
   publish_static_tf: true
   parent_frame: base_link
+  # xyz: [0.0, 0.15, 0.15]
+  # rpy: [178.0, -13.5, 0.0]
   xyz: [0.0, 0.15, 0.15]
-  rpy: [178.0, -13.5, 0.0]
+  rpy: [180.0, -12.5, 0.0]
   imu_xyz: [0.0, 0.0, 0.0]
   imu_rpy: [0.0, 0.0, 0.0]
   composite:
@@ -198,7 +200,7 @@ mesh_pf:
 
 launch:
   # Seconds between enabled bring-up stages. Disabled stages skip the delay.
-  stage_delay_s: 10.0
+  stage_delay_s: 5.0
 
 # In-process FCU: libmavconn + EKF + LL (+ optional VESC / NTRIP).
 # enabled is the master switch — nested vesc/ntrip/ll/ekf are ignored when false.
@@ -218,10 +220,10 @@ fcu_control:
   enable_ll: true
   # Height: offset = baroHgt - hgtRef at InitialiseFilter. Fuses with VSLAM Z.
   enable_baro: false
-  enable_mag: false
+  enable_mag: true
   # Mag for AHRS heading at init; false = no continuous FuseMagnetometer.
-  fuse_mag: true
-  enable_gps: false
+  fuse_mag: false
+  enable_gps: true
   fuse_gps: false
   vision_odom_topic: /visual_slam/tracking/odometry
   ekf_odom_topic: /ekf/odometry
@@ -286,17 +288,43 @@ fcu_control:
   fcu_params:
     SR0_EXTRA1: 200
     SR0_RAW_SENS: 200
-  ll:
-    # Must match nav.cmd_topic (MPPI publishes here; LL subscribes).
+  # ll:
+  #   # Must match nav.cmd_topic (MPPI publishes here; LL subscribes).
+  #   cmd_topic: /hound_nav/cmd_ackermann
+  #   erpm_gain: 3166.6
+  #   steering_max: &max_steer_rad 0.388
+  #   wheelbase: 0.29
+  #   cg_height: 0.125
+  #   track_width: 0.25
+  #   wheelspeed_max: &max_speed_mps 4.0
+  #   nominal_voltage: 14.8
+  #   motor_kv: 3930.0
+  #   kv_correction_factor: 0.69
+  #   kd_alpha: 0.2
+  #   speed_control_kp: 1.0
+  #   speed_control_ki: 1.0
+  #   safe_mode: true
+  #   accel_gain: 1.0
+  #   roll_gain: 0.33
+  #   steer_slack: 0.4
+  #   LPF_tau: 0.2
+  #   throttle_delta: 0.02
+  #   liftoff_oversteer: true
+  #   control_dt: 0.02
+  #   throttle_pwm_zero: 1500.0
+  #   throttle_pwm_full: 2000.0
+  ll: # for the big hound:
     cmd_topic: /hound_nav/cmd_ackermann
-    erpm_gain: 3166.6
-    steering_max: &max_steer_rad 0.388
-    wheelbase: 0.29
-    cg_height: 0.125
-    track_width: 0.25
-    wheelspeed_max: &max_speed_mps 4.0
+    erpm_gain: 2500.0
+    steering_max: &max_steer_rad 0.362
+    wheelbase: 0.552
+    cg_height: 0.228
+    track_width: 0.457
+    wheelspeed_max: &max_speed_mps 5.0
     nominal_voltage: 14.8
-    motor_kv: 3930.0
+    motor_kv: 780.0
+    kv_correction_factor: 0.9
+    kd_alpha: 0.0001
     speed_control_kp: 1.0
     speed_control_ki: 1.0
     safe_mode: true
@@ -304,9 +332,13 @@ fcu_control:
     roll_gain: 0.33
     steer_slack: 0.4
     LPF_tau: 0.2
-    throttle_delta: 0.02
+    throttle_delta: 0.1
     liftoff_oversteer: true
-    control_dt: 0.02
+    control_dt: 0.005
+    # RC ch2: center/trim = 0 m/s, full = wheelspeed_max. Below trim is reverse
+    # in semi (auto speed cap stays ≥0).
+    throttle_pwm_zero: 1500.0
+    throttle_pwm_full: 2000.0
   # In-process VESC UART → FcuBus; edge republishes /sensors/core.
   vesc:
     enabled: true
@@ -318,27 +350,27 @@ nvblox:
   # Offline: use_sim_time + remap mapper pubs to /debug/hound_mapping/*
   bag_replay_mode: false
   bag_replay_topic_prefix: debug
-  enabled: true
+  enabled: false
   # Color paint range used to follow nvblox library 7 m (TSDF was 40 m).
   # color_integrator_* below now match camera TSDF range.
   # Remaining color issues (misaligned / magenta in FOV) may still be camera_info,
   # TF timing, or projective vs LiDAR TSDF surface.
   # Sensors
   use_depth: true
-  use_color: false
+  use_color: true
   use_lidar: true
   # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
   # (unobserved_luminance) so camera FOV coverage is visible.
-  debug_semantic_all_traversable: true
+  debug_semantic_all_traversable: false
   use_people_mask: false
   people_mask_topic: "/segmentation/refined_people_mask"
   # Zero bottom of each depth image before TSDF integrate (lidar untouched).
-  depth_ignore_bottom_fraction: 0.5
+  depth_ignore_bottom_fraction: 0.6
   camera_names: ["camera_front", "camera_left", "camera_right"]
-  # color_topic_template: "/{name}/segmentation/refined_traversability"
-  # color_info_topic_template: "/{name}/segmentation/camera_info"
-  color_topic_template: "/{name}/color/image_raw"
-  color_info_topic_template: "/{name}/color/camera_info"
+  color_topic_template: "/{name}/segmentation/refined_traversability"
+  color_info_topic_template: "/{name}/segmentation/camera_info"
+  # color_topic_template: "/{name}/color/image_raw"
+  # color_info_topic_template: "/{name}/color/camera_info"
   # Frames / TSDF volume
   global_frame: odom
   base_frame: base_link
@@ -360,11 +392,11 @@ nvblox:
   # | inverse_square_tsdf_distance_penalty | linear_with_max
   projective_integrator_weighting_mode: linear_with_max
   projective_tsdf_integrator_invalid_depth_decay_factor: -1.0  # <0 disables
-  raycast_subsampling_factor: 4
+  raycast_subsampling_factor: 1
   # Color paint. Was library 7 m / 15 m tracer (TSDF went to 40 m → magenta far voxels).
-  color_integrator_max_integration_distance_m: 40.0
-  color_integrator_sphere_tracer_max_ray_length_m: 40.0
-  color_integrator_sphere_tracing_ray_subsampling_factor: 4
+  color_integrator_max_integration_distance_m: 12.0
+  color_integrator_sphere_tracer_max_ray_length_m: 12.0
+  color_integrator_sphere_tracing_ray_subsampling_factor: 1
   color_integrator_measurement_weight: 0.8
   # LocalMap BEV (nav Map_config aliases these)
   elevation_resolution: &local_map_res 0.05
@@ -421,7 +453,7 @@ nvblox:
   tsdf_color_mesh_rate_hz: 1.0
   # Near-surface TSDF voxels (PointCloud2 xyz+rgb from ColorLayer). Magenta =
   # geometry without color weight. Subscribe /hound_mapping/tsdf_voxels in RViz.
-  publish_tsdf_voxels: false
+  publish_tsdf_voxels: true
   tsdf_voxel_rate_hz: 1.0
   tsdf_voxel_min_weight: 0.2
   tsdf_voxel_max_distance_m: 0.0   # 0 → 2×voxel_size
@@ -505,17 +537,17 @@ nav:
     D: 0.6
     B: 6.8
     C: 1.5
-    lf: 0.15
-    lr: 0.15
-    Iz: 0.1
+    lf: 0.28
+    lr: 0.28
+    Iz: 0.20
     LPF_tau: 0.5
     LPF_st: 0.5
     LPF_th: 0.5
     res_coeff: 0.01
     drag_coeff: 0.005
-    car_length: 0.33
-    car_width: 0.25
-    cg_height: 0.15
+    car_length: &car_length 0.84
+    car_width: &car_width 0.52
+    cg_height: 0.228
     type: "slip3d"
 
   # Sample steer [rad] and wheelspeed [m/s]; limits from fcu_control.ll anchors.
@@ -561,8 +593,8 @@ nav:
         max_preemptive: 100
       node_info:
         node_type: "kinodynamic"
-        length: 0.3
-        width: 0.25
+        length: *car_length
+        width: *car_width
         map_res: *local_map_res  # overwritten from LocalMap on first pdef
         dt: 0.05
         timesteps: 5
@@ -574,7 +606,7 @@ nav:
         RI: 0.7
         max_vert_acc: 5.0
         min_vel: 0.0
-        max_vel: 4.0
+        max_vel: 5.0
         max_theta: 40.0
         gear_switch_time: 5.0
         hash_theta: false

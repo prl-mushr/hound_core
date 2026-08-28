@@ -34,7 +34,10 @@ if command -v ros2 >/dev/null 2>&1 && ! pgrep -x rmw_zenohd >/dev/null 2>&1; the
   nohup ros2 run rmw_zenoh_cpp rmw_zenohd >/tmp/rmw_zenohd.log 2>&1 &
   disown
 fi
-
+echo 10000 | sudo tee /sys/devices/platform/bus@0/c240000.i2c/i2c-1/1-0040/hwmon/hwmon6/curr4_crit >/dev/null 2>&1
+# sudo ifconfig end0 192.168.1.50 netmask 255.255.255.0
 alias cs='cd "$ROS_WORKSPACE" && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers "$(nproc)" && source "$ROS_WORKSPACE/install/setup.bash"'
 alias clear_map='ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty'
 alias clear_state='ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty'
+alias rviz='rviz2 -d /root/colcon_ws/src/hound_core/config/display_config.rviz'
+alias vlcal='cd /root/colcon_ws/src/hound_core/scripts/vlcal && ./run_vlcal.sh apply_ssot --write'

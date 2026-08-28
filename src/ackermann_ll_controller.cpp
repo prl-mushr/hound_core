@@ -12,21 +12,8 @@ namespace hound_core
 AckermannLlController::AckermannLlController(MavlinkBridge & bridge, const Params & params)
 : bridge_(bridge), p_(params), throttle_slew_(params.throttle_delta)
 {
-  max_rated_speed_ = 2.0f * 0.69f * p_.motor_kv * p_.nominal_voltage / std::fabs(p_.erpm_gain);
-}
-
-void AckermannLlController::set_params(const Params & params)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  p_ = params;
-  throttle_slew_.set_max_delta(p_.throttle_delta);
-  max_rated_speed_ = 2.0f * 0.69f * p_.motor_kv * p_.nominal_voltage / std::fabs(p_.erpm_gain);
-}
-
-float AckermannLlController::auto_wheelspeed_limit() const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  return auto_wheelspeed_limit_;
+  max_rated_speed_ = 2.0f * p_.kv_correction_factor * p_.motor_kv * p_.nominal_voltage /
+    std::fabs(p_.erpm_gain);
 }
 
 void AckermannLlController::lpf(const Vec3 & measurement, Vec3 & estimate)
@@ -48,32 +35,16 @@ void AckermannLlController::rpy_from_quat_wxyz(float w, float x, float y, float 
     1.0f - 2.0f * (q[1] * q[1] + q[2] * q[2]));
 }
 
-void AckermannLlController::update_vesc(
-  float erpm, float voltage_input, float duty_cycle, float current_input)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  vesc_init_ = true;
-  wheelspeed_ = erpm / p_.erpm_gain;
-  voltage_input_ = voltage_input;
-  const float power_applied = std::fabs(duty_cycle * current_input);
-  const float Kd_meas = power_applied / std::max(1.0f, wheelspeed_ * wheelspeed_);
-  K_drag_ = std::min(1.0f, std::max(0.0f, 0.2f * Kd_meas + 0.8f * K_drag_));
-}
-
 void AckermannLlController::update_vesc(const VescSample & vesc)
 {
-  // Same body as float overload (cannot nest — both take mu_).
-  const float erpm = vesc.speed;
-  const float voltage_input = vesc.voltage_input;
-  const float duty_cycle = vesc.duty_cycle;
-  const float current_input = vesc.current_input;
   std::lock_guard<std::mutex> lock(mu_);
   vesc_init_ = true;
-  wheelspeed_ = erpm / p_.erpm_gain;
-  voltage_input_ = voltage_input;
-  const float power_applied = std::fabs(duty_cycle * current_input);
-  const float Kd_meas = power_applied / std::max(1.0f, wheelspeed_ * wheelspeed_);
-  K_drag_ = std::min(1.0f, std::max(0.0f, 0.2f * Kd_meas + 0.8f * K_drag_));
+  wheelspeed_ = vesc.speed / p_.erpm_gain;
+  voltage_input_ = vesc.voltage_input;
+  const float power_applied = std::fabs(vesc.duty_cycle * vesc.current_input);
+  const float Kd_meas = power_applied / std::max(1.0f, fabs(wheelspeed_ * wheelspeed_));
+  K_drag_ = std::min(1.0f, std::max(0.0f,
+    p_.kd_alpha * Kd_meas + (1.0f - p_.kd_alpha) * K_drag_));
 }
 
 void AckermannLlController::update_rc(const RcSample & rc)
@@ -84,8 +55,15 @@ void AckermannLlController::update_rc(const RcSample & rc)
   const float * channels = rc.channels.data();
   std::lock_guard<std::mutex> lock(mu_);
   semi_steering_ = p_.steering_max * ((channels[0] - 1500.0f) / 500.0f);
-  semi_wheelspeed_ = p_.wheelspeed_max * ((channels[2] - 1000.0f) / 1000.0f);
-  auto_wheelspeed_limit_ = p_.wheelspeed_max * ((channels[2] - 1000.0f) / 1000.0f);
+  float throttle_span = p_.throttle_pwm_full - p_.throttle_pwm_zero;
+  if (std::fabs(throttle_span) < 1.0f) {
+    throttle_span = 1000.0f;
+  }
+  const float throttle_frac = std::clamp(
+    (channels[2] - p_.throttle_pwm_zero) / throttle_span, -1.0f, 1.0f);
+  semi_wheelspeed_ = p_.wheelspeed_max * throttle_frac;
+  // Auto cap is forward-only: stick at/below trim → 0, full → wheelspeed_max.
+  auto_wheelspeed_limit_ = p_.wheelspeed_max * std::max(0.0f, throttle_frac);
   channel_init_ = true;
 
   const int mode_switch = static_cast<int>(channels[4]);
@@ -194,6 +172,8 @@ AckermannLlController::ManualCommand AckermannLlController::compute(const ImuSam
   {
     std::lock_guard<std::mutex> lock(mu_);
     last_steering_rad_ = steering_setpoint;
+    out.k_drag = K_drag_;
+    out.wheelspeed_error = wheelspeed_setpoint - wheelspeed_;
   }
 
   out.active = true;
@@ -214,17 +194,19 @@ LlStatus AckermannLlController::tick_imu(const ImuSample & imu)
   if (!cmd.active) {
     return status;
   }
-
   ManualControlCmd mc;
   mc.x = 1000.0f;
   mc.y = -cmd.steering_norm * 1000.0f;
-  mc.z = cmd.throttle_duty * 1000.0f;
+  mc.z = std::max(0.0f, cmd.throttle_duty * 1000.0f);
   mc.r = 1000.0f;
   bridge_.send_manual_control(mc);
 
   status.diagnostics.push_back({"intervention", std::to_string(cmd.intervention)});
   status.diagnostics.push_back({"wheelspeed_setpoint", std::to_string(cmd.wheelspeed_setpoint)});
   status.diagnostics.push_back({"steering_setpoint", std::to_string(cmd.steering_setpoint)});
+  status.diagnostics.push_back({"K_drag", std::to_string(cmd.k_drag)});
+  status.diagnostics.push_back(
+      {"wheelspeed_error", std::to_string(cmd.wheelspeed_error)});
   return status;
 }
 
@@ -247,20 +229,20 @@ float AckermannLlController::speed_controller(float wheelspeed_setpoint)
   const float Kp_speed_error = p_.speed_control_kp * speed_error;
   const float Ki_speed_error_dt = p_.speed_control_ki * speed_error * p_.control_dt;
 
-  speed_proportional_ = std::min(std::max(-0.05f, Kp_speed_error), 0.05f);
+  speed_proportional_ = std::min(std::max(-0.1f, Kp_speed_error), 0.1f);
   speed_integral_ = std::min(
     std::max(-0.025f, Ki_speed_error_dt + speed_integral_), 0.025f);
 
   const float voltage_gain = p_.nominal_voltage / std::max(1.0f, voltage_input_);
-  if (wheelspeed_setpoint < 0.1f * p_.wheelspeed_max) {
+  if (std::fabs(wheelspeed_setpoint) < 0.1f * p_.wheelspeed_max) {
     speed_integral_ = 0.0f;
     speed_proportional_ = 0.0f;
   }
 
   float throttle_duty = voltage_gain * (
-    (1.0f + K_drag_) * (wheelspeed_setpoint / max_rated_speed_) + speed_error +
+    (1.0f + K_drag_) * (wheelspeed_setpoint / max_rated_speed_) + speed_proportional_ +
     speed_integral_);
-  throttle_duty = std::max(throttle_duty, 0.0f);
+  throttle_duty = std::clamp(throttle_duty, -1.0f, 1.0f);
   throttle_duty = throttle_slew_.apply(throttle_duty);
   return throttle_duty;
 }
@@ -342,6 +324,9 @@ AckermannLlController::Params params_from_node(rclcpp::Node & node)
   lp.wheelspeed_max = static_cast<float>(node.declare_parameter("ll.wheelspeed_max", 17.0));
   lp.nominal_voltage = static_cast<float>(node.declare_parameter("ll.nominal_voltage", 14.8));
   lp.motor_kv = static_cast<float>(node.declare_parameter("ll.motor_kv", 3930.0));
+  lp.kv_correction_factor =
+    static_cast<float>(node.declare_parameter("ll.kv_correction_factor", 0.69));
+  lp.kd_alpha = static_cast<float>(node.declare_parameter("ll.kd_alpha", 0.2));
   lp.speed_control_kp = static_cast<float>(node.declare_parameter("ll.speed_control_kp", 1.0));
   lp.speed_control_ki = static_cast<float>(node.declare_parameter("ll.speed_control_ki", 1.0));
   lp.safe_mode = node.declare_parameter("ll.safe_mode", true);
@@ -353,6 +338,10 @@ AckermannLlController::Params params_from_node(rclcpp::Node & node)
   lp.throttle_delta = static_cast<float>(node.declare_parameter("ll.throttle_delta", 0.02));
   lp.liftoff_oversteer = node.declare_parameter("ll.liftoff_oversteer", true);
   lp.control_dt = static_cast<float>(node.declare_parameter("ll.control_dt", 0.02));
+  lp.throttle_pwm_zero =
+    static_cast<float>(node.declare_parameter("ll.throttle_pwm_zero", 1500.0));
+  lp.throttle_pwm_full =
+    static_cast<float>(node.declare_parameter("ll.throttle_pwm_full", 2000.0));
   return lp;
 }
 
