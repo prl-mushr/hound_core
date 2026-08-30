@@ -103,6 +103,8 @@ for cam in camera_front camera_left camera_right; do
   ./run_vlcal.sh preprocess "$cam"          # or: preprocess "$cam" "$BAG"
   # GUI: ≥3 right-click pairs → Add → Estimate → Save
   ./run_vlcal.sh initial_guess_manual "$cam"
+  # Existing calib.json T_lidar_camera (refine; no GUI):
+  # ./run_vlcal.sh initial_guess_prior "$cam"
   # Or seed from SSoT mounts (no GUI):
   # ./run_vlcal.sh initial_guess_ssot "$cam"
   ./run_vlcal.sh calibrate "$cam"

@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 import os
 import tempfile
+from pathlib import Path
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
+from launch.actions import ExecuteProcess
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 
@@ -47,6 +49,467 @@ def dump_temp_yaml(data: dict, prefix: str) -> str:
     yaml.safe_dump(data, tf, default_flow_style=False)
     tf.close()
     return tf.name
+
+
+def prefix_ros_topic(topic: str, prefix: str) -> str:
+    """Prepend ``/{prefix}`` to an absolute topic or ``/{name}/...`` template."""
+    p = str(prefix or "").strip().strip("/")
+    t = str(topic or "").strip()
+    if not p or not t:
+        return t
+    if not t.startswith("/"):
+        t = "/" + t
+    return f"/{p}{t}"
+
+
+def flatten_prompts(prompts):
+    if isinstance(prompts, dict):
+        names = list(prompts.keys())
+        flat, gids = [], []
+        for gi, name in enumerate(names):
+            for s in (prompts[name] or []):
+                flat.append(str(s))
+                gids.append(gi)
+        return flat, names, gids
+    flat = [str(p) for p in (prompts or ["a person"])]
+    return flat, flat, list(range(len(flat)))
+
+
+def apply_output_topic_prefix(seg: dict, nvblox: dict, prefix: str) -> None:
+    """Rewrite seg/nvblox *output* topics so bag recordings are not overwritten.
+
+    Camera / lidar / TF subscriptions are left on SSoT names (bag inputs).
+    """
+    p = str(prefix or "").strip().strip("/")
+    if not p:
+        return
+    for key in (
+        "labels_topic",
+        "overlay_topic",
+        "coarse_traversability_topic",
+        "coarse_people_mask_topic",
+        "sam_traversability_topic",
+        "sam_people_mask_topic",
+        "sam_overlay_topic",
+    ):
+        if key in seg and seg[key]:
+            seg[key] = prefix_ros_topic(str(seg[key]), p)
+    for key in (
+        "people_mask_topic",
+        "color_topic",
+        "color_topic_template",
+        "color_info_topic_template",
+    ):
+        raw = nvblox.get(key)
+        if not raw:
+            continue
+        s = str(raw)
+        if key == "people_mask_topic" or "segmentation" in s:
+            nvblox[key] = prefix_ros_topic(s, p)
+    cameras = nvblox.get("cameras")
+    if isinstance(cameras, dict):
+        for key in (
+            "color_template",
+            "info_template",
+            "color_info_template",
+            "color_topic_template",
+            "color_info_topic_template",
+        ):
+            raw = cameras.get(key)
+            if not raw:
+                continue
+            s = str(raw)
+            if "segmentation" in s:
+                cameras[key] = prefix_ros_topic(s, p)
+
+
+_NVBLOX_CAM_META_KEYS = frozenset(
+    {
+        "color_template",
+        "info_template",
+        "depth_template",
+        "depth_info_template",
+        "color_topic_template",
+        "color_info_template",
+        "color_info_topic_template",
+        "depth_topic_template",
+        "depth_info_topic_template",
+    }
+)
+
+
+def validate_image_roi(sensor_name: str, roi: dict) -> None:
+    """ROI fractions must be in [0, 1] and left+right / top+bottom ≤ 1."""
+    roi = roi or {}
+    left = float(roi.get("left", 0.0) or 0.0)
+    right = float(roi.get("right", 0.0) or 0.0)
+    top = float(roi.get("top", 0.0) or 0.0)
+    bottom = float(roi.get("bottom", 0.0) or 0.0)
+    for label, value in (
+        ("left", left),
+        ("right", right),
+        ("top", top),
+        ("bottom", bottom),
+    ):
+        if value < 0.0 or value > 1.0:
+            raise RuntimeError(
+                f"nvblox camera '{sensor_name}' roi.{label}={value} "
+                "must be in [0, 1]"
+            )
+    if left + right > 1.0 + 1e-6:
+        raise RuntimeError(
+            f"nvblox camera '{sensor_name}' roi: left+right="
+            f"{left + right:.3f} > 1"
+        )
+    if top + bottom > 1.0 + 1e-6:
+        raise RuntimeError(
+            f"nvblox camera '{sensor_name}' roi: top+bottom="
+            f"{top + bottom:.3f} > 1"
+        )
+
+
+def _flatten_projective_params(pip: dict, prefix: str, params: dict) -> None:
+    if not isinstance(pip, dict):
+        return
+    int_keys = {
+        "ray_subsampling_factor",
+        "sphere_tracing_ray_subsampling_factor",
+    }
+    for key, value in pip.items():
+        if value is None:
+            continue
+        name = f"{prefix}.{key}"
+        if key in int_keys:
+            params[name] = int(value)
+        elif key == "weighting_mode":
+            params[name] = str(value)
+        elif isinstance(value, bool):
+            params[name] = value
+        elif isinstance(value, (int, float)):
+            params[name] = float(value)
+        else:
+            params[name] = value
+
+
+def apply_nvblox_per_sensor_params(nvblox: dict, params: dict) -> None:
+    """Flatten SSoT ``nvblox.cameras`` / ``nvblox.lidars`` for mapping_node.
+
+    Per-sensor projective settings win over the global
+    ``projective_integrator_*`` keys. Missing camera blocks still use those
+    globals as C++ defaults.
+    """
+    cameras = nvblox.get("cameras")
+    if isinstance(cameras, dict):
+        color_tmpl = cameras.get("color_template") or cameras.get(
+            "color_topic_template"
+        )
+        info_tmpl = (
+            cameras.get("info_template")
+            or cameras.get("color_info_template")
+            or cameras.get("color_info_topic_template")
+        )
+        depth_tmpl = cameras.get("depth_template") or cameras.get(
+            "depth_topic_template"
+        )
+        depth_info_tmpl = cameras.get("depth_info_template") or cameras.get(
+            "depth_info_topic_template"
+        )
+        if color_tmpl:
+            params["color_topic_template"] = str(color_tmpl)
+        if info_tmpl:
+            params["color_info_topic_template"] = str(info_tmpl)
+        if depth_tmpl:
+            params["depth_topic_template"] = str(depth_tmpl)
+        if depth_info_tmpl:
+            params["depth_info_topic_template"] = str(depth_info_tmpl)
+
+        named: list[str] = []
+        for key, val in cameras.items():
+            if key in _NVBLOX_CAM_META_KEYS or not isinstance(val, dict):
+                continue
+            name = str(val.get("name") or key)
+            named.append(name)
+            roi = val.get("roi") or {}
+            validate_image_roi(name, roi)
+            pfx = f"camera.{name}"
+            params[f"{pfx}.use_depth"] = bool(
+                val.get("use_depth", params.get("use_depth", True))
+            )
+            params[f"{pfx}.use_color"] = bool(
+                val.get("use_color", params.get("use_color", True))
+            )
+            params[f"{pfx}.roi.left"] = float(roi.get("left", 0.0) or 0.0)
+            params[f"{pfx}.roi.right"] = float(roi.get("right", 0.0) or 0.0)
+            params[f"{pfx}.roi.top"] = float(roi.get("top", 0.0) or 0.0)
+            params[f"{pfx}.roi.bottom"] = float(roi.get("bottom", 0.0) or 0.0)
+            _flatten_projective_params(
+                val.get("projective_integration_parameters") or {},
+                f"{pfx}.projective",
+                params,
+            )
+
+        existing = [str(x) for x in (params.get("camera_names") or [])]
+        if existing:
+            extra = [n for n in named if n not in existing]
+            params["camera_names"] = existing + extra
+        elif named:
+            params["camera_names"] = named
+
+        if named:
+            depth_flags = []
+            color_flags = []
+            for n in params.get("camera_names", named):
+                cfg = cameras.get(n)
+                if not isinstance(cfg, dict):
+                    continue
+                depth_flags.append(bool(cfg.get("use_depth", True)))
+                color_flags.append(bool(cfg.get("use_color", True)))
+            if depth_flags:
+                params["use_depth"] = any(depth_flags)
+            if color_flags:
+                params["use_color"] = any(color_flags)
+
+    lidars = nvblox.get("lidars")
+    if not isinstance(lidars, dict):
+        return
+    lidar_cfg = lidars.get("lidar") if isinstance(lidars.get("lidar"), dict) else None
+    if lidar_cfg is None:
+        for _key, val in lidars.items():
+            if isinstance(val, dict):
+                lidar_cfg = val
+                break
+    if not isinstance(lidar_cfg, dict):
+        return
+
+    if "use_lidar" in lidar_cfg:
+        params["use_lidar"] = bool(lidar_cfg["use_lidar"])
+    topic = str(lidar_cfg.get("topic") or "").strip()
+    if topic:
+        if not topic.startswith("/"):
+            topic = "/" + topic
+        params["lidar_topic"] = topic
+    for src, dst, caster in (
+        ("width", "lidar_width", int),
+        ("height", "lidar_height", int),
+        ("elevation_below_deg", "lidar_elevation_below_deg", float),
+        ("elevation_above_deg", "lidar_elevation_above_deg", float),
+        ("vertical_fov_rad", "lidar_vertical_fov_rad", float),
+        ("min_valid_range_m", "lidar_min_valid_range_m", float),
+        ("use_lidar_motion_compensation", "use_lidar_motion_compensation", bool),
+    ):
+        if src in lidar_cfg and lidar_cfg[src] is not None:
+            params[dst] = caster(lidar_cfg[src])
+
+    pfx = "lidar.lidar"
+    params[f"{pfx}.use_lidar"] = bool(
+        lidar_cfg.get("use_lidar", params.get("use_lidar", True))
+    )
+    if topic:
+        params[f"{pfx}.topic"] = topic
+    for src in (
+        "width",
+        "height",
+        "elevation_below_deg",
+        "elevation_above_deg",
+        "vertical_fov_rad",
+        "min_valid_range_m",
+        "use_lidar_motion_compensation",
+    ):
+        if src in lidar_cfg and lidar_cfg[src] is not None:
+            params[f"{pfx}.{src}"] = params.get(
+                {
+                    "width": "lidar_width",
+                    "height": "lidar_height",
+                    "elevation_below_deg": "lidar_elevation_below_deg",
+                    "elevation_above_deg": "lidar_elevation_above_deg",
+                    "vertical_fov_rad": "lidar_vertical_fov_rad",
+                    "min_valid_range_m": "lidar_min_valid_range_m",
+                    "use_lidar_motion_compensation": "use_lidar_motion_compensation",
+                }[src],
+                lidar_cfg[src],
+            )
+    _flatten_projective_params(
+        lidar_cfg.get("projective_integration_parameters") or {},
+        f"{pfx}.projective",
+        params,
+    )
+
+
+def build_segmentation_dora_actions(seg: dict) -> list:
+    """Start dora segmentation: rgb_source -> clipseg_encoder -> seg_refine."""
+    import json
+
+    from ament_index_python.packages import get_package_prefix
+
+    prompts_flat, group_names, group_ids = flatten_prompts(
+        seg.get("prompts", ["a person"])
+    )
+    pos_names = [str(x) for x in seg.get("positive_groups", [])]
+    neg_names = [str(x) for x in seg.get("negative_groups", [])]
+    pos_idx = [i for i, n in enumerate(group_names) if n in pos_names]
+    neg_idx = [i for i, n in enumerate(group_names) if n in neg_names]
+    people_idx = [
+        i for i, n in enumerate(group_names) if n not in pos_names and n not in neg_names
+    ]
+
+    queue_size = max(2, int(seg.get("pipeline_queue_size", 3)))
+    cfg = {
+        "model_name": str(seg.get("model", "CIDAS/clipseg-rd16")),
+        "prompts": prompts_flat,
+        "group_names": group_names,
+        "group_ids": group_ids,
+        "suppress_prompts": [str(x) for x in seg.get("suppress_prompts", []) if str(x)],
+        "aggregate": str(seg.get("aggregate", "max")),
+        "clipseg_vision_engine": str(seg.get("clipseg_vision_engine", "") or ""),
+        "clipseg_film_engine": str(seg.get("clipseg_film_engine", "") or ""),
+        "input_res": int(seg.get("input_res", 224)),
+        "threshold": float(seg.get("threshold", 0.3)),
+        "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
+        "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
+        "color_topics": [str(t) for t in (seg.get("color_topics") or [])],
+        "camera_names": [str(t) for t in (seg.get("camera_names") or [])],
+        "dora_rgb_input": bool(seg.get("dora_rgb_input", True)),
+        "ros_io": bool(seg.get("ros_io", True)),
+        "use_ros_edge": bool(seg.get("use_ros_edge", True)),
+        "fanout_identical": bool(seg.get("fanout_identical", False)),
+        "input_hz": float(seg.get("input_hz", 0) or 0),
+        "clipseg_batch_n": int(seg.get("clipseg_batch_n", 1)),
+        "rgb_sync_slop_s": float(seg.get("rgb_sync_slop_s", 0.05) or 0.05),
+        "rgb_sync_mode": str(seg.get("rgb_sync_mode", "latest") or "latest"),
+        "rgb_sync_diag": bool(seg.get("rgb_sync_diag", True)),
+        "rgb_sync_diag_every_s": float(seg.get("rgb_sync_diag_every_s", 5.0) or 5.0),
+        "e2e_log": bool(seg.get("e2e_log", True)),
+        "e2e_log_every_s": float(seg.get("e2e_log_every_s", 60.0) or 60.0),
+        "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
+        "viz_overlay": bool(seg.get("viz_overlay", False)),
+        "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
+        "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
+        "profile": bool(seg.get("profile", False)),
+        "profile_every": int(seg.get("profile_every", 30)),
+        "pipeline_queue_size": queue_size,
+        "use_cuda_streams": bool(seg.get("use_cuda_streams", True)),
+        "publish_coarse_traversability": bool(
+            seg.get("publish_coarse_traversability", True)
+        ),
+        "coarse_traversability_topic": str(
+            seg.get(
+                "coarse_traversability_topic",
+                "/segmentation/coarse_traversability",
+            )
+        ),
+        "coarse_people_mask_topic": str(
+            seg.get(
+                "coarse_people_mask_topic",
+                "/segmentation/coarse_people_mask",
+            )
+        ),
+        "sam_node": bool(seg.get("sam_node", False)),
+        "sam_min_area": float(seg.get("sam_min_area", 0.002)),
+        "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
+        "sam_max_boxes_manip": int(
+            seg.get("sam_max_boxes_manip", seg.get("sam_max_boxes", 6))
+        ),
+        "positive_groups": pos_idx or [0],
+        "negative_groups": neg_idx or [1],
+        "people_groups": people_idx or [2],
+        "traversability_colors": dict(seg.get("traversability_colors") or {}),
+        "traversability_pack_threshold": float(
+            seg.get("traversability_pack_threshold", seg.get("threshold", 0.3))
+        ),
+        "sam_image_encoder": str(
+            seg.get(
+                "sam_image_encoder",
+                "/root/colcon_ws/src/perception_models/data/resnet18_image_encoder_512.engine",
+            )
+        ),
+        "sam_mask_decoder": str(
+            seg.get(
+                "sam_mask_decoder",
+                "/root/colcon_ws/src/perception_models/data/mobile_sam_mask_decoder_batched_512.engine",
+            )
+        ),
+        "sam_image_size": int(seg.get("sam_image_size", 512)),
+        "sam_traversability_topic": str(
+            seg.get("sam_traversability_topic", "/segmentation/refined_traversability")
+        ),
+        "sam_people_mask_topic": str(
+            seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")
+        ),
+        "sam_overlay": bool(seg.get("sam_overlay", False)),
+        "sam_overlay_topic": str(
+            seg.get("sam_overlay_topic", "/segmentation/refined_overlay")
+        ),
+        "yolo_owns_people": bool(seg.get("yolo_owns_people", False)),
+        "yolo_detections_topic": str(
+            seg.get("yolo_detections_topic", "/yolo_world/detections")
+        ),
+        "yolo_object_group_idx": seg.get("yolo_object_group_idx", None),
+    }
+
+    if cfg["yolo_owns_people"] and not people_idx:
+        cfg["people_groups"] = []
+
+    cfg_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_seg_", suffix=".json"
+    )
+    json.dump(cfg, cfg_tf, indent=2)
+    cfg_tf.close()
+    cfg_path = cfg_tf.name
+
+    share = get_package_share_directory("perception_models")
+    pkg_prefix = get_package_prefix("perception_models")
+    lib = os.path.join(pkg_prefix, "lib", "perception_models")
+    src_root = Path("/root/colcon_ws/src/perception_models")
+    if not src_root.is_dir():
+        src_root = Path("/home/hound/colcon_ws/src/perception_models")
+    src_scripts = src_root / "scripts"
+    src_df = src_root / "dora" / "segmentation_dataflow.yml"
+    template = src_df if src_df.is_file() else (Path(share) / "dora" / "segmentation_dataflow.yml")
+    text = template.read_text(encoding="utf-8")
+
+    def _node_py(name: str) -> str:
+        cand = src_scripts / name
+        return str(cand) if cand.is_file() else os.path.join(lib, name)
+
+    text = (
+        text.replace("__SOURCE_PY__", _node_py("dora_rgb_source"))
+        .replace("__ENCODER_PY__", _node_py("dora_clipseg_encoder"))
+        .replace("__REFINE_PY__", _node_py("dora_seg_refine"))
+        .replace("__VIZ_PY__", _node_py("dora_seg_viz"))
+        .replace("__QUEUE__", str(queue_size))
+    )
+    df_tf = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, prefix="hound_seg_df_", suffix=".yml"
+    )
+    df_tf.write(text)
+    df_tf.close()
+    dataflow_path = df_tf.name
+
+    print(
+        f"[hound_core] segmentation ENABLED (dora streams): model={cfg['model_name']} "
+        f"res={cfg['input_res']} "
+        f"vision={'trt' if cfg.get('clipseg_vision_engine') else 'torch'} "
+        f"film={'trt' if cfg.get('clipseg_film_engine') else 'torch'} "
+        f"groups={group_names} "
+        f"({len(prompts_flat)} sub-prompts) sam={cfg['sam_node']} "
+        f"coarse_trav={cfg['publish_coarse_traversability']} "
+        f"streams={cfg['use_cuda_streams']} queue={queue_size} "
+        f"rgb_sync={cfg.get('rgb_sync_mode', 'latest')}/"
+        f"{cfg.get('rgb_sync_slop_s', 0.05)}s "
+        f"dora_rgb_input={cfg.get('dora_rgb_input', True)}"
+    )
+    seg_env = {"HOUND_SEG_CONFIG": cfg_path}
+    if src_root.is_dir():
+        prev = os.environ.get("PYTHONPATH", "")
+        seg_env["PYTHONPATH"] = f"{src_root}:{prev}" if prev else str(src_root)
+    return [
+        ExecuteProcess(
+            cmd=["dora", "run", dataflow_path],
+            additional_env=seg_env,
+            output="screen",
+            name="hound_seg_dora",
+        )
+    ]
 
 
 def find_ssot() -> str:
@@ -776,9 +1239,6 @@ def build_hound_mapping_node(
             if lidar_composite_deskew_enabled(lidar)
             else bool(nvblox.get("use_lidar_motion_compensation", False))
         ),
-        "integrate_depth_rate_hz": float(nvblox.get("integrate_depth_rate_hz", 20.0)),
-        "integrate_color_rate_hz": float(nvblox.get("integrate_color_rate_hz", 20.0)),
-        "integrate_lidar_rate_hz": float(nvblox.get("integrate_lidar_rate_hz", 10.0)),
         "map_clear_rate_hz": float(nvblox.get("map_clear_rate_hz", 20.0)),
         "map_clear_topic": str(nvblox.get("map_clear_topic", "~/map_clear")),
         "mapper_rate_hz": float(
@@ -807,6 +1267,8 @@ def build_hound_mapping_node(
             for x in (nvblox.get("prior_xyz_yaw") or [0.0, 0.0, 0.0, 0.0])
         ],
         "prior_fill_enabled": bool(nvblox.get("prior_fill_enabled", True)),
+        "map_frame": str(nvblox.get("map_frame", "map")),
+        "save_map_odom_tf": bool(nvblox.get("save_map_odom_tf", True)),
         "publish_tsdf_color_mesh": bool(
             nvblox.get("publish_tsdf_color_mesh", False)
         ),
@@ -884,6 +1346,12 @@ def build_hound_mapping_node(
         else:
             params["depth_topic_template"] = "/{name}/depth/image_rect_raw"
             params["depth_info_topic_template"] = "/{name}/depth/camera_info"
+
+    apply_nvblox_per_sensor_params(nvblox, params)
+    camera_names = [str(x) for x in (params.get("camera_names") or [])]
+    use_depth = bool(params.get("use_depth", use_depth))
+    use_color = bool(params.get("use_color", use_color))
+    use_lidar = bool(params.get("use_lidar", use_lidar))
 
     print(
         f"[hound_core] hound_mapping ENABLED: voxel={params['voxel_size']} "
@@ -1028,7 +1496,7 @@ def build_nav_dora_actions(nav: dict) -> list:
         f"planner_hz={planner_hz} tick={tick_ms}ms "
         f"cv_viz={cfg['planner_cv_viz']} (stack from SSoT nav:)"
     )
-    return [
+    acts = [
         ExecuteProcess(
             cmd=["dora", "run", df_tf.name],
             additional_env=env,
@@ -1036,6 +1504,49 @@ def build_nav_dora_actions(nav: dict) -> list:
             name="hound_nav_dora",
         )
     ]
+    mm = dict(nav.get("mission_manager") or {})
+    if bool(mm.get("enabled", True)):
+        acts.append(build_mission_manager_node(nav, mm))
+    return acts
+
+
+def build_mission_manager_node(nav: dict, mm: dict) -> Node:
+    goal_topic = str(mm.get("goal_topic", nav.get("goal_topic", "/goal_pose")))
+    params = {
+        "mode": str(mm.get("mode", "gps")),
+        "gps_topic": str(mm.get("gps_topic", "/hound_fcu_control/gps/fix")),
+        "gps_fix_type_topic": str(
+            mm.get("gps_fix_type_topic", "/hound_fcu_control/gps/fix_type")
+        ),
+        "imu_topic": str(mm.get("imu_topic", "/hound_fcu_control/imu")),
+        "gps_waypoints_topic": str(
+            mm.get("gps_waypoints_topic", "/hound_fcu_control/mission/gps")
+        ),
+        "goal_topic": goal_topic,
+        "path_viz_topic": str(
+            mm.get("path_viz_topic", "/hound_nav/mission/waypoints")
+        ),
+        "state_topic": str(
+            mm.get("state_topic", nav.get("state_topic", "/hound_fcu_control/control_state"))
+        ),
+        "frame_id": str(mm.get("frame_id", "odom")),
+        "min_fix_type": int(mm.get("min_fix_type", 3)),
+        "max_h_acc_m": float(mm.get("max_h_acc_m", 2.5)),
+        "update_wp_local_from_gps": bool(mm.get("update_wp_local_from_gps", False)),
+        "wp_radius": float(mm.get("wp_radius", nav.get("wp_radius", 1.0))),
+        "publish_hz": float(mm.get("publish_hz", 0.25)),
+    }
+    print(
+        f"[hound_core] mission_manager: mode={params['mode']} "
+        f"wps={params['gps_waypoints_topic']} → {goal_topic}"
+    )
+    return Node(
+        package="hound_nav",
+        executable="mission_manager",
+        name="mission_manager",
+        output="screen",
+        parameters=[params],
+    )
 
 
 def build_nav_node(nav: dict):
@@ -1191,6 +1702,15 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
         "core_temp_warn_c": float(lidar.get("core_temp_warn_c", 55.0)),
         "cloud_stale_warn_s": float(lidar.get("cloud_stale_warn_s", 5.0)),
         "status_log_period_s": float(lidar.get("status_log_period_s", 60.0)),
+        "enable_imu": bool(lidar.get("enable_imu", False)),
+        "imu_frame": str(lidar.get("imu_frame", "livox_imu")),
+        "imu_topic": str(lidar.get("imu_topic", "/livox/imu")),
+        "imu_xyz.x": float((lidar.get("imu_xyz") or [0.011, 0.02329, -0.04412])[0]),
+        "imu_xyz.y": float((lidar.get("imu_xyz") or [0.011, 0.02329, -0.04412])[1]),
+        "imu_xyz.z": float((lidar.get("imu_xyz") or [0.011, 0.02329, -0.04412])[2]),
+        "imu_rpy.roll": float((lidar.get("imu_rpy") or [0.0, 0.0, 0.0])[0]),
+        "imu_rpy.pitch": float((lidar.get("imu_rpy") or [0.0, 0.0, 0.0])[1]),
+        "imu_rpy.yaw": float((lidar.get("imu_rpy") or [0.0, 0.0, 0.0])[2]),
         "deskew.enable": deskew_enable,
         "deskew.motion_frame": motion_frame,
         "deskew.odom_topic": str(deskew.get("odom_topic", "/ekf/odometry")),
@@ -1204,7 +1724,8 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
     print(
         f"[hound_core] lidar_mesh_composite ENABLED: backend={params['lidar_backend']} "
         f"lidar_ip={params['lidar_ip'] or '(n/a)'} "
-        f"cloud={params['cloud_topic']} deskew={'on' if deskew_enable else 'off'} "
+        f"cloud={params['cloud_topic']} imu={'on -> ' + params['imu_topic'] if params['enable_imu'] else 'off'} "
+        f"deskew={'on' if deskew_enable else 'off'} "
         f"odom={params['deskew.odom_topic']} motion={motion_frame}"
     )
     return Node(
@@ -1216,18 +1737,151 @@ def build_lidar_mesh_composite_node(lidar: dict) -> Node:
     )
 
 
-def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
-    """Standalone constant-twist mesh particle filter (Vulkan RT / Embree)."""
+def _sidecar_from_layercake(cake_path: str) -> str:
+    from pathlib import Path
+
+    p = Path(str(cake_path or "").strip() or "/root/colcon_ws/maps/hound_tsdf.layercake")
+    return str(p.with_name(p.stem + ".map_odom.yaml"))
+
+
+def build_aruco_registration_nodes(
+    cfg: dict, nvblox: dict = None, ssot_file: str = ""
+) -> list:
+    """ArUco detector (record) + held map←odom static TF.
+
+    ``source=aruco``: lock from detections (bag records /tf_static).
+    ``source=file``: republish sidecar YAML only (no detector; bag already has TF).
+    """
+    nvblox = nvblox or {}
+    camera = str(cfg.get("camera_name", "camera_front"))
+    pose_topic = str(cfg.get("pose_topic", "/aruco_registration/marker_pose"))
+    source = str(cfg.get("source", "aruco")).strip().lower()
+    cake = str(
+        nvblox.get("layer_cake_path")
+        or "/root/colcon_ws/maps/hound_tsdf.layercake"
+    )
+    tf_file = str(cfg.get("tf_file") or "").strip() or _sidecar_from_layercake(cake)
+    params_det = {
+        "image_topic": str(cfg.get("image_topic", f"/{camera}/color/image_raw")),
+        "camera_info_topic": str(
+            cfg.get("camera_info_topic", f"/{camera}/color/camera_info")
+        ),
+        "pose_topic": pose_topic,
+        "overlay_topic": str(cfg.get("overlay_topic", "/aruco_registration/overlay")),
+        "publish_overlay": bool(cfg.get("publish_overlay", False)),
+        "publish_detect_tf": bool(cfg.get("publish_detect_tf", False)),
+        "detected_frame": str(cfg.get("detected_frame", "aruco_detected")),
+        "dictionary": str(cfg.get("dictionary", "DICT_4X4_50")),
+        "marker_id": int(cfg.get("marker_id", 0)),
+        "marker_size_m": float(cfg.get("marker_size_m", 0.16)),
+        "min_side_px": float(cfg.get("min_side_px", 12.0)),
+        "corner_refine": str(cfg.get("corner_refine", "apriltag")),
+        "corner_refine_win_size": int(cfg.get("corner_refine_win_size", 5)),
+        "corner_refine_max_iter": int(cfg.get("corner_refine_max_iter", 30)),
+        "corner_refine_min_accuracy": float(
+            cfg.get("corner_refine_min_accuracy", 0.1)
+        ),
+        "dense_refine": str(cfg.get("dense_refine", "off")),
+        "dense_refine_optimize": str(cfg.get("dense_refine_optimize", "both")),
+        "dense_refine_draw": bool(cfg.get("dense_refine_draw", True)),
+        "trigger_topic": str(
+            cfg.get("trigger_topic", "/aruco_registration/trigger")
+        ),
+        "trigger_timeout_s": float(cfg.get("trigger_timeout_s", 8.0)),
+        "ssot_file": ssot_file,
+    }
+    params_reg = {
+        "source": source,
+        "tf_file": tf_file,
+        "pose_topic": pose_topic,
+        "map_odom_pose_topic": str(
+            cfg.get("map_odom_pose_topic", "/aruco_registration/map_odom")
+        ),
+        "map_frame": str(cfg.get("map_frame", "map")),
+        "odom_frame": str(cfg.get("odom_frame", "odom")),
+        "marker_frame": str(cfg.get("marker_frame", "aruco_marker")),
+        "marker_xyz": [float(v) for v in (cfg.get("marker_xyz") or [0.0, 0.0, 0.0])],
+        "marker_rpy": [float(v) for v in (cfg.get("marker_rpy") or [0.0, 0.0, 0.0])],
+        "tf_publish_hz": float(cfg.get("tf_publish_hz", 10.0)),
+        "tf_timeout_s": float(cfg.get("tf_timeout_s", 0.15)),
+        "ema_alpha": float(cfg.get("ema_alpha", 0.25)),
+        "trigger_topic": str(
+            cfg.get("trigger_topic", "/aruco_registration/trigger")
+        ),
+        "lock_once": bool(cfg.get("lock_once", False)),
+        "ssot_file": ssot_file,
+    }
+    print(
+        f"[hound_core] aruco_registration ENABLED: source={source} "
+        f"tf_file={tf_file} map={params_reg['map_frame']}←{params_reg['odom_frame']}"
+        + (
+            f" image={params_det['image_topic']} id={params_det['marker_id']}"
+            if source != "file"
+            else ""
+        )
+    )
+    nodes = [
+        Node(
+            package="aruco_registration",
+            executable="map_odom_from_aruco",
+            name="map_odom_from_aruco",
+            output="screen",
+            parameters=[params_reg],
+        ),
+    ]
+    if source != "file":
+        nodes.insert(
+            0,
+            Node(
+                package="aruco_registration",
+                executable="aruco_detector",
+                name="aruco_detector",
+                output="screen",
+                parameters=[params_det],
+            ),
+        )
+    return nodes
+
+
+def _mesh_pf_init_bb(mesh_pf: dict) -> dict:
+    """init_bb from SSoT override, else sidecar next to map_file (*.yaml)."""
+    override = mesh_pf.get("init_bb")
+    if isinstance(override, dict) and override:
+        return dict(override)
+    path = str(mesh_pf.get("init_bb_file") or "").strip()
+    if not path:
+        map_file = Path(str(mesh_pf.get("map_file") or "").strip())
+        if map_file.suffix:
+            path = str(map_file.with_suffix(".yaml"))
+    if path and Path(path).is_file():
+        with open(path, encoding="utf-8") as handle:
+            doc = yaml.safe_load(handle) or {}
+        bb = doc.get("init_bb") or doc.get("bbox") or {}
+        if isinstance(bb, dict) and bb:
+            print(f"[hound_core] mesh_pf init_bb from {path}")
+            return dict(bb)
+    return {}
+
+
+def build_mesh_pf_node(
+    mesh_pf: dict, lidar: dict = None, *, prefix: str = ""
+) -> Node:
+    """Standalone constant-twist mesh particle filter (Vulkan RT / Embree).
+
+    ``prefix`` namespaces the node and the pose pub (cloud stays on SSoT name).
+    """
     lidar = lidar or {}
     xyz = mesh_pf.get("xyz") or lidar.get("xyz") or [0.0, 0.0, 0.1]
     rpy = mesh_pf.get("rpy") or lidar.get("rpy") or [180.0, -15.0, 0.0]
-    bb = dict(mesh_pf.get("init_bb") or {})
+    bb = _mesh_pf_init_bb(mesh_pf)
     params = {
         "cloud_topic": str(mesh_pf.get("cloud_topic", lidar.get("cloud_topic", "/livox/cloud"))),
         "pose_topic": str(mesh_pf.get("pose_topic", "/localization/mesh_pose")),
         "map_file": str(mesh_pf.get("map_file", "")),
         "map_frame": str(mesh_pf.get("map_frame", "map")),
+        "odom_frame": str(mesh_pf.get("odom_frame", "odom")),
         "base_frame": str(mesh_pf.get("base_frame", "base_link")),
+        "publish_tf": bool(mesh_pf.get("publish_tf", True)),
         "xyz.x": float(xyz[0]),
         "xyz.y": float(xyz[1]),
         "xyz.z": float(xyz[2]),
@@ -1246,9 +1900,19 @@ def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
         "init_bb.ymax": float(bb.get("ymax", 20.0)),
         "init_bb.zmax": float(bb.get("zmax", 2.0)),
     }
+    extra: dict = {}
+    prefix = str(prefix or "").strip().strip("/")
+    if prefix:
+        extra["namespace"] = prefix
+        pose = params["pose_topic"]
+        if not pose.startswith("/"):
+            pose = "/" + pose
+        params["pose_topic"] = f"/{prefix}{pose}"
+        params["use_sim_time"] = True
     print(
         f"[hound_core] mesh_pf ENABLED: cloud={params['cloud_topic']} "
         f"map={params['map_file'] or '(missing)'} pose={params['pose_topic']}"
+        + (f" ns=/{prefix}" if prefix else "")
     )
     return Node(
         package="composite_sensing",
@@ -1256,6 +1920,7 @@ def build_mesh_pf_node(mesh_pf: dict, lidar: dict = None) -> Node:
         name="mesh_pf",
         output="screen",
         parameters=[params],
+        **extra,
     )
 
 

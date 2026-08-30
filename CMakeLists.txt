@@ -117,6 +117,7 @@ install(PROGRAMS
   scripts/mission_pose_builder
   scripts/hw_latency_probe
   scripts/wait_for_topic_hz.py
+  scripts/livox_ekf_imu_rpy.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

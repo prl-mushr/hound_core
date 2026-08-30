@@ -2,7 +2,7 @@
 
 Bring-up is staggered (launch.stage_delay_s, default 5s between enabled stages):
   HAL → bag_recorder → stereo_composite (VSLAM) → fcu_control (EKF+LL) →
-  lidar → segmentation → yolo_world → nvblox → …
+  lidar → aruco_registration → segmentation → yolo_world → nvblox → …
 
 fcu_control.enabled is a master switch (nested vesc/ntrip/ll/ekf only when on).
 Camera + VSLAM come only from composite_sensing (stereo_composite).
@@ -30,8 +30,10 @@ from hound_launch_common import (  # noqa: E402
     build_bag_recorder_node,
     build_hal_monitor_node,
     build_lidar_mesh_composite_node,
+    build_aruco_registration_nodes,
     build_mesh_pf_node,
     build_hound_mapping_node,
+    build_segmentation_dora_actions,
     build_viz_node,
     build_nav_dora_actions,
     build_unitree_lidar_actions,
@@ -62,209 +64,6 @@ def _schedule_stages(stages: list, delay_s: float) -> list:
             out.append(TimerAction(period=float(t), actions=batch))
         t += float(delay_s)
     return out
-
-
-def _flatten_prompts(prompts):
-    if isinstance(prompts, dict):
-        names = list(prompts.keys())
-        flat, gids = [], []
-        for gi, name in enumerate(names):
-            for s in (prompts[name] or []):
-                flat.append(str(s))
-                gids.append(gi)
-        return flat, names, gids
-    flat = [str(p) for p in (prompts or ["a person"])]
-    return flat, flat, list(range(len(flat)))
-
-
-def _build_segmentation_dora_actions(seg: dict) -> list:
-    """Start dora segmentation: rgb_source -> clipseg_encoder -> seg_refine.
-
-    ROS camera ingress stops at rgb_source (packed N×RGB). Encoder/refine are
-    Dora-only until product topics. Inside seg_refine, FiLM decode and SAM
-    encode overlap on CUDA streams; mask decode follows.
-    """
-    import json
-    import os
-    import tempfile
-
-    from ament_index_python.packages import get_package_prefix, get_package_share_directory
-
-    prompts_flat, group_names, group_ids = _flatten_prompts(
-        seg.get("prompts", ["a person"])
-    )
-    pos_names = [str(x) for x in seg.get("positive_groups", [])]
-    neg_names = [str(x) for x in seg.get("negative_groups", [])]
-    pos_idx = [i for i, n in enumerate(group_names) if n in pos_names]
-    neg_idx = [i for i, n in enumerate(group_names) if n in neg_names]
-    people_idx = [
-        i for i, n in enumerate(group_names) if n not in pos_names and n not in neg_names
-    ]
-
-    queue_size = max(2, int(seg.get("pipeline_queue_size", 3)))
-    cfg = {
-        "model_name": str(seg.get("model", "CIDAS/clipseg-rd16")),
-        "prompts": prompts_flat,
-        "group_names": group_names,
-        "group_ids": group_ids,
-        "suppress_prompts": [str(x) for x in seg.get("suppress_prompts", []) if str(x)],
-        "aggregate": str(seg.get("aggregate", "max")),
-        "clipseg_vision_engine": str(seg.get("clipseg_vision_engine", "") or ""),
-        "clipseg_film_engine": str(seg.get("clipseg_film_engine", "") or ""),
-        "input_res": int(seg.get("input_res", 224)),
-        "threshold": float(seg.get("threshold", 0.3)),
-        "compile_mode": str(seg.get("compile_mode", "reduce-overhead")),
-        "color_topic": str(seg.get("color_topic", "/camera/color/image_raw")),
-        "color_topics": [str(t) for t in (seg.get("color_topics") or [])],
-        "camera_names": [str(t) for t in (seg.get("camera_names") or [])],
-        "dora_rgb_input": bool(seg.get("dora_rgb_input", True)),
-        "ros_io": bool(seg.get("ros_io", True)),
-        "use_ros_edge": bool(seg.get("use_ros_edge", True)),
-        "fanout_identical": bool(seg.get("fanout_identical", False)),
-        "input_hz": float(seg.get("input_hz", 0) or 0),
-        "clipseg_batch_n": int(seg.get("clipseg_batch_n", 1)),
-        "rgb_sync_slop_s": float(seg.get("rgb_sync_slop_s", 0.05) or 0.05),
-        "rgb_sync_mode": str(seg.get("rgb_sync_mode", "latest") or "latest"),
-        "rgb_sync_diag": bool(seg.get("rgb_sync_diag", True)),
-        "rgb_sync_diag_every_s": float(seg.get("rgb_sync_diag_every_s", 5.0) or 5.0),
-        "e2e_log": bool(seg.get("e2e_log", True)),
-        "e2e_log_every_s": float(seg.get("e2e_log_every_s", 60.0) or 60.0),
-        "labels_topic": str(seg.get("labels_topic", "/segmentation/labels")),
-        "viz_overlay": bool(seg.get("viz_overlay", False)),
-        "overlay_topic": str(seg.get("overlay_topic", "/segmentation/overlay")),
-        "overlay_alpha": float(seg.get("overlay_alpha", 0.5)),
-        "profile": bool(seg.get("profile", False)),
-        "profile_every": int(seg.get("profile_every", 30)),
-        "pipeline_queue_size": queue_size,
-        "use_cuda_streams": bool(seg.get("use_cuda_streams", True)),
-        "publish_coarse_traversability": bool(
-            seg.get("publish_coarse_traversability", True)
-        ),
-        "coarse_traversability_topic": str(
-            seg.get(
-                "coarse_traversability_topic",
-                "/segmentation/coarse_traversability",
-            )
-        ),
-        "coarse_people_mask_topic": str(
-            seg.get(
-                "coarse_people_mask_topic",
-                "/segmentation/coarse_people_mask",
-            )
-        ),
-        "sam_node": bool(seg.get("sam_node", False)),
-        "sam_min_area": float(seg.get("sam_min_area", 0.002)),
-        "sam_max_boxes": int(seg.get("sam_max_boxes", 6)),
-        "sam_max_boxes_manip": int(
-            seg.get("sam_max_boxes_manip", seg.get("sam_max_boxes", 6))
-        ),
-        "positive_groups": pos_idx or [0],
-        "negative_groups": neg_idx or [1],
-        "people_groups": people_idx or [2],
-        "traversability_colors": dict(seg.get("traversability_colors") or {}),
-        "traversability_pack_threshold": float(
-            seg.get("traversability_pack_threshold", seg.get("threshold", 0.3))
-        ),
-        "sam_image_encoder": str(
-            seg.get(
-                "sam_image_encoder",
-                "/root/colcon_ws/src/perception_models/data/resnet18_image_encoder_512.engine",
-            )
-        ),
-        "sam_mask_decoder": str(
-            seg.get(
-                "sam_mask_decoder",
-                "/root/colcon_ws/src/perception_models/data/mobile_sam_mask_decoder_batched_512.engine",
-            )
-        ),
-        "sam_image_size": int(seg.get("sam_image_size", 512)),
-        "sam_traversability_topic": str(
-            seg.get("sam_traversability_topic", "/segmentation/refined_traversability")
-        ),
-        "sam_people_mask_topic": str(
-            seg.get("sam_people_mask_topic", "/segmentation/refined_people_mask")
-        ),
-        "sam_overlay": bool(seg.get("sam_overlay", False)),
-        "sam_overlay_topic": str(
-            seg.get("sam_overlay_topic", "/segmentation/refined_overlay")
-        ),
-        "yolo_owns_people": bool(seg.get("yolo_owns_people", False)),
-        "yolo_detections_topic": str(
-            seg.get("yolo_detections_topic", "/yolo_world/detections")
-        ),
-        "yolo_object_group_idx": seg.get("yolo_object_group_idx", None),
-    }
-
-    # YOLO owns people: do not invent a phantom CLIPSeg/SAM group index.
-    # people_groups empty → pack_traversability skips people from SAM maps.
-    if cfg["yolo_owns_people"] and not people_idx:
-        cfg["people_groups"] = []
-
-    cfg_tf = tempfile.NamedTemporaryFile(
-        mode="w", delete=False, prefix="hound_seg_", suffix=".json"
-    )
-    json.dump(cfg, cfg_tf, indent=2)
-    cfg_tf.close()
-    cfg_path = cfg_tf.name
-
-    share = get_package_share_directory("perception_models")
-    prefix = get_package_prefix("perception_models")
-    lib = os.path.join(prefix, "lib", "perception_models")
-    # Prefer src tree when present (dev) so new nodes need no install sync.
-    src_root = Path("/root/colcon_ws/src/perception_models")
-    if not src_root.is_dir():
-        src_root = Path("/home/hound/colcon_ws/src/perception_models")
-    src_scripts = src_root / "scripts"
-    src_df = src_root / "dora" / "segmentation_dataflow.yml"
-    template = src_df if src_df.is_file() else (Path(share) / "dora" / "segmentation_dataflow.yml")
-    text = template.read_text(encoding="utf-8")
-
-    def _node_py(name: str) -> str:
-        cand = src_scripts / name
-        return str(cand) if cand.is_file() else os.path.join(lib, name)
-
-    text = (
-        text.replace("__SOURCE_PY__", _node_py("dora_rgb_source"))
-        .replace("__ENCODER_PY__", _node_py("dora_clipseg_encoder"))
-        .replace("__REFINE_PY__", _node_py("dora_seg_refine"))
-        .replace("__VIZ_PY__", _node_py("dora_seg_viz"))
-        .replace("__QUEUE__", str(queue_size))
-    )
-    df_tf = tempfile.NamedTemporaryFile(
-        mode="w", delete=False, prefix="hound_seg_df_", suffix=".yml"
-    )
-    df_tf.write(text)
-    df_tf.close()
-    dataflow_path = df_tf.name
-
-    print(
-        f"[hound_core] segmentation ENABLED (dora streams): model={cfg['model_name']} "
-        f"res={cfg['input_res']} "
-        f"vision={'trt' if cfg.get('clipseg_vision_engine') else 'torch'} "
-        f"film={'trt' if cfg.get('clipseg_film_engine') else 'torch'} "
-        f"groups={group_names} "
-        f"({len(prompts_flat)} sub-prompts) sam={cfg['sam_node']} "
-        f"coarse_trav={cfg['publish_coarse_traversability']} "
-        f"streams={cfg['use_cuda_streams']} queue={queue_size} "
-        f"rgb_sync={cfg.get('rgb_sync_mode', 'latest')}/"
-        f"{cfg.get('rgb_sync_slop_s', 0.05)}s "
-        f"dora_rgb_input={cfg.get('dora_rgb_input', True)}"
-    )
-    seg_env = {"HOUND_SEG_CONFIG": cfg_path}
-    if src_root.is_dir():
-        # Dev: import perception_models from src (new nodes before colcon install).
-        prev = os.environ.get("PYTHONPATH", "")
-        seg_env["PYTHONPATH"] = (
-            f"{src_root}:{prev}" if prev else str(src_root)
-        )
-    return [
-        ExecuteProcess(
-            cmd=["dora", "run", dataflow_path],
-            additional_env=seg_env,
-            output="screen",
-            name="hound_seg_dora",
-        )
-    ]
 
 
 def _build_yolo_world_dora_actions(yw: dict) -> list:
@@ -1020,6 +819,7 @@ def generate_launch_description():
     hal = ssot.get("hal_monitor", {})
     bag_recorder = ssot.get("bag_recorder", {})
     mesh_pf = ssot.get("mesh_pf", {})
+    aruco = ssot.get("aruco_registration", {})
     seg = ssot.get("segmentation", {})
     yw = ssot.get("yolo_world", {})
     launch_cfg = ssot.get("launch", {})
@@ -1036,6 +836,7 @@ def generate_launch_description():
     hal_enabled = bool(hal.get("enabled", False))
     bag_recorder_enabled = bool(bag_recorder.get("enabled", False))
     mesh_pf_enabled = bool(mesh_pf.get("enabled", False))
+    aruco_enabled = bool(aruco.get("enabled", False))
     seg_enabled = bool(seg.get("enabled", False))
     yolo_enabled = bool(yw.get("enabled", False))
     lidar_enabled = bool(lidar.get("enabled", False))
@@ -1055,9 +856,13 @@ def generate_launch_description():
                 "-> people mask remaps will stall until SAM publishes"
             )
 
+    aruco_needs_color = aruco_enabled and str(
+        aruco.get("source", "aruco")
+    ).strip().lower() != "file"
     need_color = (
         seg_enabled
         or yolo_enabled
+        or aruco_needs_color
         or (nvblox_enabled and bool(nvblox.get("use_color", True)))
     )
     need_depth = nvblox_enabled and bool(nvblox.get("use_depth", False))
@@ -1183,6 +988,14 @@ def generate_launch_description():
     else:
         print("[hound_core] mesh_pf DISABLED")
 
+    aruco_acts = []
+    if aruco_enabled:
+        aruco_acts = build_aruco_registration_nodes(
+            aruco, nvblox, ssot_file=ssot_file
+        )
+    else:
+        print("[hound_core] aruco_registration DISABLED")
+
     # 6) segmentation (dora: encoder -> FiLM/SAM refine)
     seg_acts = []
     if seg_enabled:
@@ -1202,7 +1015,7 @@ def generate_launch_description():
                     "[hound_core] yolo_world.on → CLIPSeg people prompts removed; "
                     "NanoSAM people from YOLO boxes"
                 )
-            seg_acts = _build_segmentation_dora_actions(seg_for_dora)
+            seg_acts = build_segmentation_dora_actions(seg_for_dora)
         else:
             print("[hound_core] segmentation skipped (no stereo_composite)")
     else:
@@ -1263,6 +1076,7 @@ def generate_launch_description():
         ("fcu_control", fcu_acts),
         ("lidar", lidar_acts),
         ("mesh_pf", mesh_pf_acts),
+        ("aruco_registration", aruco_acts),
         ("segmentation", seg_acts),
         ("yolo_world", yolo_acts),
         ("nvblox", nvblox_acts),

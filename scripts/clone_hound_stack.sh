@@ -152,6 +152,7 @@ echo
 echo "[hound] done. Next (inside mushr_jazzy / ROS env):"
 echo "  1) Build Livox SDK:  cd ${SRC_DIR}/Livox-SDK2 && mkdir -p build && cd build && cmake .. && make -j\$(nproc)"
 echo "  2) Dep scripts:      composite_sensing / perception_models / hound_viz install_deps.sh"
+echo "     (composite_sensing install_deps.sh installs glslang-tools — required for mesh_pf Vulkan RT)"
 echo "  3) colcon build --symlink-install"
 echo "  4) Rebuild TRT engines (perception_models/scripts/build_all_engines.sh)"
 echo "  5) Edit hound_core/config/SSoT.yaml for this robot (serials, IPs, ttys)"

@@ -6,6 +6,7 @@
 #   source /root/colcon_ws/install/setup.bash
 #   ./run_vlcal.sh use_bag rosbag2_2026_08_11-01_48_52   # link into all cams
 #   ./run_vlcal.sh preprocess camera_front [bag]
+#   ./run_vlcal.sh initial_guess_prior camera_front   # existing calib.json T
 #   ./run_vlcal.sh initial_guess_ssot camera_front
 #   ./run_vlcal.sh calibrate camera_front
 
@@ -32,7 +33,7 @@ usage() {
 Usage:
   $0 use_bag <bag>
   $0 apply_ssot [--write]
-  $0 <preprocess|initial_guess_manual|initial_guess_ssot|calibrate|viewer> <camera_*> [bag]
+  $0 <preprocess|initial_guess_manual|initial_guess_ssot|initial_guess_prior|calibrate|viewer> <camera_*> [bag]
 
 <bag> may be:
   rosbag2_YYYY_MM_DD-HH_MM_SS          (under ${CALIB_ROOT}/)
@@ -60,6 +61,10 @@ resolve_bag() {
     cand="$(cd "${CALIB_ROOT}/${raw}" && pwd)"
   elif [[ -d "${CALIB_ROOT}/all/bags/${raw}" && -f "${CALIB_ROOT}/all/bags/${raw}/metadata.yaml" ]]; then
     cand="$(cd "${CALIB_ROOT}/all/bags/${raw}" && pwd)"
+  elif [[ -d "/root/colcon_ws/bags/${raw}" && -f "/root/colcon_ws/bags/${raw}/metadata.yaml" ]]; then
+    cand="$(cd "/root/colcon_ws/bags/${raw}" && pwd)"
+  elif [[ -d "/home/hound/colcon_ws/bags/${raw}" && -f "/home/hound/colcon_ws/bags/${raw}/metadata.yaml" ]]; then
+    cand="$(cd "/home/hound/colcon_ws/bags/${raw}" && pwd)"
   else
     echo "Bag not found or missing metadata.yaml: ${raw}" >&2
     echo "  looked under: ${raw}" >&2
@@ -80,8 +85,10 @@ link_bag_to_camera() {
   mkdir -p "${bags_dir}"
   # Drop previous bag links/dirs so only the requested bag is used.
   shopt -s nullglob
-  for old in "${bags_dir}"/rosbag2_*; do
-    rm -rf "${old}"
+  for old in "${bags_dir}"/*; do
+    if [[ -d "${old}" || -L "${old}" ]]; then
+      rm -rf "${old}"
+    fi
   done
   shopt -u nullglob
   # Prefer relative symlink when bag lives under CALIB_ROOT.
@@ -159,9 +166,10 @@ case "${CMD}" in
     fi
     shopt -s nullglob
     bag_ok=0
-    for b in "${BAGS}"/rosbag2_*; do
-      if [[ -f "${b}/metadata.yaml" ]]; then
+    for b in "${BAGS}"/*; do
+      if [[ -e "${b}/metadata.yaml" ]]; then
         bag_ok=1
+        echo "[vlcal] found bag $(basename "${b}")"
         break
       fi
     done
@@ -173,6 +181,11 @@ case "${CMD}" in
       exit 1
     fi
     mkdir -p "${PRE}"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "${PRE}/calib.json" ]]; then
+      python3 "${SCRIPT_DIR}/seed_vlcal_from_prior.py" snapshot "${CAM}" \
+        --calib-root "${CALIB_ROOT}" || true
+    fi
     echo "[vlcal] preprocess ${CAM}"
     echo "         bags → ${BAGS}"
     echo "         out  → ${PRE}"
@@ -212,6 +225,13 @@ PY
       --calib-root "${CALIB_ROOT}" \
       --ssot "${SSOT}" \
       "${CAM}"
+    ;;
+  initial_guess_prior)
+    [[ -d "${PRE}" ]] || { echo "Missing ${PRE} — preprocess first" >&2; exit 1; }
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "[vlcal] initial_guess_prior ${CAM} (from prior_T_lidar_camera.json / last T_lidar_camera)"
+    python3 "${SCRIPT_DIR}/seed_vlcal_from_prior.py" seed "${CAM}" \
+      --calib-root "${CALIB_ROOT}"
     ;;
   calibrate)
     [[ -d "${PRE}" ]] || { echo "Missing ${PRE} — preprocess first" >&2; exit 1; }

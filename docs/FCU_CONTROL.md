@@ -62,7 +62,7 @@ Do **not** publish MAVLink `GPS_RTCM_DATA` fragments on ROS — publish whole RT
 
 **TX:** heartbeat, `PARAM_SET` / `SET_MESSAGE_INTERVAL` at boot, `VISION_POSITION_ESTIMATE`
 (optional), `MANUAL_CONTROL` (ackermann), `RC_CHANNELS_OVERRIDE` + `SET_MODE`
-(holonomic), `PLAY_TUNE_V2` (from `~/play_tune`), `GPS_RTCM_DATA` (NTRIP, from the
+(holonomic), `PLAY_TUNE` (from `~/play_tune`), `GPS_RTCM_DATA` (NTRIP, from the
 ROS edge timer), mission download requests.
 
 **GCS:** optional second `libmavconn` URL (`gcs_url`). Forwards FCU→GCS with optional
@@ -90,12 +90,14 @@ Aux thread (~`aux_publish_hz`):
 | `~/gps/satellites` | `std_msgs/UInt8` | Sat count |
 | `~/gps/h_acc_mm` | `std_msgs/UInt32` | Horizontal accuracy (mm, from eph) |
 | `~/mission/path` | `nav_msgs/Path` | Position WPs in map ENU (`ext_nav_origin`) |
+| `~/mission/gps` | `nav_msgs/Path` | Global NAV_WAYPOINT lat/lon/alt in pose x/y/z, `frame_id=wgs84` (latched) |
+| `~/gps/fix_type` | `std_msgs/UInt8` | MAVLink `GPS_FIX_TYPE` (3 = 3D lock) |
 
 Also:
 
 | Topic | Content |
 |-------|---------|
-| `~/play_tune` (sub) | `std_msgs/String` tune → MAVLink `PLAY_TUNE_V2` |
+| `~/play_tune` (sub) | `std_msgs/String` tune → MAVLink `PLAY_TUNE` |
 | `~/ekf_reset` (sub) | `std_msgs/Empty` → hard-reset EKF (kill worker thread + relaunch fresh filter) |
 | `/low_level_diagnostics` | LL status |
 | `/control_limits` | Ackermann only (from AckermannLlController) |

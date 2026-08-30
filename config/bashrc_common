@@ -30,7 +30,8 @@ if [ -f "$ROS_WORKSPACE/install/setup.bash" ]; then
   source "$ROS_WORKSPACE/install/setup.bash"
 fi
 
-if command -v ros2 >/dev/null 2>&1 && ! pgrep -x rmw_zenohd >/dev/null 2>&1; then
+# Zenoh router (needed whenever RMW_IMPLEMENTATION=rmw_zenoh_cpp).
+if command -v ros2 >/dev/null 2>&1 && ! pgrep -f '[r]mw_zenohd' >/dev/null 2>&1; then
   nohup ros2 run rmw_zenoh_cpp rmw_zenohd >/tmp/rmw_zenohd.log 2>&1 &
   disown
 fi
@@ -40,4 +41,7 @@ alias cs='cd "$ROS_WORKSPACE" && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Re
 alias clear_map='ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty'
 alias clear_state='ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty'
 alias rviz='rviz2 -d /root/colcon_ws/src/hound_core/config/display_config.rviz'
+alias rviz_sim='rviz2 -d /root/colcon_ws/src/hound_core/config/display_config.rviz --ros-args -p use_sim_time:=true'
 alias vlcal='cd /root/colcon_ws/src/hound_core/scripts/vlcal && ./run_vlcal.sh apply_ssot --write'
+alias trigger_aruco='ros2 topic pub --once /aruco_registration/trigger std_msgs/msg/Empty'
+alias show_mesh='python3 /root/colcon_ws/src/hound_mapping/scripts/show_mesh.py'

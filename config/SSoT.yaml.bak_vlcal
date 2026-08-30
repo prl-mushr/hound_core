@@ -10,6 +10,7 @@
 #   yolo_world        Dora YOLO-World
 #   nav               Dora manager / planner / controller
 #   viz               Viser browser
+#   aruco_registration  ArUco detect + held map←odom TF (prior maps / inpaint)
 #   hal_monitor       diagnostics / tunes
 #   bag_recorder      Bool /hal/record → ros2 bag
 #   launch            staggered bring-up delay
@@ -60,6 +61,7 @@ stereo_composite:
   clip_distance: 3.0
   initial_reset: false
   align_depth: false
+  # Published color is undistorted (pinhole, D=0) on /{name}/color/image_raw.
   # Multi-cam color phase sync (POSIX shm, no ROS): front is master; left/right
   # lock stride phase to the sensor frame nearest (front_publish_stamp + 1/pub_fps).
   color_sync_master: camera_front
@@ -82,8 +84,8 @@ stereo_composite:
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
       parent_frame: base_link
-      xyz: [0.017980, 0.147096, 0.108445]
-      rpy: [-0.550, 0.709, -0.033]
+      xyz: [0.121722, 0.032168, 0.061030]
+      rpy: [0.544, 1.518, -0.533]
       # rpy: [0.0, 0.0, 0.0]
     camera_left:
       camera_name: camera_left
@@ -103,8 +105,8 @@ stereo_composite:
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
       
-      xyz: [-0.079776, 0.040531, 0.088861]
-      rpy: [-1.110, 0.916, 135.001]
+      xyz: [-0.078877, 0.040504, 0.037762]
+      rpy: [-1.787, 0.626, 135.608]
     camera_right:
       camera_name: camera_right
       serial_number: "825312070949"
@@ -122,8 +124,8 @@ stereo_composite:
       depth_fps: 30
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
-      xyz: [-0.064267, -0.081413, 0.180919]
-      rpy: [-0.960, 2.914, -134.380]
+      xyz: [-0.057682, -0.075743, 0.137197]
+      rpy: [-0.461, 1.868, -133.999]
 
 # Livox Mid-360(S) via composite (SDK in-process). Host NIC on same subnet.
 # base_link → livox_frame (xyz/rpy) is the lidar anchor for vlcal → camera mounts above.
@@ -153,14 +155,15 @@ lidar:
   core_temp_warn_c: 55.0
   cloud_stale_warn_s: 5.0
   status_log_period_s: 60.0
-  enable_imu: false
+  enable_imu: true
   publish_static_tf: true
   parent_frame: base_link
   # xyz: [0.0, 0.15, 0.15]
   # rpy: [178.0, -13.5, 0.0]
-  xyz: [0.0, 0.15, 0.15]
-  rpy: [180.0, -12.5, 0.0]
-  imu_xyz: [0.0, 0.0, 0.0]
+  xyz: [0.105645, 0.022548, 0.105696]
+  rpy: [179.958, -13.248, 0.944] #-0.513] # run vlcal again.
+  # Mid-360 user manual: IMU chip in lidar (point-cloud) coordinates, axes aligned.
+  imu_xyz: [0.011, 0.02329, -0.04412]
   imu_rpy: [0.0, 0.0, 0.0]
   composite:
     enabled: true
@@ -299,6 +302,8 @@ fcu_control:
   #   wheelspeed_max: &max_speed_mps 4.0
   #   nominal_voltage: 14.8
   #   motor_kv: 3930.0
+  #   kv_correction_factor: 0.69
+  #   kd_alpha: 0.2
   #   speed_control_kp: 1.0
   #   speed_control_ki: 1.0
   #   safe_mode: true
@@ -309,16 +314,20 @@ fcu_control:
   #   throttle_delta: 0.02
   #   liftoff_oversteer: true
   #   control_dt: 0.02
+  #   throttle_pwm_zero: 1500.0
+  #   throttle_pwm_full: 2000.0
   ll: # for the big hound:
     cmd_topic: /hound_nav/cmd_ackermann
     erpm_gain: 2500.0
-    steering_max: &max_steer_rad 0.388
-    wheelbase: 0.29
-    cg_height: 0.125
-    track_width: 0.25
+    steering_max: &max_steer_rad 0.362
+    wheelbase: &wheelbase 0.552
+    cg_height: &cg_height 0.228
+    track_width: 0.457
     wheelspeed_max: &max_speed_mps 5.0
     nominal_voltage: 14.8
-    motor_kv: 800.0
+    motor_kv: 780.0
+    kv_correction_factor: 0.9
+    kd_alpha: 0.0001
     speed_control_kp: 1.0
     speed_control_ki: 1.0
     safe_mode: true
@@ -326,9 +335,13 @@ fcu_control:
     roll_gain: 0.33
     steer_slack: 0.4
     LPF_tau: 0.2
-    throttle_delta: 0.02
+    throttle_delta: 0.1
     liftoff_oversteer: true
     control_dt: 0.005
+    # RC ch2: center/trim = 0 m/s, full = wheelspeed_max. Below trim is reverse
+    # in semi (auto speed cap stays ≥0).
+    throttle_pwm_zero: 1500.0
+    throttle_pwm_full: 2000.0
   # In-process VESC UART → FcuBus; edge republishes /sensors/core.
   vesc:
     enabled: true
@@ -340,27 +353,102 @@ nvblox:
   # Offline: use_sim_time + remap mapper pubs to /debug/hound_mapping/*
   bag_replay_mode: false
   bag_replay_topic_prefix: debug
-  enabled: false
-  # Color paint range used to follow nvblox library 7 m (TSDF was 40 m).
-  # color_integrator_* below now match camera TSDF range.
+  enabled: true
   # Remaining color issues (misaligned / magenta in FOV) may still be camera_info,
   # TF timing, or projective vs LiDAR TSDF surface.
-  # Sensors
-  use_depth: false
-  use_color: false
-  use_lidar: false
   # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
   # (unobserved_luminance) so camera FOV coverage is visible.
-  debug_semantic_all_traversable: true
+  debug_semantic_all_traversable: false
   use_people_mask: false
   people_mask_topic: "/segmentation/refined_people_mask"
   # Zero bottom of each depth image before TSDF integrate (lidar untouched).
-  depth_ignore_bottom_fraction: 0.5
-  camera_names: ["camera_front", "camera_left", "camera_right"]
-  # color_topic_template: "/{name}/segmentation/refined_traversability"
-  # color_info_topic_template: "/{name}/segmentation/camera_info"
-  color_topic_template: "/{name}/color/image_raw"
-  color_info_topic_template: "/{name}/color/camera_info"
+  depth_ignore_bottom_fraction: 0.6
+
+  # Per-sensor integrate settings. mapping_node applies this camera/lidar's
+  # projective block immediately before that sensor's integrate.
+  # Depth TSDF: depth_integrator_max_integration_distance_m
+  # Color paint: color_integrator_max_integration_distance_m
+  # Templates expand {name}. Launch rejects roi left+right>1 or top+bottom>1.
+  cameras:
+    color_template: /{name}/segmentation/refined_traversability
+    info_template: /{name}/segmentation/camera_info
+    depth_template: /{name}/depth/image_raw
+    depth_info_template: /{name}/depth/camera_info
+    camera_front:
+      use_depth: true
+      use_color: true
+      roi: # fraction of image; 0 = no crop
+        left: 0.05
+        right: 0.05
+        top: 0.1
+        bottom: 0.6
+      projective_integration_parameters:
+        depth_integrator_max_integration_distance_m: 4.0
+        color_integrator_max_integration_distance_m: 12.0
+        truncation_distance_vox: 5.0
+        max_weight: 1.0
+        weighting_mode: inverse_square
+        invalid_depth_decay_factor: -1.0 # <0 disables
+        ray_subsampling_factor: 1
+        sphere_tracer_max_ray_length_m: 12.0
+        sphere_tracing_ray_subsampling_factor: 1
+        sphere_tracing_measurement_weight: 0.8
+    camera_left:
+      use_depth: true
+      use_color: true
+      roi:
+        left: 0.05
+        right: 0.05
+        top: 0.1
+        bottom: 0.5
+      projective_integration_parameters:
+        depth_integrator_max_integration_distance_m: 2.0
+        color_integrator_max_integration_distance_m: 12.0
+        truncation_distance_vox: 5.0
+        max_weight: 1.0
+        weighting_mode: inverse_square
+        invalid_depth_decay_factor: -1.0
+        ray_subsampling_factor: 1
+        sphere_tracer_max_ray_length_m: 12.0
+        sphere_tracing_ray_subsampling_factor: 1
+        sphere_tracing_measurement_weight: 0.8
+    camera_right:
+      use_depth: true
+      use_color: true
+      roi:
+        left: 0.05
+        right: 0.05
+        top: 0.1
+        bottom: 0.5
+      projective_integration_parameters:
+        depth_integrator_max_integration_distance_m: 2.0
+        color_integrator_max_integration_distance_m: 12.0
+        truncation_distance_vox: 5.0
+        max_weight: 1.0
+        weighting_mode: inverse_square
+        invalid_depth_decay_factor: -1.0
+        ray_subsampling_factor: 1
+        sphere_tracer_max_ray_length_m: 12.0
+        sphere_tracing_ray_subsampling_factor: 1
+        sphere_tracing_measurement_weight: 0.8
+  lidars:
+    lidar:
+      use_lidar: true
+      topic: /livox/cloud
+      width: 360
+      height: 96
+      elevation_below_deg: 7.0
+      elevation_above_deg: 52.0
+      min_valid_range_m: 0.3
+      use_lidar_motion_compensation: false
+      projective_integration_parameters:
+        depth_integrator_max_integration_distance_m: 12.0
+        truncation_distance_vox: 5.0
+        max_weight: 1.0
+        weighting_mode: constant
+        invalid_depth_decay_factor: -1.0
+        ray_subsampling_factor: 1
+
   # Frames / TSDF volume
   global_frame: odom
   base_frame: base_link
@@ -373,21 +461,6 @@ nvblox:
   # ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty
   map_clear_topic: ~/map_clear
   voxel_size: 0.05
-  projective_integrator_max_integration_distance_m: 40.0
-  lidar_projective_integrator_max_integration_distance_m: 40.0
-  # TSDF fusion (camera + lidar). Library defaults unless noted.
-  projective_integrator_truncation_distance_vox: 5.0
-  projective_integrator_max_weight: 1.0
-  # constant | constant_dropoff | inverse_square | inverse_square_dropoff
-  # | inverse_square_tsdf_distance_penalty | linear_with_max
-  projective_integrator_weighting_mode: linear_with_max
-  projective_tsdf_integrator_invalid_depth_decay_factor: -1.0  # <0 disables
-  raycast_subsampling_factor: 4
-  # Color paint. Was library 7 m / 15 m tracer (TSDF went to 40 m → magenta far voxels).
-  color_integrator_max_integration_distance_m: 40.0
-  color_integrator_sphere_tracer_max_ray_length_m: 40.0
-  color_integrator_sphere_tracing_ray_subsampling_factor: 4
-  color_integrator_measurement_weight: 0.8
   # LocalMap BEV (nav Map_config aliases these)
   elevation_resolution: &local_map_res 0.05
   local_map_size_m: &local_map_size 20.0
@@ -414,27 +487,16 @@ nvblox:
   inpaint_resolution_m: 0.25
   inpaint_radius: 3
   # Median on elev before slope/normals (OpenCV 32F: 3 or 5). 0 = off.
-  elev_median_ksize: 5
-  # Rates. mapper_rate_hz locks the worker (integrate + BEV + sleep) and LocalMap.
-  # Latest sensor frame is taken each tick (no per-sensor Hz gate).
-  # publish/integrate_*_hz are unused leftovers; map_clear is radius trim.
+  elev_median_ksize: 9
+  # mapper_rate_hz locks the worker (integrate + BEV + sleep) and LocalMap.
+  # Latest sensor frame is taken each tick. map_clear is radius trim.
   mapper_rate_hz: 10.0
-  publish_map_rate_hz: 10.0
   map_clear_rate_hz: 10.0
-  integrate_depth_rate_hz: 10.0
-  integrate_color_rate_hz: 10.0
-  integrate_lidar_rate_hz: 10.0
-  # Lidar (when use_lidar)
-  lidar_topic: "/livox/cloud"
-  lidar_width: 360
-  lidar_height: 96
-  lidar_elevation_below_deg: 7.0
-  lidar_elevation_above_deg: 52.0
-  lidar_vertical_fov_rad: 1.0297
-  lidar_min_valid_range_m: 0.3
-  use_lidar_motion_compensation: false
   # LayerCake save / prior BEV
   layer_cake_path: "/root/colcon_ws/maps/hound_tsdf.layercake"
+  # Snapshot /tf_static map←odom next to the cake on save_layer_cake.
+  save_map_odom_tf: true
+  map_frame: map
   prior_layer_cake_path: ""
   prior_xyz_yaw: [0.0, 0.0, 0.0, 0.0]
   prior_fill_enabled: true
@@ -443,7 +505,7 @@ nvblox:
   tsdf_color_mesh_rate_hz: 1.0
   # Near-surface TSDF voxels (PointCloud2 xyz+rgb from ColorLayer). Magenta =
   # geometry without color weight. Subscribe /hound_mapping/tsdf_voxels in RViz.
-  publish_tsdf_voxels: false
+  publish_tsdf_voxels: true
   tsdf_voxel_rate_hz: 1.0
   tsdf_voxel_min_weight: 0.2
   tsdf_voxel_max_distance_m: 0.0   # 0 → 2×voxel_size
@@ -451,6 +513,48 @@ nvblox:
   publish_lidar_depth_image: false
   publish_lidar_tsdf_probe: false
   lidar_tsdf_probe_max_points: 4000
+
+# ArUco locks map←odom while you record. That TF goes into the rosbag
+# (/tf_static). Saving a LayerCake also writes a sidecar YAML next to the cake
+# (same TF). Replay the bag as-is, or source: file to republish the sidecar
+# without the detector. Marker pose in map: xyz (m) + rpy (deg); identity =
+# printed marker at map origin (OpenCV: X right, Y up, Z out of the face).
+aruco_registration:
+  enabled: false
+  source: aruco   # aruco (record/lock) | file (replay sidecar, no detector)
+  tf_file: ""     # empty → <layer_cake stem>.map_odom.yaml
+  camera_name: camera_front
+  image_topic: /camera_front/color/image_raw
+  camera_info_topic: /camera_front/color/camera_info
+  pose_topic: /aruco_registration/marker_pose
+  map_odom_pose_topic: /aruco_registration/map_odom
+  overlay_topic: /aruco_registration/overlay
+  publish_overlay: true
+  publish_detect_tf: true
+  detected_frame: aruco_detected
+  dictionary: DICT_4X4_1000
+  marker_id: 0
+  marker_size_m: 0.18
+  min_side_px: 12.0
+  dense_refine: all   # off | outer | internal | all
+  dense_refine_optimize: both   # h | pose | both
+  dense_refine_draw: true
+  corner_refine: apriltag   # apriltag | subpix | none
+  corner_refine_win_size: 10
+  corner_refine_max_iter: 30
+  corner_refine_min_accuracy: 0.1
+  map_frame: map
+  odom_frame: odom
+  marker_frame: aruco_marker
+  marker_xyz: [0.0, 0.0, 0.0]
+  marker_rpy: [0.0, 0.0, 0.0]
+  tf_publish_hz: 10.0
+  tf_timeout_s: 0.15
+  tf_hold_s: 5.0          # 0 → latch /tf_static forever; >0 → /tf after last pose
+  trigger_topic: /aruco_registration/trigger
+  trigger_timeout_s: 8.0  # hunt window after trigger (keep re-detecting)
+  ema_alpha: 0.25         # map←odom EMA (1 = last sample only)
+  lock_once: false
 
 viz:
   enabled: false   # prefer RViz LocalMap display (hound_rviz_plugins)
@@ -487,7 +591,7 @@ nav:
   local_map_topic: /hound_mapping/local_map
   state_topic: /hound_fcu_control/control_state
   path_topic: /hound_fcu_control/mission/path
-  # RViz "2D Goal Pose" → one-waypoint mission (no mission_pose_builder needed).
+  # RViz / other Path sources. GPS missions: mission_manager publishes goal_topic only.
   goal_topic: /goal_pose
   cmd_topic: /hound_nav/cmd_ackermann
   plan_topic: /hound_nav/local_plan
@@ -501,6 +605,21 @@ nav:
   screw_length_m: 1.0
   lookahead: 8.0
   wp_radius: 1.0
+  # FCU GPS waypoints → single /goal_pose (nav manager still also accepts Path).
+  mission_manager:
+    enabled: true
+    mode: gps  # gps | rviz (rviz not implemented)
+    gps_topic: /hound_fcu_control/gps/fix
+    gps_fix_type_topic: /hound_fcu_control/gps/fix_type
+    imu_topic: /hound_fcu_control/imu
+    gps_waypoints_topic: /hound_fcu_control/mission/gps
+    goal_topic: /goal_pose
+    state_topic: /hound_fcu_control/control_state
+    frame_id: odom
+    min_fix_type: 3
+    max_h_acc_m: 2.5
+    update_wp_local_from_gps: false
+    publish_hz: 0.25  # also publishes immediately on waypoint reach / mission accept
   # OpenCV planner debug window (manager thread). Off for field (CPU/DISPLAY).
   planner_cv_viz: true
   planner_cv_viz_window: hound_planner_vis
@@ -520,24 +639,24 @@ nav:
 
   # Plant model. Controls are physical (steer rad, wheelspeed m/s); scales = 1.
   Dynamics_config:
-    wheelbase: 0.29
+    wheelbase: *wheelbase
     throttle_to_wheelspeed: 1.0
     steering_max: 1.0
     dt: 0.05
-    D: 0.6
+    D: 0.8
     B: 6.8
     C: 1.5
-    lf: 0.15
-    lr: 0.15
-    Iz: 0.1
+    lf: 0.28
+    lr: 0.28
+    Iz: 0.10
     LPF_tau: 0.5
     LPF_st: 0.5
     LPF_th: 0.5
     res_coeff: 0.01
     drag_coeff: 0.005
-    car_length: 0.33
-    car_width: 0.25
-    cg_height: 0.15
+    car_length: &car_length 0.90
+    car_width: &car_width 0.55
+    cg_height: *cg_height
     type: "slip3d"
 
   # Sample steer [rad] and wheelspeed [m/s]; limits from fcu_control.ll anchors.
@@ -560,43 +679,48 @@ nav:
     critical_vert_acc: 5.0
     roll_ditch_w: 50.0
     lethal_w: 50.0
-    car_bb_length: 0.3
-    car_bb_width: 0.3
+    car_bb_length: 0.84
+    car_bb_width: 0.52
     throttle_threshold: 0.0
 
   Planner_config:
     unstuck_expansions: 2000
     experiment_info_default:
-      resolution: 2.0
-      epsilon: [0.5, 0.5, 1.57, 1.0]
-      LCR: [0.5, 0.5, 0.3925, 1.0]
+      resolution: 0.5
+      epsilon: &epsilon [0.25, 0.25, 0.3925, 0.25]
+      backward_epsilon: *epsilon
+      LCR: *epsilon
       tolerance: 0.125
       max_level: 6
       division_factor: 2
-      max_expansions: 1000
+      max_expansions: 1250
       hysteresis: 100
       bidirectional: true
       # Optional GPU batching of successor expansions (IGHA*).
+      # near_meet_config:
+      #   enabled: true
+      #   num_interpolation_points: 5
+      #   num_perturbations: 3
       preemptive_expansion:
         enabled: true
         min_preemptive: 50
         max_preemptive: 100
       node_info:
         node_type: "kinodynamic"
-        length: 0.3
-        width: 0.25
+        length: *car_length # the bounding box and wheel positions should be separable. for off-road cars, wheels are usually at the corners of the bounding box.
+        width: *car_width
         map_res: *local_map_res  # overwritten from LocalMap on first pdef
         dt: 0.05
         timesteps: 5
         step_size: 1.0
         steering_list: [-15.0, -5.0, 0.0, 5.0, 15.0]
-        throttle_list: [-4.0, -2.0, 0, 2.0, 4.0]
+        throttle_list: [-4.0, 0, 4.0]
         del_theta: 90.0
         del_vel: 1.0
         RI: 0.7
-        max_vert_acc: 5.0
+        max_vert_acc: 8.0
         min_vel: 0.0
-        max_vel: 4.0
+        max_vel: 5.0
         max_theta: 40.0
         gear_switch_time: 5.0
         hash_theta: false

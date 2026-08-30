@@ -65,8 +65,8 @@ public:
   void send_rc_override(const RcOverrideCmd & cmd);
   /** Rate-limited (1 Hz) SET_MODE with custom_mode (e.g. Rover HOLD = 4). */
   void request_mode(uint32_t custom_mode);
-  /** PLAY_TUNE_V2 (QBasic format=1 by default). */
-  void send_play_tune(const std::string & tune, uint32_t format = 1);
+  /** PLAY_TUNE (ArduPilot; tune + tune2 concatenated on the FCU). */
+  void send_play_tune(const std::string & tune);
   /** Inject one RTCM3 frame as GPS_RTCM_DATA (fragmented if >180 B). */
   void send_gps_rtcm(const uint8_t * data, size_t len);
 

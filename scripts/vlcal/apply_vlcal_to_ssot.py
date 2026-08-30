@@ -292,9 +292,15 @@ def _replace_camera_mount(
     out: List[str] = []
     in_cam = False
     replaced_xyz = replaced_rpy = False
+    done = False
     header = f"    {camera}:"
     for line in lines:
         if line.startswith(header):
+            # First stereo_composite mount only. Later mapping.cameras.camera_*
+            # reuse the same indent and have no xyz/rpy.
+            if done:
+                out.append(line)
+                continue
             in_cam = True
             replaced_xyz = replaced_rpy = False
             out.append(line)
@@ -319,6 +325,7 @@ def _replace_camera_mount(
             out.append(f"{indent}rpy: {fmt_list(rpy, nd=3)}{comment}\n")
             replaced_rpy = True
             in_cam = False
+            done = True
             continue
         out.append(line)
     if not (replaced_xyz and replaced_rpy):

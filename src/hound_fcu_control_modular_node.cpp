@@ -61,9 +61,17 @@ HoundFcuControlModularNode::HoundFcuControlModularNode(const rclcpp::NodeOptions
   ekf_odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(ekf_odom_topic_, 10);
   ap_odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("~/ap/local_odometry", 10);
   mission_pub_ = create_publisher<nav_msgs::msg::Path>("~/mission/path", 1);
+  {
+    rclcpp::QoS gps_mission_qos(1);
+    gps_mission_qos.transient_local();
+    gps_mission_qos.reliable();
+    mission_gps_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "~/mission/gps", gps_mission_qos);
+  }
   armed_pub_ = create_publisher<std_msgs::msg::Bool>("~/state/armed", 10);
   rc_pub_ = create_publisher<std_msgs::msg::UInt16MultiArray>("~/rc/in", 10);
   gps_sats_pub_ = create_publisher<std_msgs::msg::UInt8>("~/gps/satellites", 10);
+  gps_fix_type_pub_ = create_publisher<std_msgs::msg::UInt8>("~/gps/fix_type", 10);
   gps_h_acc_pub_ = create_publisher<std_msgs::msg::UInt32>("~/gps/h_acc_mm", 10);
   diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/low_level_diagnostics", 1);
   // BeamNG 17-vector: pos,rpy,vel,A,G,steer,wheelspeed — synced in ll_worker.
@@ -479,6 +487,32 @@ nav_msgs::msg::Path HoundFcuControlModularNode::mission_to_path(
   return path;
 }
 
+nav_msgs::msg::Path HoundFcuControlModularNode::mission_to_gps_path(
+  const std::vector<MissionItem> & items) const
+{
+  nav_msgs::msg::Path path;
+  path.header.stamp = now();
+  path.header.frame_id = "wgs84";
+  path.poses.reserve(items.size());
+
+  for (const auto & it : items) {
+    if (it.command != kNavWaypoint && it.command != kNavSplineWaypoint) {
+      continue;
+    }
+    if (!is_global_frame(it.frame)) {
+      continue;
+    }
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = path.header;
+    pose.pose.orientation.w = 1.0;
+    pose.pose.position.x = it.x_lat;
+    pose.pose.position.y = it.y_long;
+    pose.pose.position.z = it.z_alt;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+
 void HoundFcuControlModularNode::aux_loop()
 {
   const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, aux_publish_hz_));
@@ -520,6 +554,7 @@ void HoundFcuControlModularNode::aux_loop()
     std::vector<MissionItem> items;
     if (bridge_ && bridge_->take_mission(items)) {
       mission_pub_->publish(mission_to_path(items));
+      mission_gps_pub_->publish(mission_to_gps_path(items));
     }
 
     const auto elapsed = std::chrono::steady_clock::now() - t0;
@@ -602,6 +637,10 @@ void HoundFcuControlModularNode::ros_edge_timer()
     m.position_covariance[8] = gps.epv_m * gps.epv_m;
     m.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_APPROXIMATED;
     gps_pub_->publish(m);
+
+    std_msgs::msg::UInt8 ft;
+    ft.data = gps.fix_type;
+    gps_fix_type_pub_->publish(ft);
   }
 
   ApLocalPoseSample ap;

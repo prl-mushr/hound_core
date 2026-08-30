@@ -129,7 +129,7 @@ cd /root/colcon_ws/src/Livox-SDK2
 mkdir -p build && cd build
 cmake .. && make -j$(nproc)
 
-# 4b) Package deps
+# 4b) Package deps — run BEFORE the first colcon build of composite_sensing
 bash /root/colcon_ws/src/composite_sensing/scripts/install_deps.sh
 bash /root/colcon_ws/src/perception_models/scripts/install_deps.sh
 bash /root/colcon_ws/src/hound_viz/install_deps.sh
@@ -139,6 +139,17 @@ rosdep install --from-paths src --ignore-src -y -r   # as needed
 colcon build --symlink-install
 source /root/colcon_ws/install/setup.bash
 ```
+
+`composite_sensing/scripts/install_deps.sh` is what pulls **mesh_pf Vulkan RT**
+(`libvulkan-dev` + `glslang-tools` / `glslangValidator`). CMake only compiles
+the Vulkan path if `glslangValidator` is on `PATH` at configure time; otherwise
+`mesh_pf` is Embree-only and `raycast_backend: auto` never tries the GPU.
+Do not skip 4b, and do not `colcon build` `composite_sensing` before it.
+
+Verify the configure log has `mesh_pf: Vulkan RT enabled`. At runtime the node
+should print `backend=vulkan`. If you only see `backend=embree` and no
+`Vulkan RT unavailable` line, it was not compiled in — install the packages
+and rebuild with `--cmake-force-configure`.
 
 Minimum packages for the **currently enabled** SSoT set (stereo + mapping + seg + viz + bag):  
 `hound_core`, `composite_sensing`, `hound_mapping`, `perception_models`, `hound_viz` (+ `vesc_msgs` / `vesc_ros2` for linking FCU node).
@@ -267,7 +278,8 @@ Offline (no HW): `bash /root/colcon_ws/src/hound_core/scripts/smoke_dataset_pipe
 - [ ] Load/pull `dbzfan2012/mushr-jazzy:aarch64` + `mushr_jazzy` wrapper  
 - [ ] `clone_hound_stack.sh`  
 - [ ] Build Livox-SDK2  
-- [ ] `install_deps.sh` ×3 + `colcon build`  
+- [ ] `install_deps.sh` ×3 **before** first `colcon build` (glslang-tools → mesh_pf Vulkan)  
+- [ ] `colcon build` — configure log: `mesh_pf: Vulkan RT enabled`  
 - [ ] Rebuild TRT engines; fix SSoT engine paths  
 - [ ] SSoT serials / extrinsics / IPs  
 - [ ] `ros2 launch hound_core hound_core.launch.py` + smoke topics  

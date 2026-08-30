@@ -684,16 +684,20 @@ void MavlinkBridge::send_gps_rtcm(const uint8_t * data, size_t len)
   }
 }
 
-void MavlinkBridge::send_play_tune(const std::string & tune, uint32_t format)
+void MavlinkBridge::send_play_tune(const std::string & tune)
 {
-  mavlink::common::msg::PLAY_TUNE_V2 pt{};
+  mavlink::common::msg::PLAY_TUNE pt{};
   pt.target_system = cfg_.target_system;
   pt.target_component = cfg_.target_component;
-  pt.format = format;
   pt.tune.fill(0);
-  const size_t n = std::min(tune.size(), pt.tune.size() - 1);
-  if (n > 0) {
-    std::memcpy(pt.tune.data(), tune.data(), n);
+  pt.tune2.fill(0);
+  const size_t n1 = std::min(tune.size(), pt.tune.size() - 1);
+  if (n1 > 0) {
+    std::memcpy(pt.tune.data(), tune.data(), n1);
+  }
+  if (tune.size() > n1) {
+    const size_t n2 = std::min(tune.size() - n1, pt.tune2.size() - 1);
+    std::memcpy(pt.tune2.data(), tune.data() + n1, n2);
   }
   send_to_fcu(pt);
 }

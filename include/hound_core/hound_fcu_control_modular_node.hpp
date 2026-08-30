@@ -67,6 +67,8 @@ private:
   void icp_origin_cb(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
   nav_msgs::msg::Path mission_to_path(const std::vector<MissionItem> & items) const;
+  /** Global-frame NAV_WAYPOINT items as lat/lon/alt in pose.x/y/z, frame wgs84. */
+  nav_msgs::msg::Path mission_to_gps_path(const std::vector<MissionItem> & items) const;
 
   std::string fcu_url_;
   std::string gcs_url_;
@@ -146,9 +148,11 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr ap_odom_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr mission_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr mission_gps_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr armed_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt16MultiArray>::SharedPtr rc_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr gps_sats_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr gps_fix_type_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr gps_h_acc_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
   rclcpp::Publisher<vesc_msgs::msg::VescStateStamped>::SharedPtr vesc_pub_;
