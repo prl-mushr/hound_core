@@ -158,6 +158,28 @@ Restart mapping to load a prior. Gap-fill uses the **LayerCake**
 (`nvblox.prior_layer_cake_path`), not the elev yaml. `prior_xyz_yaw` is
 T_odom_prior (xyz m + yaw rad); leave identity when live odom matches the save.
 
+User-authored no-go zones are a separate overlay (they do not edit the cake).
+Empty `nvblox.lethal_map_path` means all free. When set, mapping loads the
+mask onto the GPU and ANDs it onto LocalMap cost after slope/inpaint
+(0 = lethal). Same XY frame as the LayerCake; `prior_xyz_yaw` is the
+cake→live transform.
+
+```bash
+# top-down BEV from the cake, then draw polygons in the browser
+python3 /root/colcon_ws/src/hound_mapping/scripts/author_lethal_map.py \
+  --layercake /root/colcon_ws/maps/hound_tsdf.layercake
+# writes /root/colcon_ws/maps/hound_tsdf.lethal.yaml (+ .lethal.f32)
+# set nvblox.lethal_map_path to that yaml and restart mapping
+```
+
+If the sibling `.elev.yaml` is missing, the script runs `layercake_to_bev`
+(needs a built `hound_mapping`). You can also extract first:
+
+```bash
+ros2 run hound_mapping layercake_to_bev -- \
+  --layercake /root/colcon_ws/maps/hound_tsdf.layercake
+```
+
 `nvblox.save_map_odom_tf: true` (default) snapshots `/tf_static` **map←odom**
 next to the cake as `<stem>.map_odom.yaml` on LayerCake save.
 

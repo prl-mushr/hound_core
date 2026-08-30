@@ -1267,6 +1267,7 @@ def build_hound_mapping_node(
             for x in (nvblox.get("prior_xyz_yaw") or [0.0, 0.0, 0.0, 0.0])
         ],
         "prior_fill_enabled": bool(nvblox.get("prior_fill_enabled", True)),
+        "lethal_map_path": str(nvblox.get("lethal_map_path", "") or ""),
         "map_frame": str(nvblox.get("map_frame", "map")),
         "save_map_odom_tf": bool(nvblox.get("save_map_odom_tf", True)),
         "publish_tsdf_color_mesh": bool(

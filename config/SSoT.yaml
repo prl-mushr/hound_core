@@ -501,6 +501,10 @@ nvblox:
   layer_cake_path: "/root/colcon_ws/maps/hound_tsdf.layercake"
   # save_elevation.py default out (empty → <layer_cake stem>.elev.yaml).
   elevation_map_path: ""
+  # User-authored no-go overlay (empty → all free). Same XY frame as the cake.
+  # 0 = lethal, 1 = free. Mapping ANDs this onto LocalMap cost on the GPU.
+  # Author: python3 .../hound_mapping/scripts/author_lethal_map.py
+  lethal_map_path: ""
   # Snapshot /tf_static map←odom next to the cake on save_layer_cake.
   save_map_odom_tf: true
   map_frame: map
