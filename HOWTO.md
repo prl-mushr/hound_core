@@ -83,10 +83,58 @@ ros2 launch hound_core hound_seg_mapping.launch.py prefix:= use_sim_time:=false
 
 RViz LocalMap topic when prefix is `debug`: `/debug/hound_mapping/local_map`.
 
-Log LocalMap + control_state at 1 Hz (Ctrl+C writes start/goal pairs):
+### Planner problems from a bag
+
+Logs LocalMap + `control_state` at 1 Hz. Ctrl+C writes start/goal pairs
+(default: goal = pose **5 s** later, XY clamped to that map). Default dir:
+`/root/colcon_ws/planning_problems/<utc_stamp>/`. Needs
+`/hound_fcu_control/control_state` in the bag.
 
 ```bash
-ros2 launch hound_core hound_seg_mapping.launch.py log_problems:=true
+ros2 launch hound_core hound_seg_mapping.launch.py \
+  log_problems:=true \
+  problems_dir:=/root/colcon_ws/planning_problems/my_run
+ros2 bag play /path/to/bag --clock
+# Ctrl+C when done → snapshots/ + problems/ + problems_index.json
+```
+
+Rebuild pairs without replaying the bag (first later pose **≥ 8 m** XY, not t+5 s).
+Keeps the original `problems/` folder:
+
+```bash
+PYTHONPATH=/root/colcon_ws/src/hound_nav:${PYTHONPATH} python3 -m hound_nav.log_planning_problems \
+  --pairs-only /root/colcon_ws/planning_problems/my_run \
+  --min-dist 8 --until-min-dist --problems-subdir problems_8m
+```
+
+IGHA* vs BiIGHA* (SSoT `nav.Planner_config`). `--free-costmap` = every cell 255
+(debug). Workspace `IGHAStar`, not IGHAStar_private.
+
+```bash
+PYTHONPATH=/root/colcon_ws/src/hound_nav:${PYTHONPATH} python3 -u \
+  /root/colcon_ws/src/hound_nav/hound_nav/run_bag_playback.py \
+  /root/colcon_ws/planning_problems/my_run \
+  --free-costmap --exp 5000
+# 8 m set:
+PYTHONPATH=/root/colcon_ws/src/hound_nav:${PYTHONPATH} python3 -u \
+  /root/colcon_ws/src/hound_nav/hound_nav/run_bag_playback.py \
+  /root/colcon_ws/planning_problems/my_run \
+  --free-costmap --exp 5000 --problems-subdir problems_8m
+```
+
+Plots + timing: `results_free_cost/` or `results_free_problems_8m/`
+(`cost_vs_expansions.png`, `success_vs_expansions.png`, `timing_metrics.json`).
+Omit `--free-costmap` to use logged cost. `--config /path.yaml` if not SSoT.
+`--plot-only` replots existing pickles. `--cruise-speed 3.0` overrides goal
+speed (default = logged `|v|` at the goal pose).
+
+Viser one problem (host-network container → http://localhost:8081):
+
+```bash
+PYTHONPATH=/root/colcon_ws/src/hound_nav:${PYTHONPATH} python3 -u \
+  /root/colcon_ws/src/hound_nav/hound_nav/run_bag_playback.py \
+  /root/colcon_ws/planning_problems/my_run \
+  --viser --problem 10 --free-costmap --exp 5000 --viser-port 8081
 ```
 
 ## Bag: mapping only
@@ -96,6 +144,37 @@ ros2 launch hound_core hound_mapping_replay.launch.py bag:=/path/to/bag prefix:=
 # or
 ros2 launch hound_core hound_mapping_replay.launch.py
 ros2 bag play /path/to/bag --clock
+```
+
+## Mission manager only
+
+GPS waypoints → `/goal_pose`. Does **not** start Dora nav or FCU. Needs FCU
+(or a bag) already up. Ignores `nav.enabled` / `mission_manager.enabled`.
+Do not also run `hound_nav.launch.py` / core with mission_manager on (two nodes).
+
+```bash
+ros2 launch hound_core hound_mission_manager.launch.py
+# if install is stale:
+ros2 launch /root/colcon_ws/src/hound_core/launch/hound_mission_manager.launch.py
+```
+
+Inputs:
+
+```bash
+ros2 topic hz /hound_fcu_control/gps/fix
+ros2 topic hz /hound_fcu_control/gps/fix_type
+ros2 topic hz /hound_fcu_control/imu
+ros2 topic echo /hound_fcu_control/gps/fix_type
+ros2 topic echo /hound_fcu_control/mission/gps   # lat=x lon=y, frame wgs84
+ros2 topic hz /hound_fcu_control/control_state   # optional (odom-align)
+```
+
+Outputs (latched). Empty until a GPS mission is accepted (fix_type ≥ 3,
+h_acc < `max_h_acc_m`):
+
+```bash
+ros2 topic echo /goal_pose
+ros2 topic echo /hound_nav/mission/waypoints
 ```
 
 ## Nav only

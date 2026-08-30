@@ -49,7 +49,7 @@ stereo_composite:
   publish_odom_tf: false
   # 0 = publish every successful track. Else stride = round(infra_fps / this).
   # Tracking still runs every IR frame; only ROS odom (→ EKF) is gated.
-  odom_publish_hz: 60.0
+  odom_publish_hz: 90.0
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
@@ -71,7 +71,7 @@ stereo_composite:
       serial_number: "030422250301"
       infra_width: 640
       infra_height: 360
-      infra_fps: 60
+      infra_fps: 90
       emitter_enabled: 0
       vslam_enabled: true
       vslam_type: 2
@@ -80,7 +80,7 @@ stereo_composite:
       color_fps: 30
       depth_width: 640
       depth_height: 360
-      depth_fps: 60
+      depth_fps: 90
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
       parent_frame: base_link
