@@ -8,3 +8,6 @@ log/
 install/
 # smoke artifacts
 config/smoke/*.log
+# Piper neural voices + binary (setup_tts.sh)
+share/piper/voices/*.onnx
+share/piper/bin/

@@ -13,6 +13,7 @@
 #   aruco_registration  ArUco detect + held map←odom TF (prior maps / inpaint)
 #   hal_monitor       diagnostics / tunes
 #   bag_recorder      Bool /hal/record → ros2 bag
+#   tts               espeak-ng → USB speaker (experiment audio confirms)
 #   launch            staggered bring-up delay
 # =============================================================================
 
@@ -49,7 +50,7 @@ stereo_composite:
   publish_odom_tf: false
   # 0 = publish every successful track. Else stride = round(infra_fps / this).
   # Tracking still runs every IR frame; only ROS odom (→ EKF) is gated.
-  odom_publish_hz: 90.0
+  odom_publish_hz: 60.0
   async_sba: true
   slam_sync_mode: false
   warmup_frames: 60
@@ -58,7 +59,7 @@ stereo_composite:
   log_sensor_rates: false
   profile: false
   visual_preset: 3
-  clip_distance: 3.0
+  clip_distance: 10.0
   initial_reset: false
   align_depth: false
   # Published color is undistorted (pinhole, D=0) on /{name}/color/image_raw.
@@ -71,7 +72,7 @@ stereo_composite:
       serial_number: "030422250301"
       infra_width: 640
       infra_height: 360
-      infra_fps: 90
+      infra_fps: 60
       emitter_enabled: 0
       vslam_enabled: true
       vslam_type: 2
@@ -80,7 +81,7 @@ stereo_composite:
       color_fps: 30
       depth_width: 640
       depth_height: 360
-      depth_fps: 90
+      depth_fps: 60
       color_publish_fps: 10.0
       depth_publish_fps: 10.0
       parent_frame: base_link
@@ -155,7 +156,7 @@ lidar:
   core_temp_warn_c: 55.0
   cloud_stale_warn_s: 5.0
   status_log_period_s: 60.0
-  enable_imu: true
+  enable_imu: false
   publish_static_tf: true
   parent_frame: base_link
   # xyz: [0.0, 0.15, 0.15]
@@ -185,21 +186,75 @@ lidar:
       raw_cloud_topic: /livox/cloud_raw
       warn_ms: 40.0
 
-# Embree / Vulkan-RT constant-twist mesh PF (subscribes to deskewed cloud_topic).
+# Embree / Vulkan-RT mesh localizer (subscribes to deskewed cloud_topic).
+# After ArUco/TF seed, tracking_backend=micp runs MICP-L (raycast P2L ICP).
+# PF is used for bbox / ~/global_localization. Particles are SE(3).
 mesh_pf:
-  enabled: false
+  enabled: true
   # Low-poly map-frame mesh from decimate_mesh.py (not the raw TSDF PLY).
-  map_file: "/root/colcon_ws/maps/hound_tsdf_mesh_pf.obj"
+  map_file: "/root/colcon_ws/maps/Allen_backside_0/hound_tsdf_mesh_pf.obj"
   cloud_topic: /livox/cloud
   pose_topic: /localization/mesh_pose
   map_frame: map
   odom_frame: odom
   base_frame: base_link
-  publish_tf: true   # latch map←odom on /tf_static (same as ArUco)
+  publish_tf: true   # latch map←odom after ArUco hunt (ArUco then releases it)
   localize_hz: 10.0
-  num_particles: 2000
-  beam_samples: 64
-  global_init_on_start: true
+  num_particles: 1024          # bbox / kidnapped (global)
+  tracking_particles: 1024      # after TF / pose seed
+  beam_samples: 1024
+  # experiment_start: reset, wait for ArUco hunt, seed from map←odom, track.
+  # After handover this node owns map←odom (same frames ArUco used).
+  init_from_tf: true
+  wait_for_aruco_hunt: true
+  trigger_topic: /aruco_registration/trigger
+  hunting_topic: /aruco_registration/hunting
+  map_odom_pose_topic: /aruco_registration/map_odom
+  init_tf_parent: map
+  init_tf_child: odom
+  init_tf_trans_std_m: 0.2
+  init_tf_rot_std_deg: 3.0
+  init_tf_timeout_s: 10.0   # 0 = wait forever
+  global_init_on_start: false  # bbox only on TF timeout or the service
+  # Tracking motion prior (after seed):
+  #   odom  — TF odom←base delta (AMCL-style)
+  #   twist — constant-twist from the filter mean
+  #   still — Δ=0, sample around last pose (process noise only)
+  tracking_motion: odom
+  tracking_use_odom_tf: true   # map←odom publish still uses odom←base
+  # Tracking after seed: micp (MICP-L point-to-plane) or pf (particles).
+  tracking_backend: pf
+  micp_iterations: 10
+  micp_samples: 1024
+  micp_max_dist_m: 0.5
+  micp_adaptive_max_dist_min_m: 0.05
+  # Process noise (meters / deg). PF only. Rotation is body-frame:
+  # rp = roll+pitch (same σ), yaw separate. Legacy still_rot_noise_deg is
+  # the fallback if rp/yaw keys are omitted.
+  # still_* = bbox/global. After seed (incl. tracking_motion:still) use tracking_still_*.
+  still_trans_noise_m: 0.5
+  still_rp_noise_deg: 3.0
+  still_yaw_noise_deg: 5.0
+  dist_noise_gain: 0.1
+  rot_rp_noise_gain: 0.2
+  rot_yaw_noise_gain: 0.2
+  tracking_still_trans_noise_m: 0.05
+  tracking_still_rp_noise_deg: 0.1
+  tracking_still_yaw_noise_deg: 0.1
+  tracking_dist_noise_gain: 0.05
+  tracking_rot_rp_noise_gain: 0.05
+  tracking_rot_yaw_noise_gain: 0.05
+  # DEBUG ONLY. Random-walk extra odom←base, integrated each localize.
+  # Off for real runs. Prints a red ERROR while enabled.
+  debug_odom_drift: false
+  debug_odom_drift_trans_std_m: 0.05   # σ xy per localize
+  debug_odom_drift_z_std_m: 0.01
+  debug_odom_drift_rot_std_deg: 0.1    # σ yaw per localize
+  # Uniform init attitude [min, max] deg (ZYX). Used for bbox fallback / kidnap.
+  # ±15° roll/pitch so 1e5 particles can cover heading without inverted poses.
+  init_roll: [-15.0, 15.0]
+  init_pitch: [-15.0, 15.0]
+  init_yaw: [-180.0, 180.0]
   # auto = Vulkan rayQuery (Orin RT cores) then Embree CPU fallback
   raycast_backend: auto
   # empty → <map_file stem>.yaml sidecar (written by decimate_mesh.py)
@@ -340,7 +395,7 @@ fcu_control:
     roll_gain: 0.33
     steer_slack: 0.4
     LPF_tau: 0.2
-    throttle_delta: 0.1
+    throttle_delta: 0.05
     liftoff_oversteer: true
     control_dt: 0.005
     # RC ch2: center/trim = 0 m/s, full = wheelspeed_max. Below trim is reverse
@@ -358,16 +413,16 @@ nvblox:
   # Offline: use_sim_time + remap mapper pubs to /debug/hound_mapping/*
   bag_replay_mode: false
   bag_replay_topic_prefix: debug
-  enabled: false
+  enabled: true
   # Remaining color issues (misaligned / magenta in FOV) may still be camera_info,
   # TF timing, or projective vs LiDAR TSDF surface.
   # Debug: ignore seg; paint TSDF color all-white. Unobserved stays grey
   # (unobserved_luminance) so camera FOV coverage is visible.
-  debug_semantic_all_traversable: false
+  debug_semantic_all_traversable: true
+  # Skip segmentation.traversability_colors.none on color integrate (unknown).
+  skip_semantic_none: true
   use_people_mask: false
   people_mask_topic: "/segmentation/refined_people_mask"
-  # Zero bottom of each depth image before TSDF integrate (lidar untouched).
-  depth_ignore_bottom_fraction: 0.6
 
   # Per-sensor integrate settings. mapping_node applies this camera/lidar's
   # projective block immediately before that sensor's integrate.
@@ -381,14 +436,14 @@ nvblox:
     depth_info_template: /{name}/depth/camera_info
     camera_front:
       use_depth: true
-      use_color: true
+      use_color: false
       roi: # fraction of image; 0 = no crop
         left: 0.05
         right: 0.05
-        top: 0.1
-        bottom: 0.6
+        top: 0.05
+        bottom: 0.55
       projective_integration_parameters:
-        depth_integrator_max_integration_distance_m: 4.0
+        depth_integrator_max_integration_distance_m: 10.0
         color_integrator_max_integration_distance_m: 12.0
         truncation_distance_vox: 5.0
         max_weight: 1.0
@@ -399,12 +454,12 @@ nvblox:
         sphere_tracing_ray_subsampling_factor: 1
         sphere_tracing_measurement_weight: 0.8
     camera_left:
-      use_depth: true
-      use_color: true
+      use_depth: false
+      use_color: false
       roi:
         left: 0.05
         right: 0.05
-        top: 0.1
+        top: 0.05
         bottom: 0.5
       projective_integration_parameters:
         depth_integrator_max_integration_distance_m: 2.0
@@ -419,11 +474,11 @@ nvblox:
         sphere_tracing_measurement_weight: 0.8
     camera_right:
       use_depth: true
-      use_color: true
+      use_color: false
       roi:
         left: 0.05
         right: 0.05
-        top: 0.1
+        top: 0.05
         bottom: 0.5
       projective_integration_parameters:
         depth_integrator_max_integration_distance_m: 2.0
@@ -435,7 +490,7 @@ nvblox:
         ray_subsampling_factor: 1
         sphere_tracer_max_ray_length_m: 12.0
         sphere_tracing_ray_subsampling_factor: 1
-        sphere_tracing_measurement_weight: 0.8
+        sphere_tracing_measurement_weight: 0.1
   lidars:
     lidar:
       use_lidar: true
@@ -447,10 +502,13 @@ nvblox:
       min_valid_range_m: 0.3
       use_lidar_motion_compensation: false
       projective_integration_parameters:
-        depth_integrator_max_integration_distance_m: 12.0
+        depth_integrator_max_integration_distance_m: 15.0
         truncation_distance_vox: 5.0
         max_weight: 1.0
-        weighting_mode: constant
+        # constant | constant_dropoff | inverse_square |
+        # inverse_square_dropoff | inverse_square_tsdf_distance_penalty |
+        # linear_with_max
+        weighting_mode: linear_with_max
         invalid_depth_decay_factor: -1.0
         ray_subsampling_factor: 1
 
@@ -461,27 +519,30 @@ nvblox:
   # Local T_odom_base ring (same pattern as lidar composite deskew). No /tf lookups.
   odom_topic: /ekf/odometry
   pose_buffer_s: 1.0
-  map_clearing_radius_m: 32.0
+  map_clearing_radius_m: 15.0
   # Drop live TSDF (new empty mapper). Prior BEV stays.
   # ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty
   map_clear_topic: ~/map_clear
   voxel_size: 0.05
   # LocalMap BEV (nav Map_config aliases these)
   elevation_resolution: &local_map_res 0.05
-  local_map_size_m: &local_map_size 20.0
+  local_map_size_m: &local_map_size 30.0
   elev_z_min_rel: -2.0
   elev_z_max_rel: 2.0
   # BEV floor: distance <= this counts as occupied (0 = classic TSDF ≤0).
   # Keep small: large values smear elev along slanted lidar rays (false
   # floors above/below). 0.05 ≈ one voxel of free-side tolerance.
   bev_occ_tsdf_max_m: 0.025
-  robot_height_m: 0.4
+  robot_height_m: 0.5
   # 90° ⇒ cos≈0 ⇒ slope never marks lethal (semantic-only cost for debug).
-  lethal_slope_deg: 60.0
+  lethal_slope_deg: 80.0
   # Cost/luminance when no floor or no color: mid-gray so known white/black
   # vs unknown are visible. Encoded in LocalMap.costmap (no separate observed).
   # 255=free, 0=lethal, this value=unobserved. Change here only (no C++ edit).
   unobserved_luminance: 252.0
+  # BEV "observed" gates (voxel.weight). Below this → ignore for elev / color.
+  tsdf_weight_min: 0.5
+  color_weight_min: 0.5
   # Vertical half-band (m) below elev when sampling TSDF color. 0 = 2×voxel.
   # Cost takes the darkest (most lethal) luminance from elev-half_band up through
   # color_z_column_above_m (0 = full BEV Z span). Needed because elev is the
@@ -498,26 +559,32 @@ nvblox:
   mapper_rate_hz: 10.0
   map_clear_rate_hz: 10.0
   # LayerCake save / prior BEV
-  layer_cake_path: "/root/colcon_ws/maps/hound_tsdf.layercake"
+  layer_cake_path: "/root/colcon_ws/maps/Allen_backside_0/hound_tsdf.layercake"
   # save_elevation.py default out (empty → <layer_cake stem>.elev.yaml).
   elevation_map_path: ""
   # Snapshot /tf_static map←odom next to the cake on save_layer_cake.
   save_map_odom_tf: true
   map_frame: map
-  prior_layer_cake_path: "" # "/root/colcon_ws/maps/hound_tsdf.layercake"
+  prior_layer_cake_path: "/root/colcon_ws/maps/Allen_backside_0/hound_tsdf.layercake" # "/root/colcon_ws/maps/hound_tsdf.layercake"
   # T_odom_prior (xyz m + yaw rad). Identity if this session shares the saved odom.
   prior_xyz_yaw: [0.0, 0.0, 0.0, 0.0]
-  prior_fill_enabled: true
+  # Hole-fill from this cake: no live surface → elev+cost; live floor but no
+  # color (skipped none) → prior cost only. Empty path = off.
+  prior_fill_enabled: false
+  # Authored no-go overlay (author_lethal_rviz). Empty = all free.
+  # Mask stays in yaml frame_id (map); T_odom_map from /tf_static is applied
+  # live each LocalMap (ArUco then mesh_pf). Restart mapping after editing the file.
+  lethal_map_path: "/root/colcon_ws/maps/Allen_backside_0/hound_tsdf.lethal.yaml"
   # Debug pubs (off — were expensive when RViz subscribed)
   publish_tsdf_color_mesh: false
   tsdf_color_mesh_rate_hz: 1.0
   # Near-surface TSDF voxels (PointCloud2 xyz+rgb from ColorLayer). Magenta =
   # geometry without color weight. Subscribe /hound_mapping/tsdf_voxels in RViz.
-  publish_tsdf_voxels: true
+  publish_tsdf_voxels: false
   tsdf_voxel_rate_hz: 1.0
   tsdf_voxel_min_weight: 0.2
   tsdf_voxel_max_distance_m: 0.0   # 0 → 2×voxel_size
-  tsdf_voxel_max_points: 400000
+  tsdf_voxel_max_points: 4000000
   publish_lidar_depth_image: false
   publish_lidar_tsdf_probe: false
   lidar_tsdf_probe_max_points: 4000
@@ -560,6 +627,8 @@ aruco_registration:
   tf_publish_hz: 10.0
   tf_timeout_s: 0.15
   trigger_topic: /aruco_registration/trigger
+  hunting_topic: /aruco_registration/hunting
+  tf_aligned_topic: /aruco_registration/tf_aligned  # latched Bool: true when map←odom released
   trigger_timeout_s: 8.0  # hunt window; each trigger re-reads this SSoT file
   ema_alpha: 0.25         # map←odom EMA (1 = last sample only)
   lock_once: false
@@ -603,20 +672,25 @@ nav:
   goal_topic: /goal_pose
   cmd_topic: /hound_nav/cmd_ackermann
   plan_topic: /hound_nav/local_plan
+  # Same header.stamp as local_plan Path (ok, expansions, dt_s, path_n, goal_dist).
+  plan_diagnostics_topic: /hound_nav/planner_diagnostics
   # Timed poses + green/blue arrows (fwd/back). Bag this to replay planner viz.
   plan_markers_topic: /hound_nav/local_plan_arrows
-  planner_hz: 4.0
-  control_rate_hz: 25.0
-  cruise_speed_mps: 3.0  # IGHA* goal speed when not stopping
+  planner_hz: 5.0
+  control_rate_hz: 50.0
+  cruise_speed_mps: 3.5  # IGHA* goal speed when not stopping
   control_state_dims: 17
   track_ref_metric: screw  # screw | xy
   screw_length_m: 1.0
-  lookahead: 8.0
-  wp_radius: 1.0
+  lookahead: 14.0
+  # Nav-manager: "close enough" to the current /goal_pose to stop planning.
+  # Keep this smaller than mission_manager.wp_radius so the next WP is
+  # published before the planner declares the current goal done.
+  wp_radius: 2.0
   # FCU GPS waypoints → single /goal_pose (nav manager still also accepts Path).
   mission_manager:
     enabled: true
-    mode: gps  # gps | rviz (rviz not implemented)
+    mode: rviz  # gps | rviz
     gps_topic: /hound_fcu_control/gps/fix
     gps_fix_type_topic: /hound_fcu_control/gps/fix_type
     imu_topic: /hound_fcu_control/imu
@@ -624,13 +698,30 @@ nav:
     goal_topic: /goal_pose
     path_viz_topic: /hound_nav/mission/waypoints  # nav_msgs/Path for RViz
     state_topic: /hound_fcu_control/control_state
-    frame_id: odom
+    # rviz: store YAML in frame_id; /goal_pose is TF'd to goal_frame_id (nav/odom).
+    frame_id: map
+    goal_frame_id: odom
+    waypoint_topic: /goal_pose  # RViz 2D Goal Pose
+    mission_file: /root/colcon_ws/maps/Allen_backside_0/mission.yaml
+    record: false           # append clicks; do not republish goal_topic
+    load_on_start: true
+    save_on_shutdown: true
+    publish_goals: true   # true + record:false → current WP on goal_topic
+    min_separation_m: 0.3
     min_fix_type: 3
     max_h_acc_m: 2.5
     update_wp_local_from_gps: false
-    publish_hz: 0.25  # also publishes immediately on waypoint reach / mission accept
+    publish_hz: 20.0  # also publishes immediately on waypoint reach / mission accept
+    # Advance to the next stored WP (GPS or RViz) and republish /goal_pose.
+    # Independent of nav.wp_radius (do not YAML-anchor them together).
+    wp_radius: 4.0
+    # none: publish current discrete WP. bezier: join WPs with cubic Beziers
+    # (40 samples/seg, old hl_control) and publish a lookahead carrot on /goal_pose.
+    path_interp: none  # none | bezier
+    bezier_samples: 5
+    lookahead: 10.0  # carrot distance along the curve (bezier mode)
   # OpenCV planner debug window (manager thread). Off for field (CPU/DISPLAY).
-  planner_cv_viz: true
+  planner_cv_viz: false
   planner_cv_viz_window: hound_planner_vis
   planner_cv_viz_size: 320
 
@@ -684,25 +775,25 @@ nav:
     speed_w: 0.0
     heading_w: 0.1
     scaling_factor: 1.0
-    critical_RI: 0.5
-    critical_vert_acc: 5.0
+    critical_RI: &RI 1.0
+    critical_vert_acc: &vert_acc 5.0
     roll_ditch_w: 50.0
     lethal_w: 50.0
-    car_bb_length: 0.84
-    car_bb_width: 0.52
+    car_bb_length: *car_length
+    car_bb_width: *car_width
     throttle_threshold: 0.0
 
   Planner_config:
-    unstuck_expansions: 2000
+    unstuck_expansions: 625
     experiment_info_default:
-      resolution: 0.5
-      epsilon: &epsilon [0.25, 0.25, 0.3925, 0.25]
-      backward_epsilon: *epsilon
-      LCR: *epsilon
+      resolution: 1.0
+      epsilon: &epsilon [0.5, 0.5, 0.3925, 2.0]
+      backward_epsilon: [0.5, 0.5, 0.3925, 2.0]
+      LCR: [0.5, 0.5, 0.3925, 2.0]
       tolerance: 0.125
       max_level: 6
       division_factor: 2
-      max_expansions: 1250
+      max_expansions: 625
       hysteresis: 100
       bidirectional: true
       # Optional GPU batching of successor expansions (IGHA*).
@@ -722,14 +813,14 @@ nav:
         dt: 0.05
         timesteps: 5
         step_size: 1.0
-        steering_list: [-15.0, -5.0, 0.0, 5.0, 15.0]
+        steering_list: [-22.5, -7.5, 0.0, 7.5, 22.5]
         throttle_list: [-4.0, 0, 4.0]
         del_theta: 90.0
         del_vel: 1.0
-        RI: 0.7
-        max_vert_acc: 8.0
+        RI: *RI
+        max_vert_acc: *vert_acc
         min_vel: 0.0
-        max_vel: 5.0
+        max_vel: *max_speed_mps
         max_theta: 40.0
         gear_switch_time: 5.0
         hash_theta: false
@@ -776,17 +867,63 @@ hal_monitor:
     gpu_freq_path: ""
 
 # Bool /hal/record → ros2 bag record (latched status on /hal/recording).
-# HAL RC (or any Bool publisher) starts/stops; record_all_topics records -a.
+# HAL RC (or any Bool publisher) starts/stops.
+# record_nav_only: true → topics in record_nav_topics_file (nav I/O only).
+# Nav bags go under bagdir_nav/{bidirectional|unidirectional}/ (read from SSoT
+# nav.Planner_config.experiment_info_default.bidirectional at each record start).
+# record_all_topics: true → ros2 bag record -a (ignored when record_nav_only).
+# Bag dirs are named hound_0, hound_1, ... (next unused index in bagdir).
+# Each start copies the live SSoT.yaml into that bag directory.
 bag_recorder:
   enabled: true
   record_topic: /hal/record
   recording_status_topic: /hal/recording
   bagdir: /root/colcon_ws/bags/
-  record_all_topics: true
-  # Used only when record_all_topics is false (prune list later).
+  bagdir_nav: /root/colcon_ws/bags_nav/
+  record_nav_only: true
+  record_all_topics: false
+  record_nav_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_nav_topics.txt
+  # Used only when record_all_topics and record_nav_only are both false.
   record_topics_file: /root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt
   record_split_duration_min: 5
   notification_topic: /hound_fcu_control/play_tune
+
+# Experiment audio: Piper (offline neural) → aplay on the USB speaker.
+# One-time: bash /root/colcon_ws/src/hound_core/scripts/setup_tts.sh
+# voice: jarvis (British male, Alan) | friday (British/Scottish female, Alba).
+# Empty device → first USB-Audio card (here: plughw:CARD=Device,DEV=0).
+# Free-form:  ros2 topic pub --once /hound/speak std_msgs/msg/String "{data: 'hello'}"
+# Device check: ros2 service call /hound/tts/test std_srvs/srv/Trigger
+# Bool events skip the first (latched) sample so idle state is silent.
+tts:
+  enabled: true
+  speak_topic: /hound/speak
+  test_service: /hound/tts/test
+  device: "plughw:CARD=Device,DEV=0"
+  engine: piper
+  voice: jarvis
+  piper_dir: /root/colcon_ws/src/hound_core/share/piper
+  length_scale: 0.0   # 0 = preset (jarvis 1.08 / friday 1.0)
+  rate_wpm: 175
+  amplitude: 140
+  startup_phrase: "Hound audio ready"
+  events:
+    - topic: /hound_fcu_control/ekf_reset
+      type: empty
+      phrase: "State cleared"
+    - topic: /hound_mapping/map_clear
+      type: empty
+      phrase: "Map cleared"
+    - topic: /aruco_registration/hunting
+      type: bool
+      on_true: "Aligning transform"
+    - topic: /aruco_registration/tf_aligned
+      type: bool
+      on_true: "Transform aligned"
+    - topic: /hal/recording
+      type: bool
+      on_true: "Recording started"
+      on_false: "Recording stopped"
 
 # Dora CLIPSeg → NanoSAM refine.
 segmentation:
@@ -794,20 +931,22 @@ segmentation:
   replay_mode: false
   model: "CIDAS/clipseg-rd16"
   prompts:
-    traversable: ["floor", "ground", "path", "dirt"]
-    non_traversable: ["furniture", "wall", "pillar", "car"]
+    traversable: ["ground", "dirt", "grass"]
+    non_traversable: ["tree", "wall", "pillar", "steps"]
     people: ["people"]
   suppress_prompts: []
   aggregate: "max"
   clipseg_vision_engine: "/root/colcon_ws/src/perception_models/data/clipseg_vision_rd16_224_b3.engine"
   clipseg_film_engine: "/root/colcon_ws/src/perception_models/data/clipseg_film_rd16_224_b3_p9.engine"
   input_res: 224
-  threshold: 0.3
+  threshold: 0.5 # try changing this to 0.3
   traversability_colors:
     traversable: [255, 255, 255]
     non_traversable: [0, 0, 0]
     people: [0, 0, 0]
-    none: [0, 0, 0]
+    # Distinct from trav/non_trav. Mapper skips these pixels on color integrate
+    # (unknown → leave voxel unobserved; do not paint). nvblox.skip_semantic_none.
+    none: [0, 0, 255]
   compile_mode: "reduce-overhead"
   color_topic: "/camera_front/color/image_raw"
   color_topics:

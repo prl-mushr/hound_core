@@ -17,6 +17,10 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 unset CYCLONEDDS_URI
 export HF_HUB_OFFLINE=1
+# PyTorch CUDA JIT (.so) — persist on the bind-mounted workspace, not ~/.cache.
+export TORCH_EXTENSIONS_DIR="${ROS_WORKSPACE}/cache/torch_extensions"
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.7}"
+mkdir -p "$TORCH_EXTENSIONS_DIR"
 
 if [ -d /opt/ros/jazzy/share/gxf_isaac_optimizer/gxf/lib ]; then
   case ":${LD_LIBRARY_PATH:-}:" in
@@ -38,10 +42,16 @@ fi
 echo 10000 | sudo tee /sys/devices/platform/bus@0/c240000.i2c/i2c-1/1-0040/hwmon/hwmon6/curr4_crit >/dev/null 2>&1
 # sudo ifconfig end0 192.168.1.50 netmask 255.255.255.0
 alias cs='cd "$ROS_WORKSPACE" && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers "$(nproc)" && source "$ROS_WORKSPACE/install/setup.bash"'
-alias clear_map='ros2 topic pub --once /hound_mapping/map_clear std_msgs/msg/Empty'
-alias clear_state='ros2 topic pub --once /hound_fcu_control/ekf_reset std_msgs/msg/Empty'
+alias clear_map='ros2 topic pub --once -w 1 /hound_mapping/map_clear std_msgs/msg/Empty "{}"'
+alias clear_state='ros2 topic pub --once -w 1 /hound_fcu_control/ekf_reset std_msgs/msg/Empty "{}"'
 alias rviz='rviz2 -d /root/colcon_ws/src/hound_core/config/display_config.rviz'
 alias rviz_sim='rviz2 -d /root/colcon_ws/src/hound_core/config/display_config.rviz --ros-args -p use_sim_time:=true'
 alias vlcal='cd /root/colcon_ws/src/hound_core/scripts/vlcal && ./run_vlcal.sh apply_ssot --write'
-alias trigger_aruco='ros2 topic pub --once /aruco_registration/trigger std_msgs/msg/Empty'
+alias trigger_aruco='ros2 topic pub --once -w 1 /aruco_registration/trigger std_msgs/msg/Empty "{}"'
+alias reset_mesh_pf='ros2 service call /mesh_pf/reset std_srvs/srv/Empty "{}"'
 alias show_mesh='python3 /root/colcon_ws/src/hound_mapping/scripts/show_mesh.py'
+# EKF hard-reset, wipe live TSDF, pause mesh_pf, then ArUco hunt.
+# When the hunt ends, mesh_pf seeds from map←odom and takes over tracking.
+# Re-source this file.
+alias experiment_start='clear_state && sleep 2 && clear_map && sleep 1 && reset_mesh_pf && trigger_aruco'
+speak() { ros2 topic pub --once -w 1 /hound/speak std_msgs/msg/String "{data: \"$*\"}"; }

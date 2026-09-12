@@ -114,6 +114,8 @@ install(PROGRAMS
   scripts/wheel_odom_node
   scripts/hal_monitor_node
   scripts/bag_recorder
+  scripts/tts_node
+  scripts/setup_tts.sh
   scripts/mission_pose_builder
   scripts/hw_latency_probe
   scripts/wait_for_topic_hz.py

@@ -1,7 +1,7 @@
 """Mission / algorithm tier for HOUND (composite sensing, EKF, control, seg).
 
 Bring-up is staggered (launch.stage_delay_s, default 5s between enabled stages):
-  HAL → bag_recorder → stereo_composite (VSLAM) → fcu_control (EKF+LL) →
+  HAL → bag_recorder → tts → stereo_composite (VSLAM) → fcu_control (EKF+LL) →
   lidar → aruco_registration → segmentation → yolo_world → nvblox → …
 
 fcu_control.enabled is a master switch (nested vesc/ntrip/ll/ekf only when on).
@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hound_launch_common import (  # noqa: E402
     build_bag_recorder_node,
     build_hal_monitor_node,
+    build_tts_node,
     build_lidar_mesh_composite_node,
     build_aruco_registration_nodes,
     build_mesh_pf_node,
@@ -818,6 +819,7 @@ def generate_launch_description():
     vesc = fcu.get("vesc") or {}
     hal = ssot.get("hal_monitor", {})
     bag_recorder = ssot.get("bag_recorder", {})
+    tts = ssot.get("tts", {})
     mesh_pf = ssot.get("mesh_pf", {})
     aruco = ssot.get("aruco_registration", {})
     seg = ssot.get("segmentation", {})
@@ -835,6 +837,7 @@ def generate_launch_description():
     vesc_enabled = fcu_control_enabled and bool(vesc.get("enabled", False))
     hal_enabled = bool(hal.get("enabled", False))
     bag_recorder_enabled = bool(bag_recorder.get("enabled", False))
+    tts_enabled = bool(tts.get("enabled", False))
     mesh_pf_enabled = bool(mesh_pf.get("enabled", False))
     aruco_enabled = bool(aruco.get("enabled", False))
     seg_enabled = bool(seg.get("enabled", False))
@@ -933,6 +936,12 @@ def generate_launch_description():
         bag_acts = [build_bag_recorder_node(bag_recorder)]
     else:
         print("[hound_core] bag_recorder DISABLED")
+
+    tts_acts = []
+    if tts_enabled:
+        tts_acts = [build_tts_node(tts)]
+    else:
+        print("[hound_core] tts DISABLED")
 
     # stereo_composite first (VSLAM), then fcu_control (in-process EKF+LL+vesc)
     cam_acts = []
@@ -1072,6 +1081,7 @@ def generate_launch_description():
     stages = [
         ("hal", hal_acts),
         ("bag_recorder", bag_acts),
+        ("tts", tts_acts),
         ("stereo_composite", cam_acts),
         ("fcu_control", fcu_acts),
         ("lidar", lidar_acts),

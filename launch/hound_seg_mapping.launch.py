@@ -7,8 +7,8 @@ Does NOT start cameras, lidar, EKF, nav, or LL. Expect those from
 Ignores ``segmentation.enabled`` and ``nvblox.enabled`` so this graph can
 run while those flags are off in SSoT.
 
-Optional ``prefix`` (default ``debug``) namespaces *outputs* so they do not
-collide with topics already in the bag:
+Optional ``prefix`` (default empty = SSoT names). Non-empty namespaces
+*outputs* so they do not collide with topics already in the bag:
 
   /{prefix}/camera_*/segmentation/...
   /{prefix}/segmentation/...
@@ -23,8 +23,8 @@ Usage (mushr_jazzy)::
 
   ros2 launch hound_core hound_seg_mapping.launch.py prefix:=debug bag:=/path/to/bag
 
-  # live names (no /debug), wall clock:
-  ros2 launch hound_core hound_seg_mapping.launch.py prefix:= use_sim_time:=false
+  # wall clock (no /clock):
+  ros2 launch hound_core hound_seg_mapping.launch.py use_sim_time:=false
 
   # log LocalMap + control_state at 1 Hz; Ctrl+C writes start/goal pairs (t+5s):
   ros2 launch hound_core hound_seg_mapping.launch.py log_problems:=true
@@ -172,7 +172,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "prefix",
-                default_value="debug",
+                default_value="",
                 description=(
                     "Output namespace (/{prefix}/hound_mapping, "
                     "/{prefix}/.../segmentation). Empty = SSoT names."

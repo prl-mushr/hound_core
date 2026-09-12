@@ -1069,6 +1069,24 @@ def build_hound_mapping_node(
     else:
         use_depth = bool(cam.get("enable_depth", False))
     use_color = bool(nvblox.get("use_color", True))
+    trav_colors = dict(seg.get("traversability_colors") or {})
+    none_rgb = trav_colors.get("none") or [0, 0, 255]
+    if not isinstance(none_rgb, (list, tuple)) or len(none_rgb) < 3:
+        none_rgb = [0, 0, 255]
+    none_r, none_g, none_b = (int(none_rgb[0]), int(none_rgb[1]), int(none_rgb[2]))
+    ntrav_rgb = trav_colors.get("non_traversable") or [0, 0, 0]
+    if (
+        isinstance(ntrav_rgb, (list, tuple))
+        and len(ntrav_rgb) >= 3
+        and [int(ntrav_rgb[0]), int(ntrav_rgb[1]), int(ntrav_rgb[2])]
+        == [none_r, none_g, none_b]
+        and bool(nvblox.get("skip_semantic_none", True))
+    ):
+        print(
+            "[hound_core] WARN: traversability_colors.none == non_traversable; "
+            "mapper skip_semantic_none would also drop obstacle color. "
+            "Use a distinct none RGB (e.g. [0, 0, 255])."
+        )
     global_frame = str(nvblox.get("global_frame", "odom"))
     map_clearing_frame = str(nvblox.get("map_clearing_frame_id", f"{camera_name}_link"))
 
@@ -1181,6 +1199,7 @@ def build_hound_mapping_node(
         "inpaint_radius": int(nvblox.get("inpaint_radius", 3)),
         "elev_median_ksize": int(nvblox.get("elev_median_ksize", 5)),
         "unobserved_luminance": float(nvblox.get("unobserved_luminance", 128.0)),
+        "tsdf_weight_min": float(nvblox.get("tsdf_weight_min", 0.001)),
         "color_weight_min": float(nvblox.get("color_weight_min", 0.001)),
         "color_z_search_half_band_m": float(
             nvblox.get("color_z_search_half_band_m", 0.0)
@@ -1198,6 +1217,10 @@ def build_hound_mapping_node(
         "debug_semantic_all_traversable": bool(
             nvblox.get("debug_semantic_all_traversable", False)
         ),
+        "skip_semantic_none": bool(nvblox.get("skip_semantic_none", True)),
+        "semantic_none_r": none_r,
+        "semantic_none_g": none_g,
+        "semantic_none_b": none_b,
         "use_people_mask": use_people_mask,
         "depth_ignore_bottom_fraction": float(
             nvblox.get("depth_ignore_bottom_fraction", 0.0)
@@ -1267,6 +1290,7 @@ def build_hound_mapping_node(
             for x in (nvblox.get("prior_xyz_yaw") or [0.0, 0.0, 0.0, 0.0])
         ],
         "prior_fill_enabled": bool(nvblox.get("prior_fill_enabled", True)),
+        "lethal_map_path": str(nvblox.get("lethal_map_path", "") or ""),
         "map_frame": str(nvblox.get("map_frame", "map")),
         "save_map_odom_tf": bool(nvblox.get("save_map_odom_tf", True)),
         "publish_tsdf_color_mesh": bool(
@@ -1436,6 +1460,9 @@ def build_nav_dora_actions(nav: dict) -> list:
         "plan_markers_topic": str(
             nav.get("plan_markers_topic", "/hound_nav/local_plan_arrows")
         ),
+        "plan_diagnostics_topic": str(
+            nav.get("plan_diagnostics_topic", "/hound_nav/planner_diagnostics")
+        ),
         "control_rate_hz": ctrl_hz,
         "planner_hz": planner_hz,
         "cruise_speed_mps": float(nav.get("cruise_speed_mps", 10.0)),
@@ -1484,17 +1511,23 @@ def build_nav_dora_actions(nav: dict) -> list:
     df_tf.close()
 
     py_path = os.environ.get("PYTHONPATH", "")
-    env = {
-        "HOUND_NAV_CONFIG": cfg_tf.name,
-        "PYTHONPATH": (
-            str(src_root) + (os.pathsep + py_path if py_path else "")
-        ),
-    }
+    ws = os.environ.get("ROS_WORKSPACE", "/root/colcon_ws")
+    torch_ext = os.environ.get(
+        "TORCH_EXTENSIONS_DIR", os.path.join(ws, "cache", "torch_extensions")
+    )
+    Path(torch_ext).mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["HOUND_NAV_CONFIG"] = cfg_tf.name
+    env["PYTHONPATH"] = str(src_root) + (os.pathsep + py_path if py_path else "")
+    env["TORCH_EXTENSIONS_DIR"] = torch_ext
+    env["TORCH_CUDA_ARCH_LIST"] = os.environ.get("TORCH_CUDA_ARCH_LIST", "8.7")
+    env["ROS_WORKSPACE"] = ws
     print(
         f"[hound_core] nav ENABLED (dora): map={cfg['local_map_topic']} "
         f"state={cfg['state_topic']} cmd={cfg['cmd_topic']} "
         f"planner_hz={planner_hz} tick={tick_ms}ms "
-        f"cv_viz={cfg['planner_cv_viz']} (stack from SSoT nav:)"
+        f"cv_viz={cfg['planner_cv_viz']} wp_radius={float(cfg['wp_radius']):.2f}m "
+        f"jit={torch_ext} (stack from SSoT nav:)"
     )
     acts = [
         ExecuteProcess(
@@ -1530,15 +1563,29 @@ def build_mission_manager_node(nav: dict, mm: dict) -> Node:
             mm.get("state_topic", nav.get("state_topic", "/hound_fcu_control/control_state"))
         ),
         "frame_id": str(mm.get("frame_id", "odom")),
+        "goal_frame_id": str(mm.get("goal_frame_id", "odom")),
         "min_fix_type": int(mm.get("min_fix_type", 3)),
         "max_h_acc_m": float(mm.get("max_h_acc_m", 2.5)),
         "update_wp_local_from_gps": bool(mm.get("update_wp_local_from_gps", False)),
-        "wp_radius": float(mm.get("wp_radius", nav.get("wp_radius", 1.0))),
+        "wp_radius": float(mm.get("wp_radius", 3.0)),
         "publish_hz": float(mm.get("publish_hz", 0.25)),
+        "mission_file": str(mm.get("mission_file", "")),
+        "record": bool(mm.get("record", True)),
+        "load_on_start": bool(mm.get("load_on_start", False)),
+        "save_on_shutdown": bool(mm.get("save_on_shutdown", True)),
+        "publish_goals": bool(mm.get("publish_goals", False)),
+        "min_separation_m": float(mm.get("min_separation_m", 0.3)),
+        "waypoint_topic": str(mm.get("waypoint_topic", "/goal_pose")),
+        "path_interp": str(mm.get("path_interp", "none")),
+        "bezier_samples": int(mm.get("bezier_samples", 40)),
+        "lookahead": float(mm.get("lookahead", nav.get("lookahead", 8.0))),
     }
     print(
         f"[hound_core] mission_manager: mode={params['mode']} "
-        f"wps={params['gps_waypoints_topic']} → {goal_topic}"
+        f"wps={params['gps_waypoints_topic']} → {goal_topic} "
+        f"file={params['mission_file'] or '-'} "
+        f"wp_radius={params['wp_radius']:.2f}m "
+        f"(nav wp_radius={float(nav.get('wp_radius', 2.0)):.2f}m)"
     )
     return Node(
         package="hound_nav",
@@ -1787,6 +1834,9 @@ def build_aruco_registration_nodes(
         "trigger_topic": str(
             cfg.get("trigger_topic", "/aruco_registration/trigger")
         ),
+        "hunting_topic": str(
+            cfg.get("hunting_topic", "/aruco_registration/hunting")
+        ),
         "trigger_timeout_s": float(cfg.get("trigger_timeout_s", 8.0)),
         "ssot_file": ssot_file,
     }
@@ -1807,6 +1857,12 @@ def build_aruco_registration_nodes(
         "ema_alpha": float(cfg.get("ema_alpha", 0.25)),
         "trigger_topic": str(
             cfg.get("trigger_topic", "/aruco_registration/trigger")
+        ),
+        "hunting_topic": str(
+            cfg.get("hunting_topic", "/aruco_registration/hunting")
+        ),
+        "tf_aligned_topic": str(
+            cfg.get("tf_aligned_topic", "/aruco_registration/tf_aligned")
         ),
         "lock_once": bool(cfg.get("lock_once", False)),
         "ssot_file": ssot_file,
@@ -1863,6 +1919,16 @@ def _mesh_pf_init_bb(mesh_pf: dict) -> dict:
     return {}
 
 
+def _mesh_pf_rpy_range_rad(mesh_pf: dict, key: str, default_deg: list) -> tuple:
+    """SSoT init_roll/pitch/yaw are degrees; ROS params are radians."""
+    raw = mesh_pf.get(key, default_deg)
+    if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+        lo, hi = float(raw[0]), float(raw[1])
+    else:
+        lo, hi = float(default_deg[0]), float(default_deg[1])
+    return math.radians(lo), math.radians(hi)
+
+
 def build_mesh_pf_node(
     mesh_pf: dict, lidar: dict = None, *, prefix: str = ""
 ) -> Node:
@@ -1874,6 +1940,9 @@ def build_mesh_pf_node(
     xyz = mesh_pf.get("xyz") or lidar.get("xyz") or [0.0, 0.0, 0.1]
     rpy = mesh_pf.get("rpy") or lidar.get("rpy") or [180.0, -15.0, 0.0]
     bb = _mesh_pf_init_bb(mesh_pf)
+    roll_rng = _mesh_pf_rpy_range_rad(mesh_pf, "init_roll", [-45.0, 45.0])
+    pitch_rng = _mesh_pf_rpy_range_rad(mesh_pf, "init_pitch", [-45.0, 45.0])
+    yaw_rng = _mesh_pf_rpy_range_rad(mesh_pf, "init_yaw", [-180.0, 180.0])
     params = {
         "cloud_topic": str(mesh_pf.get("cloud_topic", lidar.get("cloud_topic", "/livox/cloud"))),
         "pose_topic": str(mesh_pf.get("pose_topic", "/localization/mesh_pose")),
@@ -1882,6 +1951,89 @@ def build_mesh_pf_node(
         "odom_frame": str(mesh_pf.get("odom_frame", "odom")),
         "base_frame": str(mesh_pf.get("base_frame", "base_link")),
         "publish_tf": bool(mesh_pf.get("publish_tf", True)),
+        "init_from_tf": bool(mesh_pf.get("init_from_tf", False)),
+        "wait_for_aruco_hunt": bool(mesh_pf.get("wait_for_aruco_hunt", False)),
+        "trigger_topic": str(
+            mesh_pf.get("trigger_topic", "/aruco_registration/trigger")
+        ),
+        "hunting_topic": str(
+            mesh_pf.get("hunting_topic", "/aruco_registration/hunting")
+        ),
+        "map_odom_pose_topic": str(
+            mesh_pf.get("map_odom_pose_topic", "/aruco_registration/map_odom")
+        ),
+        "init_tf_parent": str(mesh_pf.get("init_tf_parent", "map")),
+        "init_tf_child": str(mesh_pf.get("init_tf_child", mesh_pf.get("odom_frame", "odom"))),
+        "init_tf_trans_std_m": float(mesh_pf.get("init_tf_trans_std_m", 0.2)),
+        "init_tf_rot_std_deg": float(mesh_pf.get("init_tf_rot_std_deg", 3.0)),
+        "init_tf_timeout_s": float(mesh_pf.get("init_tf_timeout_s", 10.0)),
+        "tracking_use_odom_tf": bool(mesh_pf.get("tracking_use_odom_tf", True)),
+        "tracking_motion": str(mesh_pf.get("tracking_motion", "")),
+        "tracking_backend": str(mesh_pf.get("tracking_backend", "micp")),
+        "micp_iterations": int(mesh_pf.get("micp_iterations", 5)),
+        "micp_samples": int(mesh_pf.get("micp_samples", 1024)),
+        "micp_max_dist_m": float(mesh_pf.get("micp_max_dist_m", 0.5)),
+        "micp_adaptive_max_dist_min_m": float(
+            mesh_pf.get("micp_adaptive_max_dist_min_m", 0.05)
+        ),
+        "debug_odom_drift": bool(mesh_pf.get("debug_odom_drift", False)),
+        "debug_odom_drift_trans_std_m": float(
+            mesh_pf.get("debug_odom_drift_trans_std_m", 0.005)
+        ),
+        "debug_odom_drift_z_std_m": float(
+            mesh_pf.get("debug_odom_drift_z_std_m", 0.001)
+        ),
+        "debug_odom_drift_rot_std_deg": float(
+            mesh_pf.get("debug_odom_drift_rot_std_deg", 0.05)
+        ),
+        "still_trans_noise_m": float(mesh_pf.get("still_trans_noise_m", 0.05)),
+        "still_rot_noise_deg": float(mesh_pf.get("still_rot_noise_deg", 3.0)),
+        "still_rp_noise_deg": float(
+            mesh_pf.get(
+                "still_rp_noise_deg", mesh_pf.get("still_rot_noise_deg", 3.0)
+            )
+        ),
+        "still_yaw_noise_deg": float(
+            mesh_pf.get(
+                "still_yaw_noise_deg", mesh_pf.get("still_rot_noise_deg", 3.0)
+            )
+        ),
+        "dist_noise_gain": float(mesh_pf.get("dist_noise_gain", 0.1)),
+        "rot_noise_gain": float(mesh_pf.get("rot_noise_gain", 0.2)),
+        "rot_rp_noise_gain": float(
+            mesh_pf.get("rot_rp_noise_gain", mesh_pf.get("rot_noise_gain", 0.2))
+        ),
+        "rot_yaw_noise_gain": float(
+            mesh_pf.get("rot_yaw_noise_gain", mesh_pf.get("rot_noise_gain", 0.2))
+        ),
+        "tracking_still_trans_noise_m": float(mesh_pf.get("tracking_still_trans_noise_m", 0.01)),
+        "tracking_still_rot_noise_deg": float(mesh_pf.get("tracking_still_rot_noise_deg", 0.5)),
+        "tracking_still_rp_noise_deg": float(
+            mesh_pf.get(
+                "tracking_still_rp_noise_deg",
+                mesh_pf.get("tracking_still_rot_noise_deg", 0.5),
+            )
+        ),
+        "tracking_still_yaw_noise_deg": float(
+            mesh_pf.get(
+                "tracking_still_yaw_noise_deg",
+                mesh_pf.get("tracking_still_rot_noise_deg", 0.5),
+            )
+        ),
+        "tracking_dist_noise_gain": float(mesh_pf.get("tracking_dist_noise_gain", 0.02)),
+        "tracking_rot_noise_gain": float(mesh_pf.get("tracking_rot_noise_gain", 0.05)),
+        "tracking_rot_rp_noise_gain": float(
+            mesh_pf.get(
+                "tracking_rot_rp_noise_gain",
+                mesh_pf.get("tracking_rot_noise_gain", 0.05),
+            )
+        ),
+        "tracking_rot_yaw_noise_gain": float(
+            mesh_pf.get(
+                "tracking_rot_yaw_noise_gain",
+                mesh_pf.get("tracking_rot_noise_gain", 0.05),
+            )
+        ),
         "xyz.x": float(xyz[0]),
         "xyz.y": float(xyz[1]),
         "xyz.z": float(xyz[2]),
@@ -1889,7 +2041,8 @@ def build_mesh_pf_node(
         "rpy.pitch": float(rpy[1]),
         "rpy.yaw": float(rpy[2]),
         "localize_hz": float(mesh_pf.get("localize_hz", 10.0)),
-        "num_particles": int(mesh_pf.get("num_particles", 2000)),
+        "num_particles": int(mesh_pf.get("num_particles", 100000)),
+        "tracking_particles": int(mesh_pf.get("tracking_particles", 10000)),
         "beam_samples": int(mesh_pf.get("beam_samples", 64)),
         "global_init_on_start": bool(mesh_pf.get("global_init_on_start", True)),
         "raycast_backend": str(mesh_pf.get("raycast_backend", "auto")),
@@ -1899,6 +2052,12 @@ def build_mesh_pf_node(
         "init_bb.xmax": float(bb.get("xmax", 20.0)),
         "init_bb.ymax": float(bb.get("ymax", 20.0)),
         "init_bb.zmax": float(bb.get("zmax", 2.0)),
+        "init_roll.min": roll_rng[0],
+        "init_roll.max": roll_rng[1],
+        "init_pitch.min": pitch_rng[0],
+        "init_pitch.max": pitch_rng[1],
+        "init_yaw.min": yaw_rng[0],
+        "init_yaw.max": yaw_rng[1],
     }
     extra: dict = {}
     prefix = str(prefix or "").strip().strip("/")
@@ -1911,7 +2070,18 @@ def build_mesh_pf_node(
         params["use_sim_time"] = True
     print(
         f"[hound_core] mesh_pf ENABLED: cloud={params['cloud_topic']} "
-        f"map={params['map_file'] or '(missing)'} pose={params['pose_topic']}"
+        f"map={params['map_file'] or '(missing)'} pose={params['pose_topic']} "
+        f"particles={params['num_particles']}"
+        + (
+            f" tracking={params['tracking_particles']}"
+            if int(params.get("tracking_particles", 0) or 0)
+            else ""
+        )
+        + (
+            f" seed={params['init_tf_parent']}←{params['init_tf_child']}"
+            if params.get("init_from_tf")
+            else ""
+        )
         + (f" ns=/{prefix}" if prefix else "")
     )
     return Node(
@@ -1924,10 +2094,56 @@ def build_mesh_pf_node(
     )
 
 
+def build_tts_node(tts: dict) -> Node:
+    events = tts.get("events") or []
+    events_yaml = yaml.safe_dump(events, default_flow_style=False) if events else ""
+    params = {
+        "speak_topic": str(tts.get("speak_topic", "/hound/speak")),
+        "test_service": str(tts.get("test_service", "/hound/tts/test")),
+        "device": str(tts.get("device", "")),
+        "engine": str(tts.get("engine", "piper")),
+        "voice": str(tts.get("voice", "jarvis")),
+        "rate_wpm": int(tts.get("rate_wpm", 175)),
+        "amplitude": int(tts.get("amplitude", 140)),
+        "length_scale": float(tts.get("length_scale", 0.0)),
+        "piper_dir": str(
+            tts.get("piper_dir", "/root/colcon_ws/src/hound_core/share/piper")
+        ),
+        "piper_bin": str(tts.get("piper_bin", "")),
+        "startup_phrase": str(tts.get("startup_phrase", "Hound audio ready")),
+        "events_yaml": events_yaml,
+        "max_queue": int(tts.get("max_queue", 16)),
+    }
+    device_log = params["device"] or "auto USB-Audio"
+    print(
+        f"[hound_core] tts ENABLED: device={device_log} "
+        f"engine={params['engine']} voice={params['voice']} "
+        f"speak={params['speak_topic']} events={len(events)}"
+    )
+    return Node(
+        package="hound_core",
+        executable="tts_node",
+        name="tts",
+        output="screen",
+        parameters=[params],
+    )
+
+
 def build_bag_recorder_node(bag: dict) -> Node:
+    record_nav_only = bool(bag.get("record_nav_only", False))
+    record_nav_topics_file = str(
+        bag.get(
+            "record_nav_topics_file",
+            "/root/colcon_ws/src/hound_core/config/rosbag_record_nav_topics.txt",
+        )
+    )
     params = {
         "bagdir": str(bag.get("bagdir", "/root/colcon_ws/bags/")),
+        "bagdir_nav": str(bag.get("bagdir_nav", "/root/colcon_ws/bags_nav/")),
+        "ssot_path": str(bag.get("ssot_path", find_ssot())),
         "record_all_topics": bool(bag.get("record_all_topics", True)),
+        "record_nav_only": record_nav_only,
+        "record_nav_topics_file": record_nav_topics_file,
         "record_topics_file": str(
             bag.get(
                 "record_topics_file",
@@ -1943,10 +2159,18 @@ def build_bag_recorder_node(bag: dict) -> Node:
             bag.get("notification_topic", "/hound_fcu_control/play_tune")
         ),
     }
-    mode = "all (-a)" if params["record_all_topics"] else "topics file"
+    if record_nav_only:
+        mode = f"nav I/O ({record_nav_topics_file}) → {params['bagdir_nav']}{{bidirectional|unidirectional}}/"
+        bagdir_log = params["bagdir_nav"]
+    elif params["record_all_topics"]:
+        mode = "all (-a)"
+        bagdir_log = params["bagdir"]
+    else:
+        mode = "topics file"
+        bagdir_log = params["bagdir"]
     print(
         f"[hound_core] bag_recorder ENABLED: trigger={params['record_topic']} "
-        f"bagdir={params['bagdir']} mode={mode}"
+        f"bagdir={bagdir_log} mode={mode}"
     )
     return Node(
         package="hound_core",

@@ -1,0 +1,51 @@
+# Lightweight allow-list when bag_recorder.record_nav_only is true.
+# Names match SSoT defaults. Intentionally omitted (too heavy or useless):
+#   camera / depth / overlay / seg Images, PointCloud2, TSDF mesh Marker,
+#   /parameter_events, /rosout, /events/write_split.
+#
+# TF (needed to resolve map↔odom after the fact)
+/tf
+/tf_static
+# HAL / bag meta
+/hal/record
+/hal/recording
+# Localization / odometry
+/visual_slam/tracking/odometry
+/ekf/odometry
+/hound_fcu_control/ap/local_odometry
+/localization/mesh_pose
+/aruco_registration/map_odom
+/aruco_registration/marker_pose
+/aruco_registration/hunting
+# FCU sensors + state
+/hound_fcu_control/control_state
+/hound_fcu_control/imu
+/hound_fcu_control/mag
+/hound_fcu_control/baro
+/hound_fcu_control/gps/fix
+/hound_fcu_control/gps/fix_type
+/hound_fcu_control/gps/satellites
+/hound_fcu_control/gps/h_acc_mm
+/hound_fcu_control/rc/in
+/hound_fcu_control/state/armed
+/hound_fcu_control/mission/path
+/hound_fcu_control/mission/gps
+/hound_fcu_control/play_tune
+/hound_fcu_control/rtcm
+/low_level_diagnostics
+/control_limits
+/sensors/core
+# Livox (IMU/temp only — not /livox/cloud)
+/livox/core_temp
+# Mapping (LocalMap is elev/cost for nav; skip tsdf_* clouds / depth images)
+/hound_mapping/local_map
+/hound_mapping/extract_timing_ms
+# Nav manager / planner / controller / mission
+/goal_pose
+/hound_nav/local_plan
+/hound_nav/local_plan_arrows
+/hound_nav/planner_diagnostics
+/hound_nav/cmd_ackermann
+/hound_nav/mission/waypoints
+# Platform diagnostics
+/SOC_diagnostics

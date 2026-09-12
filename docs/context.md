@@ -244,6 +244,7 @@ Offline (no HW): `bash /root/colcon_ws/src/hound_core/scripts/smoke_dataset_pipe
 | `viz` | `hound_viz` |
 | `nav` | `hound_nav` + `mppi` + `IGHAStar` |
 | `hal_monitor` / `bag_recorder` | `hound_core` |
+| `tts` | `hound_core` (`espeak-ng` + `aplay` → USB speaker) |
 | `launch.stage_delay_s` | Stagger between enabled stages |
 
 ---

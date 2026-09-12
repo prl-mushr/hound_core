@@ -1,19 +1,23 @@
 """Rosbag start/stop node for HOUND.
 
 Subscribes to a Bool trigger (true=start, false=stop) and manages
-`ros2 bag record` with the same bagdir / split / rename behavior as the
-legacy HAL monitor recording path.
+`ros2 bag record` with sequential bag names (hound_0, hound_1, ...) in
+bagdir / bagdir_nav, plus the same split behavior as the legacy HAL
+monitor recording path.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 import signal
 import subprocess
-from datetime import datetime
+import time
 from pathlib import Path
 from typing import List, Optional
 
 import rclpy
+import yaml
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
@@ -29,11 +33,18 @@ class BagRecorderNode(Node):
         super().__init__("bag_recorder")
 
         self.declare_parameter("bagdir", "/root/colcon_ws/bags/")
+        self.declare_parameter("bagdir_nav", "/root/colcon_ws/bags_nav/")
+        self.declare_parameter("ssot_path", "")
         self.declare_parameter(
             "record_topics_file",
             "/root/colcon_ws/src/hound_core/config/rosbag_record_topics.txt",
         )
         self.declare_parameter("record_all_topics", True)
+        self.declare_parameter("record_nav_only", False)
+        self.declare_parameter(
+            "record_nav_topics_file",
+            "/root/colcon_ws/src/hound_core/config/rosbag_record_nav_topics.txt",
+        )
         self.declare_parameter("record_split_duration_min", 5)
         self.declare_parameter("record_topic", "/hal/record")
         self.declare_parameter("recording_status_topic", "/hal/recording")
@@ -44,7 +55,11 @@ class BagRecorderNode(Node):
         self._recording_state = False
         self._rosbag_proc: Optional[subprocess.Popen] = None
         self._record_cmd: List[str] = []
-        self._record_all = bool(self.get_parameter("record_all_topics").value)
+        self._record_nav_only = bool(self.get_parameter("record_nav_only").value)
+        self._record_all = (
+            bool(self.get_parameter("record_all_topics").value)
+            and not self._record_nav_only
+        )
         self._load_record_topics()
 
         latch_qos = QoSProfile(
@@ -67,11 +82,12 @@ class BagRecorderNode(Node):
             10,
         )
         self.create_timer(1.0, self._watch_proc)
-        mode = (
-            "ALL topics (-a)"
-            if self._record_all
-            else f"{len(self._record_topics)} topics from file"
-        )
+        if self._record_all:
+            mode = "ALL topics (-a)"
+        elif self._record_nav_only:
+            mode = f"nav I/O only ({len(self._record_topics)} topics)"
+        else:
+            mode = f"{len(self._record_topics)} topics from file"
         self.get_logger().info(
             f"Bag recorder online (trigger={self.get_parameter('record_topic').value}, "
             f"{mode})"
@@ -81,7 +97,12 @@ class BagRecorderNode(Node):
         self._record_topics: List[str] = []
         if self._record_all:
             return
-        topics_file = Path(str(self.get_parameter("record_topics_file").value))
+        if self._record_nav_only:
+            topics_file = Path(
+                str(self.get_parameter("record_nav_topics_file").value)
+            )
+        else:
+            topics_file = Path(str(self.get_parameter("record_topics_file").value))
         if not topics_file.is_file():
             self.get_logger().warning(
                 f"Record topics file not found: {topics_file}"
@@ -92,6 +113,68 @@ class BagRecorderNode(Node):
             for line in topics_file.read_text().splitlines()
             if line.strip() and not line.strip().startswith("#")
         ]
+
+    def _resolve_ssot_path(self) -> Path:
+        explicit = str(self.get_parameter("ssot_path").value).strip()
+        if explicit:
+            return Path(explicit)
+        env = os.environ.get("HOUND_SSOT", "").strip()
+        if env:
+            return Path(env)
+        for candidate in (
+            Path("/root/colcon_ws/src/hound_core/config/SSoT.yaml"),
+            Path("/home/hound/colcon_ws/src/hound_core/config/SSoT.yaml"),
+        ):
+            if candidate.is_file():
+                return candidate
+        return Path("")
+
+    def _nav_bag_planner_subdir(self) -> str:
+        """Read nav.Planner_config.experiment_info_default.bidirectional from SSoT."""
+        ssot_path = self._resolve_ssot_path()
+        if not ssot_path.is_file():
+            self.get_logger().warning(
+                f"SSoT not found ({ssot_path}); nav bags → unidirectional/"
+            )
+            return "unidirectional"
+        try:
+            ssot = yaml.safe_load(ssot_path.read_text(encoding="utf-8")) or {}
+            exp = ((ssot.get("nav") or {}).get("Planner_config") or {}).get(
+                "experiment_info_default"
+            ) or {}
+            bidirectional = bool(exp.get("bidirectional", False))
+            subdir = "bidirectional" if bidirectional else "unidirectional"
+            self.get_logger().info(
+                f"SSoT {ssot_path}: bidirectional={bidirectional} → {subdir}/"
+            )
+            return subdir
+        except Exception as exc:
+            self.get_logger().warning(
+                f"Failed to read SSoT bidirectional ({ssot_path}): {exc}; "
+                "using unidirectional/"
+            )
+            return "unidirectional"
+
+    def _snapshot_ssot(self, bag_path: Path) -> None:
+        src = self._resolve_ssot_path()
+        if not src.is_file():
+            self.get_logger().warning(
+                f"SSoT snapshot skipped: not found ({src or 'empty path'})"
+            )
+            return
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if bag_path.is_dir():
+                break
+            time.sleep(0.05)
+        if not bag_path.is_dir():
+            self.get_logger().warning(
+                f"SSoT snapshot skipped: bag dir not created ({bag_path})"
+            )
+            return
+        dest = bag_path / "SSoT.yaml"
+        shutil.copy2(src, dest)
+        self.get_logger().info(f"SSoT snapshot: {src} → {dest}")
 
     def _publish_notification(self, message: str) -> None:
         tune = self.TUNES.get(message)
@@ -123,18 +206,36 @@ class BagRecorderNode(Node):
         self._recording_state = False
         self._publish_recording_status(False)
 
+    @staticmethod
+    def _next_bag_path(bagdir: Path) -> Path:
+        """Return bagdir/hound_N using one past the highest existing hound_<int>."""
+        highest = -1
+        for entry in bagdir.iterdir():
+            suffix = entry.name[6:] if entry.name.startswith("hound_") else ""
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+        n = highest + 1
+        while True:
+            candidate = bagdir / f"hound_{n}"
+            if not candidate.exists():
+                return candidate
+            n += 1
+
     def _start_recording(self) -> bool:
-        bagdir = Path(str(self.get_parameter("bagdir").value))
+        if self._record_nav_only:
+            bagdir = Path(str(self.get_parameter("bagdir_nav").value))
+            bagdir = bagdir / self._nav_bag_planner_subdir()
+        else:
+            bagdir = Path(str(self.get_parameter("bagdir").value))
         bagdir.mkdir(parents=True, exist_ok=True)
         split_min = int(self.get_parameter("record_split_duration_min").value)
-        stamp = datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
-        output = str(bagdir / f"hound_{stamp}")
+        output = self._next_bag_path(bagdir)
         self._record_cmd = [
             "ros2",
             "bag",
             "record",
             "-o",
-            output,
+            str(output),
             "--max-bag-duration",
             str(split_min * 60),
         ]
@@ -149,6 +250,7 @@ class BagRecorderNode(Node):
             self._record_cmd.extend(self._record_topics)
         self.get_logger().info(f"Starting bag record: {' '.join(self._record_cmd)}")
         self._rosbag_proc = subprocess.Popen(self._record_cmd)
+        self._snapshot_ssot(output)
         self._publish_notification("record start")
         return True
 
