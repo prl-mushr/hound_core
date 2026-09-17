@@ -98,19 +98,25 @@ The script clones/updates these remotes/branches:
 | `Livox-SDK2` | `sidtalia/Livox-SDK2` (fork) | `master` |
 | `unilidar_sdk` | `unitreerobotics/unilidar_sdk` | `main` |
 | `pointcloud_deskewer` | `sidtalia/pointcloud_deskewer` | `main` |
-| `hound_mapping` | `sidtalia/hound_mapping` | `feature/multicam-batch` |
+| `hound_mapping` | `sidtalia/hound_mapping` | `feature/multicam-batch-authoring` |
+| `hound_rviz_plugins` | `sidtalia/hound_rviz_plugins` | `main` |
 | `perception_models` | `sidtalia/perception_models` | `feature/multicam-batch` |
 | `nanosam-src` | `NVIDIA-AI-IOT/nanosam` | `main` |
+| `dense_aruco` | `sidtalia/dense_aruco` | `main` (pip `-e`, `COLCON_IGNORE`) |
+| `aruco_registration` | `sidtalia/aruco_registration` | `main` |
 | `hound_viz` | `sidtalia/hound_viz` | `main` |
 | `inertial_nav_ros2` | `sidtalia/inertial_nav_ros2` | `main` |
 | `Inertial_nav_shim` | `sidtalia/Inertial_nav_shim` | `main` |
 | `vesc_ros2` | `sidtalia/vesc_ros2` (fork) | `ros2_implementation` |
 | `mavros` | `prl-mushr/mavros` | `ros2` |
+| `transport_drivers` | `ros-drivers/transport_drivers` | `main` (`serial_driver`) |
 | `hound_nav` | `sidtalia/hound_nav` | `main` |
 | `mppi` | `sidtalia/MPPI` | `main` |
 | `IGHAStar` | `personalrobotics/IGHAStar` | `ESDF_support` |
+| `robin-hood-hashing` | `martinus/robin-hood-hashing` | `master` (`COLCON_IGNORE`; IGHAStar header) |
+| `direct_visual_lidar_calibration` | `koide3/direct_visual_lidar_calibration` | `main` (recursive; optional vlcal) |
 
-It also touches `COLCON_IGNORE` on non-ament trees (`Livox-SDK2`, `nanosam-src`, `IGHAStar`, `Inertial_nav_shim`, `unilidar_sdk`).
+It also touches `COLCON_IGNORE` on non-ament trees (`Livox-SDK2`, `nanosam-src`, `IGHAStar`, `Inertial_nav_shim`, `unilidar_sdk`, `dense_aruco`, `robin-hood-hashing`).
 
 **Livox fork notes:** stock upstream is fine for basic clouds. The [sidtalia/Livox-SDK2](https://github.com/sidtalia/Livox-SDK2) fork keeps Mid-360S `GetInternalInfo` key trim + `DisableLivoxSdkConsoleLogger` spdlog fix. Sample JSON host IPs are **not** patched (composite generates its own config).
 
@@ -132,7 +138,7 @@ cmake .. && make -j$(nproc)
 # 4b) Package deps — run BEFORE the first colcon build of composite_sensing
 bash /root/colcon_ws/src/composite_sensing/scripts/install_deps.sh
 bash /root/colcon_ws/src/perception_models/scripts/install_deps.sh
-bash /root/colcon_ws/src/hound_viz/install_deps.sh
+bash /root/colcon_ws/src/hound_viz/scripts/install_deps.sh
 
 cd /root/colcon_ws
 rosdep install --from-paths src --ignore-src -y -r   # as needed
