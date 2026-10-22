@@ -39,17 +39,18 @@ Inside `mushr_jazzy`:
 
 ## 2. Docker image (`mushr_jazzy`)
 
-**Preferred:** load/pull the already-built image.
+Download the image archive (large) and load it. Do not rebuild the image.
+
+https://drive.google.com/file/d/1cTcqmyhGacNSDIBJPooDb9ClRsPoQuj-/view?usp=sharing
+
+Save the file as `mushr-jazzy-aarch64.tar.gz`, then:
 
 ```bash
-# On reference Jetson — save (large)
-docker save dbzfan2012/mushr-jazzy:aarch64 | gzip > mushr-jazzy-aarch64.tar.gz
-
-# On new Jetson — load
 gunzip -c mushr-jazzy-aarch64.tar.gz | docker load
-# or, if Hub is reachable:
-docker pull dbzfan2012/mushr-jazzy:aarch64
+docker image ls | grep mushr-jazzy
 ```
+
+`docker load` restores `dbzfan2012/mushr-jazzy:aarch64`. Hub pull is only a fallback if that registry is reachable: `docker pull dbzfan2012/mushr-jazzy:aarch64`.
 
 **Install wrapper + udev (VESC, etc.):**
 
@@ -282,7 +283,7 @@ Offline (no HW): `bash /root/colcon_ws/src/hound_core/scripts/smoke_dataset_pipe
 ## Quick checklist
 
 - [ ] Matching JetPack + Docker + NVIDIA runtime  
-- [ ] Load/pull `dbzfan2012/mushr-jazzy:aarch64` + `mushr_jazzy` wrapper  
+- [ ] Download the Drive image archive, `docker load` it, install the `mushr_jazzy` wrapper  
 - [ ] `clone_hound_stack.sh`  
 - [ ] Build Livox-SDK2  
 - [ ] `install_deps.sh` ×3 **before** first `colcon build` (glslang-tools → mesh_pf Vulkan)  
